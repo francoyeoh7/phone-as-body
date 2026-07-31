@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  CAMERA_CONSTRAINTS,
+  CameraMotionTracker,
+  cameraSummaryToVelocity,
+} from "../src/controller/CameraMotionTracker.js";
 import {
   alignMotionToGrip,
   blendVerticalMotion,
@@ -59,6 +64,423 @@ function expectBoundedMotion(motion) {
   expect(motion.confidence).toBeGreaterThanOrEqual(0);
   expect(motion.confidence).toBeLessThanOrEqual(1);
 }
+
+function createCameraResources({ contextAvailable = true, playError = null } = {}) {
+  const tracks = Array.from({ length: 2 }, () => ({ stop: vi.fn() }));
+  const stream = { getTracks: vi.fn(() => tracks) };
+  const context = contextAvailable ? {
+    drawImage: vi.fn(),
+    getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(96 * 72 * 4) })),
+  } : null;
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: vi.fn(() => context),
+  };
+  const video = {
+    muted: false,
+    playsInline: false,
+    srcObject: null,
+    readyState: 4,
+    videoWidth: 320,
+    videoHeight: 240,
+    play: vi.fn(async () => {
+      if (playError) throw playError;
+    }),
+    pause: vi.fn(),
+  };
+
+  return { tracks, stream, context, canvas, video };
+}
+
+function createTrackerHarness(resourceOptions, trackerOptions = {}) {
+  const resources = createCameraResources(resourceOptions);
+  const states = [];
+  const samples = [];
+  const scheduled = new Map();
+  let nextFrameId = 1;
+  const requestCamera = vi.fn(async () => resources.stream);
+  const scheduleFrame = vi.fn((callback) => {
+    const id = nextFrameId;
+    nextFrameId += 1;
+    scheduled.set(id, callback);
+    return id;
+  });
+  const cancelFrame = vi.fn((id) => scheduled.delete(id));
+  const tracker = new CameraMotionTracker({
+    onSample: (sample) => samples.push(sample),
+    onState: (state) => states.push(state),
+    requestCamera,
+    createVideo: () => resources.video,
+    createCanvas: () => resources.canvas,
+    scheduleFrame,
+    cancelFrame,
+    ...trackerOptions,
+  });
+
+  return {
+    ...resources,
+    states,
+    samples,
+    scheduled,
+    requestCamera,
+    scheduleFrame,
+    cancelFrame,
+    tracker,
+  };
+}
+
+function createFakeVision() {
+  const control = { dx: -3, dy: 2, validCount: 36 };
+
+  class FakePyramid {
+    constructor(levels) {
+      this.levels = levels;
+      this.data = [];
+      this.build = vi.fn();
+    }
+
+    allocate(width, height) {
+      this.data = Array.from({ length: this.levels }, (_, level) => ({
+        cols: width >> level,
+        rows: height >> level,
+        data: new Uint8Array((width >> level) * (height >> level)),
+      }));
+    }
+  }
+
+  class FakeKeypoint {
+    constructor(x, y, score) {
+      this.x = x;
+      this.y = y;
+      this.score = score;
+    }
+  }
+
+  const vision = {
+    U8C1_t: 1,
+    pyramid_t: FakePyramid,
+    keypoint_t: FakeKeypoint,
+    imgproc: {
+      grayscale: vi.fn(),
+    },
+    yape06: {
+      laplacian_threshold: 0,
+      min_eigen_value_threshold: 0,
+      detect: vi.fn((_frame, corners) => {
+        for (let index = 0; index < 36; index += 1) {
+          corners[index].x = 18 + (index % 6) * 12;
+          corners[index].y = 18 + Math.floor(index / 6) * 8;
+          corners[index].score = 100 - index;
+        }
+        return 36;
+      }),
+    },
+    optical_flow_lk: {
+      track: vi.fn((
+        _previousPyramid,
+        _currentPyramid,
+        previousCoordinates,
+        currentCoordinates,
+        count,
+        _windowSize,
+        _iterations,
+        status,
+      ) => {
+        for (let index = 0; index < count; index += 1) {
+          const coordinateIndex = index * 2;
+          currentCoordinates[coordinateIndex] = previousCoordinates[coordinateIndex] + control.dx;
+          currentCoordinates[coordinateIndex + 1] = previousCoordinates[coordinateIndex + 1] + control.dy;
+          status[index] = index < control.validCount ? 1 : 0;
+        }
+      }),
+    },
+  };
+
+  return { control, vision };
+}
+
+function runNextFrame(harness, timestamp) {
+  const next = harness.scheduled.entries().next().value;
+  expect(next).toBeTruthy();
+  const [id, callback] = next;
+  harness.scheduled.delete(id);
+  callback(timestamp);
+}
+
+describe("camera motion conversion", () => {
+  it("exports the low-resolution rear-camera constraints", () => {
+    expect(CAMERA_CONSTRAINTS).toEqual({
+      audio: false,
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 320 },
+        height: { ideal: 240 },
+        frameRate: { ideal: 30, max: 30 },
+      },
+    });
+  });
+
+  it("converts image translation to unclamped opposite-signed velocity", () => {
+    const velocity = cameraSummaryToVelocity({
+      dx: 14,
+      dy: -7,
+      scale: 1.2,
+      rotation: 12,
+      confidence: 1.5,
+    }, 0.1);
+
+    expect(velocity).toMatchObject({ x: -2, y: 1, rotation: 12, confidence: 1 });
+    expect(velocity.scaleVelocity).toBeCloseTo(2, 8);
+  });
+
+  it("clamps finite frame durations before conversion", () => {
+    const slow = cameraSummaryToVelocity({
+      dx: 7,
+      dy: 0,
+      scale: 1.1,
+      rotation: 0,
+      confidence: 0.5,
+    }, 10);
+    const fast = cameraSummaryToVelocity({
+      dx: 7,
+      dy: 0,
+      scale: 1.1,
+      rotation: 0,
+      confidence: 0.5,
+    }, 0.0001);
+
+    expect(slow.x).toBeCloseTo(-1, 8);
+    expect(slow.scaleVelocity).toBeCloseTo(1, 8);
+    expect(fast.x).toBeCloseTo(-12, 8);
+    expect(fast.scaleVelocity).toBeCloseTo(12, 8);
+  });
+
+  it("returns finite neutral output for invalid summaries", () => {
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+
+    expect(cameraSummaryToVelocity(null, 1 / 30)).toEqual(neutral);
+    expect(cameraSummaryToVelocity({
+      dx: Number.NaN,
+      dy: 0,
+      scale: 1,
+      rotation: 0,
+      confidence: 1,
+    }, 1 / 30)).toEqual(neutral);
+  });
+
+  it("keeps overflow-prone conversion output finite", () => {
+    const velocity = cameraSummaryToVelocity({
+      dx: Number.MAX_VALUE,
+      dy: -Number.MAX_VALUE,
+      scale: Number.MAX_VALUE,
+      rotation: Number.MAX_VALUE,
+      confidence: -Number.MAX_VALUE,
+    }, Number.NaN);
+
+    expect(Object.values(velocity).every(Number.isFinite)).toBe(true);
+    expect(velocity.confidence).toBe(0);
+    expect(velocity.rotation).toBe(Number.MAX_VALUE);
+  });
+});
+
+describe("camera motion tracker lifecycle", () => {
+  it("starts once with private low-resolution camera resources", async () => {
+    const harness = createTrackerHarness();
+
+    await expect(harness.tracker.start()).resolves.toBe(true);
+    await expect(harness.tracker.start()).resolves.toBe(true);
+
+    expect(harness.requestCamera).toHaveBeenCalledTimes(1);
+    expect(harness.requestCamera).toHaveBeenCalledWith(CAMERA_CONSTRAINTS);
+    expect(harness.video).toMatchObject({
+      muted: true,
+      playsInline: true,
+      srcObject: harness.stream,
+    });
+    expect(harness.video.play).toHaveBeenCalledTimes(1);
+    expect(harness.canvas).toMatchObject({ width: 96, height: 72 });
+    expect(harness.canvas.getContext).toHaveBeenCalledWith("2d", { willReadFrequently: true });
+    expect(harness.scheduleFrame).toHaveBeenCalledTimes(1);
+    expect(harness.states).toEqual(["camera-active"]);
+  });
+
+  it("reports denied permission without scheduling analysis", async () => {
+    const harness = createTrackerHarness();
+    harness.requestCamera.mockRejectedValueOnce(Object.assign(new Error("denied"), {
+      name: "NotAllowedError",
+    }));
+
+    await expect(harness.tracker.start()).resolves.toBe(false);
+
+    expect(harness.states).toEqual(["camera-denied"]);
+    expect(harness.scheduleFrame).not.toHaveBeenCalled();
+  });
+
+  it("reports unavailable and releases a partially opened stream", async () => {
+    const harness = createTrackerHarness({ contextAvailable: false });
+
+    await expect(harness.tracker.start()).resolves.toBe(false);
+
+    expect(harness.states).toEqual(["camera-unavailable"]);
+    expect(harness.video.pause).toHaveBeenCalledTimes(1);
+    expect(harness.video.srcObject).toBeNull();
+    for (const track of harness.tracks) expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(harness.scheduleFrame).not.toHaveBeenCalled();
+  });
+
+  it("reports unavailable when the analysis scheduler cannot start", async () => {
+    const harness = createTrackerHarness();
+    harness.scheduleFrame.mockImplementationOnce(() => {
+      throw new Error("scheduler unavailable");
+    });
+
+    await expect(harness.tracker.start()).resolves.toBe(false);
+
+    expect(harness.states).toEqual(["camera-unavailable"]);
+    expect(harness.video.srcObject).toBeNull();
+    for (const track of harness.tracks) expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits neutral motion when frozen or reset without closing the stream", async () => {
+    const harness = createTrackerHarness();
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+    await harness.tracker.start();
+
+    harness.tracker.setFrozen(true);
+    harness.tracker.reset();
+
+    expect(harness.samples).toEqual([neutral, neutral]);
+    expect(harness.video.srcObject).toBe(harness.stream);
+    for (const track of harness.tracks) expect(track.stop).not.toHaveBeenCalled();
+  });
+
+  it("stops all owned resources exactly once across stop and destroy", async () => {
+    const harness = createTrackerHarness();
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+    await harness.tracker.start();
+    const scheduledId = harness.scheduleFrame.mock.results[0].value;
+
+    harness.tracker.stop();
+    harness.tracker.stop();
+    harness.tracker.destroy();
+
+    expect(harness.cancelFrame).toHaveBeenCalledTimes(1);
+    expect(harness.cancelFrame).toHaveBeenCalledWith(scheduledId);
+    expect(harness.video.pause).toHaveBeenCalledTimes(1);
+    expect(harness.video.srcObject).toBeNull();
+    for (const track of harness.tracks) expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(harness.samples).toEqual([neutral]);
+  });
+
+  it("prevents a pending camera request from activating after stop", async () => {
+    const harness = createTrackerHarness();
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+    let resolveCamera;
+    harness.requestCamera.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveCamera = resolve;
+    }));
+
+    const startPromise = harness.tracker.start();
+    harness.tracker.stop();
+    resolveCamera(harness.stream);
+
+    await expect(startPromise).resolves.toBe(false);
+    expect(harness.scheduleFrame).not.toHaveBeenCalled();
+    for (const track of harness.tracks) expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(harness.samples).toEqual([neutral]);
+    expect(harness.states).toEqual([]);
+  });
+});
+
+describe("camera motion tracker frames", () => {
+  it("throttles processing while keeping one analysis callback scheduled", async () => {
+    const { vision } = createFakeVision();
+    const harness = createTrackerHarness(undefined, { vision });
+    await harness.tracker.start();
+
+    runNextFrame(harness, 0);
+    runNextFrame(harness, 10);
+    runNextFrame(harness, 34);
+
+    expect(vision.imgproc.grayscale).toHaveBeenCalledTimes(2);
+    expect(harness.samples).toHaveLength(2);
+    expect(harness.scheduled.size).toBe(1);
+  });
+
+  it("uses sparse optical flow and holds motion through initial warmup", async () => {
+    const { vision } = createFakeVision();
+    const harness = createTrackerHarness(undefined, { vision });
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+    await harness.tracker.start();
+
+    for (const timestamp of [0, 34, 68, 102, 136]) runNextFrame(harness, timestamp);
+
+    expect(harness.samples.slice(0, 4)).toEqual([neutral, neutral, neutral, neutral]);
+    expect(harness.samples[4]).toMatchObject({
+      x: expect.any(Number),
+      y: expect.any(Number),
+      confidence: expect.any(Number),
+    });
+    expect(harness.samples[4].x).toBeGreaterThan(0);
+    expect(harness.samples[4].y).toBeLessThan(0);
+    expect(harness.samples[4].confidence).toBeGreaterThan(0);
+    expect(vision.yape06.detect).toHaveBeenCalledTimes(1);
+    expect(vision.optical_flow_lk.track).toHaveBeenCalledTimes(4);
+    expect(vision.optical_flow_lk.track.mock.calls[0][5]).toBe(15);
+    expect(vision.yape06.laplacian_threshold).toBe(30);
+    expect(vision.yape06.min_eigen_value_threshold).toBe(25);
+  });
+
+  it("retains three stable warmup frames after unfreezing", async () => {
+    const { vision } = createFakeVision();
+    const harness = createTrackerHarness(undefined, { vision });
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+    await harness.tracker.start();
+    runNextFrame(harness, 0);
+
+    harness.tracker.setFrozen(true);
+    runNextFrame(harness, 34);
+    runNextFrame(harness, 68);
+    harness.tracker.setFrozen(false);
+    for (const timestamp of [102, 136, 170, 204]) runNextFrame(harness, timestamp);
+
+    expect(harness.samples.slice(-4, -1)).toEqual([neutral, neutral, neutral]);
+    expect(harness.samples.at(-1).confidence).toBeGreaterThan(0);
+  });
+
+  it("reports weak tracking once and returns to active on recovery", async () => {
+    const { control, vision } = createFakeVision();
+    const harness = createTrackerHarness(undefined, { vision });
+    await harness.tracker.start();
+    runNextFrame(harness, 0);
+
+    control.validCount = 5;
+    runNextFrame(harness, 34);
+    runNextFrame(harness, 68);
+    control.validCount = 36;
+    runNextFrame(harness, 102);
+
+    expect(harness.states).toEqual(["camera-active", "tracking-weak", "camera-active"]);
+    expect(vision.yape06.detect).toHaveBeenCalledTimes(3);
+  });
+
+  it("emits zero and continues after a frame read failure", async () => {
+    const { vision } = createFakeVision();
+    const harness = createTrackerHarness(undefined, { vision });
+    harness.context.getImageData.mockImplementationOnce(() => {
+      throw new Error("tainted");
+    });
+    await harness.tracker.start();
+
+    runNextFrame(harness, 0);
+
+    expect(harness.samples).toEqual([
+      { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 },
+    ]);
+    expect(harness.scheduled.size).toBe(1);
+  });
+});
 
 describe("view motion math", () => {
   it("exports the public motion helpers", () => {
