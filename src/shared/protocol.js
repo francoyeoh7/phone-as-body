@@ -15,6 +15,7 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "recenter",
   "pause",
   "resume",
+  "settings",
 ]);
 
 const isFiniteNumber = (value) => Number.isFinite(value);
