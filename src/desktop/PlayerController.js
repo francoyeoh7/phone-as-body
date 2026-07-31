@@ -1,9 +1,7 @@
 import * as THREE from "three";
 import { cameraRelativeMovement, dampVector } from "../shared/movement.js";
-import { createOrientationTracker } from "../shared/orientation.js";
+import { integrateViewMotion } from "../shared/view-motion.js";
 import { chooseAssistedTarget } from "../shared/interaction.js";
-
-const DEG_TO_RAD = Math.PI / 180;
 
 export class PlayerController {
   constructor({ RAPIER, world, camera, renderer, interactables, onInteract, onAction, onPrompt }) {
@@ -15,15 +13,15 @@ export class PlayerController {
     this.onAction = onAction;
     this.onPrompt = onPrompt;
     this.keys = new Set();
-    this.phoneInput = { orientation: null, move: { x: 0, y: 0 } };
+    this.phoneInput = { viewMotion: { x: 0, y: 0, confidence: 0 }, move: { x: 0, y: 0 } };
     this.phoneConnected = false;
     this.velocity = { x: 0, z: 0 };
     this.cameraYaw = 0;
     this.cameraPitch = 0;
+    this.viewVelocity = { x: 0, y: 0 };
     this.paused = false;
     this.fallback = false;
     this.settings = { sensitivity: 1, smoothing: 0.55, invertY: false };
-    this.orientationTracker = createOrientationTracker({ smoothingStrength: this.settings.smoothing });
     this.raycaster = new THREE.Raycaster();
     this.pointerLocked = false;
     this.selected = null;
@@ -52,14 +50,16 @@ export class PlayerController {
 
   setFallback(active) {
     this.fallback = active;
+    if (active) this.clearViewVelocity();
   }
 
   setControllerInput(input, connected) {
-    this.phoneInput = input ?? { orientation: null, move: { x: 0, y: 0 } };
+    this.phoneInput = input ?? {
+      viewMotion: { x: 0, y: 0, confidence: 0 },
+      move: { x: 0, y: 0 },
+    };
     this.phoneConnected = connected;
-    if (connected && this.phoneInput.orientation && !this.orientationTracker.calibrated) {
-      this.orientationTracker.calibrate(this.phoneInput.orientation);
-    }
+    if (!connected) this.clearViewVelocity();
   }
 
   setSettings(settings = {}) {
@@ -71,16 +71,14 @@ export class PlayerController {
       smoothing: Number.isFinite(smoothing) ? Math.min(1, Math.max(0, smoothing)) : this.settings.smoothing,
       invertY: typeof settings.invertY === "boolean" ? settings.invertY : this.settings.invertY,
     };
-    if (this.phoneInput.orientation) {
-      this.orientationTracker = createOrientationTracker({ smoothingStrength: this.settings.smoothing });
-      this.orientationTracker.calibrate(this.phoneInput.orientation);
-    }
   }
 
   recenter() {
-    if (this.phoneInput.orientation) this.orientationTracker.calibrate(this.phoneInput.orientation);
-    this.cameraYaw = 0;
-    this.cameraPitch = 0;
+    this.clearViewVelocity();
+  }
+
+  clearViewVelocity() {
+    this.viewVelocity = { x: 0, y: 0 };
   }
 
   update(delta) {
@@ -89,13 +87,21 @@ export class PlayerController {
       return;
     }
 
-    if (this.phoneConnected && this.phoneInput.orientation) {
-      const sensor = this.orientationTracker.update(this.phoneInput.orientation, delta);
-      if (sensor.valid) {
-        this.cameraYaw = -sensor.yaw * DEG_TO_RAD * this.settings.sensitivity;
-        const pitchSign = this.settings.invertY ? -1 : 1;
-        this.cameraPitch = sensor.pitch * DEG_TO_RAD * this.settings.sensitivity * pitchSign;
-      }
+    if (this.phoneConnected && !this.fallback) {
+      const view = integrateViewMotion(
+        {
+          yaw: this.cameraYaw,
+          pitch: this.cameraPitch,
+          vx: this.viewVelocity.x,
+          vy: this.viewVelocity.y,
+        },
+        this.phoneInput.viewMotion,
+        delta,
+        this.settings,
+      );
+      this.cameraYaw = view.yaw;
+      this.cameraPitch = view.pitch;
+      this.viewVelocity = { x: view.vx, y: view.vy };
     }
 
     const move = this.phoneConnected && !this.fallback ? this.phoneInput.move : this.keyboardVector();
@@ -169,6 +175,7 @@ export class PlayerController {
 
   setPaused(paused) {
     this.paused = paused;
+    if (paused) this.clearViewVelocity();
   }
 
   handleKeyDown(event) {

@@ -9,6 +9,7 @@ import {
   alignMotionToGrip,
   blendVerticalMotion,
   gravityAlignedRoll,
+  integrateViewMotion,
   normalizeViewMotion,
   summarizePointMotion,
 } from "../src/shared/view-motion.js";
@@ -812,5 +813,59 @@ describe("view motion math", () => {
 
     expect(result).toEqual({ x: 1, y: -1, confidence: 1 });
     expectBoundedMotion(result);
+  });
+});
+
+describe("desktop view integration", () => {
+  it("integrates normalized view velocity without snapping to center", () => {
+    const first = integrateViewMotion(
+      { yaw: 0, pitch: 0, vx: 0, vy: 0 },
+      { x: 1, y: 1 },
+      0.1,
+      { smoothing: 0 },
+    );
+
+    expect(first.yaw).toBeLessThan(0);
+    expect(first.pitch).toBeGreaterThan(0);
+
+    const settled = integrateViewMotion(first, { x: 0, y: 0 }, 0.1, { smoothing: 0 });
+    expect(settled).toEqual({ ...first, vx: 0, vy: 0 });
+  });
+
+  it("clamps pitch and supports vertical inversion", () => {
+    const result = integrateViewMotion(
+      { yaw: 0, pitch: 1.24, vx: 0, vy: 0 },
+      { x: 0, y: 1 },
+      1,
+      { smoothing: 0, invertY: true },
+    );
+
+    expect(result.pitch).toBeLessThan(1.24);
+    expect(Math.abs(result.pitch)).toBeLessThanOrEqual(1.25);
+  });
+
+  it("produces the same result across equivalent frame splits", () => {
+    const initial = { yaw: 0.3, pitch: -0.2, vx: 0, vy: 0 };
+    const input = { x: 0.7, y: -0.4 };
+    const single = integrateViewMotion(initial, input, 0.1, { smoothing: 0.65 });
+    const half = integrateViewMotion(initial, input, 0.05, { smoothing: 0.65 });
+    const split = integrateViewMotion(half, input, 0.05, { smoothing: 0.65 });
+
+    expect(split.yaw).toBeCloseTo(single.yaw, 10);
+    expect(split.pitch).toBeCloseTo(single.pitch, 10);
+    expect(split.vx).toBeCloseTo(single.vx, 10);
+    expect(split.vy).toBeCloseTo(single.vy, 10);
+  });
+
+  it("returns bounded finite state for invalid input", () => {
+    const result = integrateViewMotion(
+      { yaw: Number.NaN, pitch: Number.POSITIVE_INFINITY, vx: Number.NaN, vy: 2 },
+      { x: Number.NaN, y: Number.NEGATIVE_INFINITY },
+      Number.NaN,
+      { sensitivity: Number.POSITIVE_INFINITY, smoothing: Number.NaN },
+    );
+
+    expect(Object.values(result).every(Number.isFinite)).toBe(true);
+    expect(Math.abs(result.pitch)).toBeLessThanOrEqual(1.25);
   });
 });

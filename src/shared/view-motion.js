@@ -216,3 +216,62 @@ export function normalizeViewMotion(sample, options = {}) {
     confidence,
   };
 }
+
+const DEFAULT_YAW_SPEED = 2.8;
+const DEFAULT_PITCH_SPEED = 2.2;
+const DEFAULT_MAX_PITCH = 1.25;
+const VELOCITY_EPSILON = 0.001;
+
+function integrateDampedVelocity(current, target, duration, responseRate) {
+  if (responseRate === Number.POSITIVE_INFINITY) {
+    return { velocity: target, distance: target * duration };
+  }
+  const decay = Math.exp(-responseRate * duration);
+  return {
+    velocity: target + (current - target) * decay,
+    distance: target * duration + ((current - target) * (1 - decay)) / responseRate,
+  };
+}
+
+export function integrateViewMotion(state, input, deltaSeconds, options = {}) {
+  const yaw = finiteOr(state?.yaw, 0);
+  const pitchLimit = Math.abs(finiteOr(options?.maxPitch, DEFAULT_MAX_PITCH));
+  const pitch = clamp(finiteOr(state?.pitch, 0), -pitchLimit, pitchLimit);
+  const currentVx = finiteOr(state?.vx, 0);
+  const currentVy = finiteOr(state?.vy, 0);
+  const duration = clamp(finiteOr(deltaSeconds, 1 / 60), 0, 0.1);
+  const sensitivity = clamp(finiteOr(options?.sensitivity, 1), 0.4, 2);
+  const smoothing = clamp(finiteOr(options?.smoothing, 0.55), 0, 1);
+  const inputX = clamp(finiteOr(input?.x, 0), -1, 1);
+  const inputY = clamp(finiteOr(input?.y, 0), -1, 1);
+
+  if (
+    Math.abs(inputX) < VELOCITY_EPSILON
+    && Math.abs(inputY) < VELOCITY_EPSILON
+    && Math.abs(currentVx) < VELOCITY_EPSILON
+    && Math.abs(currentVy) < VELOCITY_EPSILON
+  ) {
+    return { yaw, pitch, vx: 0, vy: 0 };
+  }
+
+  const pitchSign = options?.invertY ? -1 : 1;
+  const targetVx = -inputX * DEFAULT_YAW_SPEED * sensitivity;
+  const targetVy = inputY * DEFAULT_PITCH_SPEED * sensitivity * pitchSign;
+  const responseRate = smoothing === 0 ? Number.POSITIVE_INFINITY : 24 - 18 * smoothing;
+  const horizontal = integrateDampedVelocity(currentVx, targetVx, duration, responseRate);
+  const vertical = integrateDampedVelocity(currentVy, targetVy, duration, responseRate);
+  const rawPitch = pitch + vertical.distance;
+  const nextPitch = clamp(rawPitch, -pitchLimit, pitchLimit);
+  const pitchBlocked = nextPitch !== rawPitch;
+
+  return {
+    yaw: yaw + horizontal.distance,
+    pitch: nextPitch,
+    vx: Math.abs(inputX) < VELOCITY_EPSILON && Math.abs(horizontal.velocity) < VELOCITY_EPSILON
+      ? 0
+      : horizontal.velocity,
+    vy: pitchBlocked || (Math.abs(inputY) < VELOCITY_EPSILON && Math.abs(vertical.velocity) < VELOCITY_EPSILON)
+      ? 0
+      : vertical.velocity,
+  };
+}
