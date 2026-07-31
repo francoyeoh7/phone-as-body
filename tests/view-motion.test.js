@@ -857,6 +857,19 @@ describe("desktop view integration", () => {
     expect(split.vy).toBeCloseTo(single.vy, 10);
   });
 
+  it("does not discard elapsed time from a long frame", () => {
+    const initial = { yaw: 0, pitch: 0, vx: 0, vy: 0 };
+    const input = { x: 0.6, y: 0.2 };
+    const single = integrateViewMotion(initial, input, 0.2, { smoothing: 0.55 });
+    const half = integrateViewMotion(initial, input, 0.1, { smoothing: 0.55 });
+    const split = integrateViewMotion(half, input, 0.1, { smoothing: 0.55 });
+
+    expect(split.yaw).toBeCloseTo(single.yaw, 10);
+    expect(split.pitch).toBeCloseTo(single.pitch, 10);
+    expect(split.vx).toBeCloseTo(single.vx, 10);
+    expect(split.vy).toBeCloseTo(single.vy, 10);
+  });
+
   it("returns bounded finite state for invalid input", () => {
     const result = integrateViewMotion(
       { yaw: Number.NaN, pitch: Number.POSITIVE_INFINITY, vx: Number.NaN, vy: 2 },

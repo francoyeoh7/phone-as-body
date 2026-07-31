@@ -224,12 +224,17 @@ const VELOCITY_EPSILON = 0.001;
 
 function integrateDampedVelocity(current, target, duration, responseRate) {
   if (responseRate === Number.POSITIVE_INFINITY) {
-    return { velocity: target, distance: target * duration };
+    const distance = target * duration;
+    return {
+      velocity: target,
+      distance: Number.isFinite(distance) ? distance : Math.sign(target) * Number.MAX_VALUE,
+    };
   }
   const decay = Math.exp(-responseRate * duration);
+  const distance = target * duration + ((current - target) * (1 - decay)) / responseRate;
   return {
     velocity: target + (current - target) * decay,
-    distance: target * duration + ((current - target) * (1 - decay)) / responseRate,
+    distance: Number.isFinite(distance) ? distance : Math.sign(target || current) * Number.MAX_VALUE,
   };
 }
 
@@ -239,7 +244,7 @@ export function integrateViewMotion(state, input, deltaSeconds, options = {}) {
   const pitch = clamp(finiteOr(state?.pitch, 0), -pitchLimit, pitchLimit);
   const currentVx = finiteOr(state?.vx, 0);
   const currentVy = finiteOr(state?.vy, 0);
-  const duration = clamp(finiteOr(deltaSeconds, 1 / 60), 0, 0.1);
+  const duration = Math.max(0, finiteOr(deltaSeconds, 1 / 60));
   const sensitivity = clamp(finiteOr(options?.sensitivity, 1), 0.4, 2);
   const smoothing = clamp(finiteOr(options?.smoothing, 0.55), 0, 1);
   const inputX = clamp(finiteOr(input?.x, 0), -1, 1);
@@ -264,8 +269,10 @@ export function integrateViewMotion(state, input, deltaSeconds, options = {}) {
   const nextPitch = clamp(rawPitch, -pitchLimit, pitchLimit);
   const pitchBlocked = nextPitch !== rawPitch;
 
+  const rawYaw = yaw + horizontal.distance;
+
   return {
-    yaw: yaw + horizontal.distance,
+    yaw: Number.isFinite(rawYaw) ? rawYaw : Math.sign(rawYaw) * Number.MAX_VALUE,
     pitch: nextPitch,
     vx: Math.abs(inputX) < VELOCITY_EPSILON && Math.abs(horizontal.velocity) < VELOCITY_EPSILON
       ? 0
