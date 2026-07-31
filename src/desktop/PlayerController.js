@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { cameraRelativeMovement, dampVector } from "../shared/movement.js";
 import { createOrientationTracker } from "../shared/orientation.js";
+import { chooseAssistedTarget } from "../shared/interaction.js";
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -26,6 +27,8 @@ export class PlayerController {
     this.raycaster = new THREE.Raycaster();
     this.pointerLocked = false;
     this.selected = null;
+    this.forward = new THREE.Vector3();
+    this.targetPosition = new THREE.Vector3();
 
     const bodyDescription = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 1.05, 1.2);
     this.body = world.createRigidBody(bodyDescription);
@@ -131,6 +134,19 @@ export class PlayerController {
       let object = hits[0].object;
       while (object && !object.userData.interactableId) object = object.parent;
       selected = this.interactables.find((entry) => entry.id === object?.userData.interactableId) ?? null;
+    }
+    if (!selected) {
+      this.camera.getWorldDirection(this.forward);
+      const assisted = chooseAssistedTarget(
+        this.interactables.map((entry) => ({
+          ...entry,
+          visible: entry.root.visible,
+          position: entry.root.getWorldPosition(this.targetPosition.clone()),
+        })),
+        this.camera.position,
+        this.forward,
+      );
+      selected = assisted ? this.interactables.find((entry) => entry.id === assisted.id) : null;
     }
     if (selected !== this.selected) {
       if (this.selected?.halo) this.selected.halo.visible = false;
