@@ -54,6 +54,7 @@ export function createDesktopUI(root) {
     sceneHost: root.querySelector("#scene-host"),
     pairing: root.querySelector("#pairing-overlay"),
     qr: root.querySelector("#pairing-qr"),
+    qrLoading: root.querySelector(".qr-loading"),
     roomCode: root.querySelector("#room-code"),
     pairingStatus: root.querySelector("#pairing-status"),
     startButton: root.querySelector("#start-button"),
@@ -77,6 +78,7 @@ export function createDesktopUI(root) {
       elements.qr.src = qrDataUrl;
       elements.qr.dataset.controllerUrl = url;
       elements.qr.hidden = false;
+      elements.qrLoading.hidden = true;
       elements.pairingStatus.innerHTML = "<span></span>打开手机相机扫描";
     },
     setConnected(connected) {
