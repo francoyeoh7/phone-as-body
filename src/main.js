@@ -5,7 +5,7 @@ if (location.pathname === "/controller") {
     new ControllerApp(root).mount();
   });
 } else {
-  root.innerHTML = `<main style="min-height:100vh;display:grid;place-items:center;background:#080a0a;color:#e7e7df;font:16px system-ui">
-    <p>Corridor 617 loading...</p>
-  </main>`;
+  import("./desktop/DesktopApp.js").then(({ DesktopApp }) => {
+    new DesktopApp(root).mount();
+  });
 }

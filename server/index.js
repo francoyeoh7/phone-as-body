@@ -13,6 +13,10 @@ const io = new SocketIOServer(server, { serveClient: false });
 const sessions = createSessionRegistry();
 const port = Number(process.env.PORT) || 4173;
 
+app.get("/api/config", (_request, response) => {
+  response.json({ controllerOrigin: process.env.PUBLIC_CONTROLLER_ORIGIN || null });
+});
+
 io.on("connection", (socket) => {
   socket.on(EVENTS.desktopCreate, (acknowledge) => {
     try {
