@@ -3,6 +3,7 @@ import {
   CAMERA_CONSTRAINTS,
   CameraMotionTracker,
   cameraSummaryToVelocity,
+  MINIMUM_TRACKING_CONFIDENCE,
 } from "../src/controller/CameraMotionTracker.js";
 import {
   alignMotionToGrip,
@@ -270,17 +271,27 @@ describe("camera motion conversion", () => {
   });
 
   it("keeps overflow-prone conversion output finite", () => {
-    const velocity = cameraSummaryToVelocity({
+    const positiveRotation = cameraSummaryToVelocity({
       dx: Number.MAX_VALUE,
       dy: -Number.MAX_VALUE,
       scale: Number.MAX_VALUE,
       rotation: Number.MAX_VALUE,
       confidence: -Number.MAX_VALUE,
     }, Number.NaN);
+    const negativeRotation = cameraSummaryToVelocity({
+      dx: Number.MAX_VALUE,
+      dy: -Number.MAX_VALUE,
+      scale: Number.MAX_VALUE,
+      rotation: -Number.MAX_VALUE,
+      confidence: Number.MAX_VALUE,
+    }, Number.NaN);
 
-    expect(Object.values(velocity).every(Number.isFinite)).toBe(true);
-    expect(velocity.confidence).toBe(0);
-    expect(velocity.rotation).toBe(Number.MAX_VALUE);
+    expect(Object.values(positiveRotation).every(Number.isFinite)).toBe(true);
+    expect(Object.values(negativeRotation).every(Number.isFinite)).toBe(true);
+    expect(positiveRotation.confidence).toBe(0);
+    expect(positiveRotation.rotation).toBe(180);
+    expect(negativeRotation.confidence).toBe(1);
+    expect(negativeRotation.rotation).toBe(-180);
   });
 });
 
@@ -479,6 +490,30 @@ describe("camera motion tracker frames", () => {
       { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 },
     ]);
     expect(harness.scheduled.size).toBe(1);
+  });
+
+  it("gates low-confidence scale motion while accepting the exact threshold", async () => {
+    const { vision } = createFakeVision();
+    let summaryCall = 0;
+    const summarizeMotion = vi.fn(() => {
+      summaryCall += 1;
+      if (summaryCall === 4) {
+        return { dx: 0, dy: 0, scale: 1.2, rotation: 0, confidence: MINIMUM_TRACKING_CONFIDENCE - 0.01 };
+      }
+      if (summaryCall === 5) {
+        return { dx: 0, dy: 0, scale: 1.2, rotation: 0, confidence: MINIMUM_TRACKING_CONFIDENCE };
+      }
+      return { dx: 0, dy: 0, scale: 1, rotation: 0, confidence: 1 };
+    });
+    const harness = createTrackerHarness(undefined, { vision, summarizeMotion });
+    const neutral = { x: 0, y: 0, scaleVelocity: 0, rotation: 0, confidence: 0 };
+    await harness.tracker.start();
+
+    for (const timestamp of [0, 34, 68, 102, 136, 170]) runNextFrame(harness, timestamp);
+
+    expect(harness.samples[4]).toEqual(neutral);
+    expect(harness.samples[5].scaleVelocity).toBeGreaterThan(0);
+    expect(harness.states).toEqual(["camera-active", "tracking-weak", "camera-active"]);
   });
 });
 

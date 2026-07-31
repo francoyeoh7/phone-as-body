@@ -11,6 +11,9 @@ const MINIMUM_FRAME_INTERVAL_MS = 1000 / 30;
 const MINIMUM_DELTA_SECONDS = 1 / 120;
 const MAXIMUM_DELTA_SECONDS = 0.1;
 const TRANSLATION_PIXELS_PER_UNIT = 70;
+const MAXIMUM_ROTATION_DEGREES = 180;
+
+export const MINIMUM_TRACKING_CONFIDENCE = 0.45;
 
 export const CAMERA_CONSTRAINTS = {
   audio: false,
@@ -23,6 +26,10 @@ export const CAMERA_CONSTRAINTS = {
 };
 
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+
+function clampRotation(rotation) {
+  return clamp(rotation, -MAXIMUM_ROTATION_DEGREES, MAXIMUM_ROTATION_DEGREES);
+}
 
 function finiteOutput(value) {
   if (Number.isFinite(value)) return Object.is(value, -0) ? 0 : value;
@@ -55,7 +62,7 @@ export function cameraSummaryToVelocity(summary, deltaSeconds) {
     x: finiteOutput(-summary.dx / (duration * TRANSLATION_PIXELS_PER_UNIT)),
     y: finiteOutput(-summary.dy / (duration * TRANSLATION_PIXELS_PER_UNIT)),
     scaleVelocity: finiteOutput((summary.scale - 1) / duration),
-    rotation: summary.rotation,
+    rotation: clampRotation(summary.rotation),
     confidence: clamp(summary.confidence, 0, 1),
   };
 }
@@ -70,6 +77,7 @@ export class CameraMotionTracker {
     scheduleFrame = (callback) => requestAnimationFrame(callback),
     cancelFrame = (id) => cancelAnimationFrame(id),
     vision = jsfeat,
+    summarizeMotion = summarizePointMotion,
   } = {}) {
     this.onSample = onSample;
     this.onState = onState;
@@ -79,6 +87,7 @@ export class CameraMotionTracker {
     this.scheduleFrame = scheduleFrame;
     this.cancelFrame = cancelFrame;
     this.vision = vision;
+    this.summarizeMotion = summarizeMotion;
 
     this.active = false;
     this.frozen = false;
@@ -318,7 +327,7 @@ export class CameraMotionTracker {
     );
 
     const validCount = this.collectValidTracks();
-    const summary = summarizePointMotion(this.validPreviousPoints, this.validCurrentPoints);
+    const summary = this.summarizeMotion(this.validPreviousPoints, this.validCurrentPoints);
 
     if (validCount < MINIMUM_TRACKED_CORNERS) {
       this.trackedPointCount = this.detectCorners(this.currentPyramid.data[0]);
@@ -333,7 +342,7 @@ export class CameraMotionTracker {
     }
     this.swapPyramids();
 
-    if (!(summary.confidence > 0)) {
+    if (!(summary.confidence >= MINIMUM_TRACKING_CONFIDENCE)) {
       this.emitState("tracking-weak");
       this.emitZero();
       return;
