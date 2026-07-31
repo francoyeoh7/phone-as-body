@@ -202,6 +202,18 @@ describe("motion controller permissions and lifecycle", () => {
     expect(harness.target.addEventListener).toHaveBeenCalledTimes(3);
   });
 
+  it("resumes sensors without attempting to restart the camera", async () => {
+    const harness = createController({ cameraTracker: createCameraTracker(false) });
+
+    await harness.controller.requestPermission();
+    harness.controller.suspend();
+    harness.controller.resumeSensors();
+
+    expect(harness.controller.suspended).toBe(false);
+    expect(harness.cameraTracker.start).toHaveBeenCalledTimes(1);
+    expect(harness.cameraTracker.setFrozen).toHaveBeenLastCalledWith(false);
+  });
+
   it("starts camera when first enable follows a pre-permission suspend", async () => {
     const harness = createController();
 

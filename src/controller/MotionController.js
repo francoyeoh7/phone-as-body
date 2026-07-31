@@ -335,12 +335,17 @@ export class MotionController {
   }
 
   async resume() {
+    if (!this.resumeSensors()) return false;
+    return this.startCamera();
+  }
+
+  resumeSensors() {
     if (this.destroyed || !this.motionGranted) return false;
     this.suspended = false;
     this.calibrated = false;
     this.cameraTracker.setFrozen?.(false);
     this.frozen = false;
-    return this.startCamera();
+    return true;
   }
 
   clearResumeTimer() {

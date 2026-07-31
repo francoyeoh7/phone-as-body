@@ -6,6 +6,7 @@ function createApp({ motionEnabled = true, cameraEnabled = true } = {}) {
   const motion = {
     suspend: vi.fn(),
     resume: vi.fn(async () => true),
+    resumeSensors: vi.fn(),
     reset: vi.fn(),
     destroy: vi.fn(),
   };
@@ -24,11 +25,20 @@ function createApp({ motionEnabled = true, cameraEnabled = true } = {}) {
     requiresContinue: false,
     touchFallback: false,
     bfcacheSuspended: false,
+    lifecycleGeneration: 0,
     socket: { sendAction: actions },
     sendInput: vi.fn(),
     destroy: vi.fn(),
   });
   return { app, motion, actions };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("controller app lifecycle", () => {
@@ -53,7 +63,7 @@ describe("controller app lifecycle", () => {
     expect(actions).toHaveBeenNthCalledWith(2, "resume");
   });
 
-  it("does not resume camera control when camera access is unavailable", async () => {
+  it("resumes sensors without restarting an unavailable camera", async () => {
     const { app, motion, actions } = createApp({ cameraEnabled: false });
 
     await app.setPaused(true);
@@ -61,7 +71,40 @@ describe("controller app lifecycle", () => {
 
     expect(motion.suspend).toHaveBeenCalledTimes(1);
     expect(motion.resume).not.toHaveBeenCalled();
+    expect(motion.resumeSensors).toHaveBeenCalledTimes(1);
     expect(actions).toHaveBeenNthCalledWith(2, "resume");
+  });
+
+  it("does not resume after a background suspension interrupts camera restart", async () => {
+    const { app, motion, actions } = createApp();
+    const pendingCamera = deferred();
+    motion.resume.mockReturnValueOnce(pendingCamera.promise);
+
+    const resume = app.setPaused(false);
+    await Promise.resolve();
+    app.suspendForBackground();
+    pendingCamera.resolve(true);
+    await resume;
+
+    expect(motion.reset).not.toHaveBeenCalled();
+    expect(actions).not.toHaveBeenCalledWith("resume");
+    expect(actions).toHaveBeenCalledWith("pause");
+  });
+
+  it("does not continue after a background suspension interrupts visibility recovery", async () => {
+    const { app, motion, actions } = createApp();
+    const pendingCamera = deferred();
+    motion.resume.mockReturnValueOnce(pendingCamera.promise);
+
+    const resume = app.continueAfterVisibility();
+    await Promise.resolve();
+    app.suspendForBackground();
+    pendingCamera.resolve(true);
+    await resume;
+
+    expect(motion.reset).not.toHaveBeenCalled();
+    expect(actions).not.toHaveBeenCalledWith("resume");
+    expect(app.requiresContinue).toBe(false);
   });
 
   it("keeps persisted pages alive and offers explicit continuation on pageshow", () => {

@@ -59,6 +59,7 @@ export class ControllerApp {
     this.touchFallback = false;
     this.requiresContinue = false;
     this.bfcacheSuspended = false;
+    this.lifecycleGeneration = 0;
     this.calibrationTimer = null;
     this.handleVisibility = this.handleVisibility.bind(this);
     this.handlePageHide = this.handlePageHide.bind(this);
@@ -301,10 +302,12 @@ export class ControllerApp {
   }
 
   async continueAfterVisibility() {
+    const generation = this.lifecycleGeneration;
     this.enableMotion.disabled = true;
     this.permissionTitle.textContent = "正在恢复";
     this.permissionCopy.textContent = "请保持当前姿势片刻。";
     const cameraGranted = await this.motion.resume();
+    if (!this.isLifecycleCurrent(generation)) return;
     this.motion.reset();
     this.viewMotion = { x: 0, y: 0, confidence: 0 };
     this.sendInput();
@@ -364,6 +367,7 @@ export class ControllerApp {
   }
 
   suspendForBackground() {
+    this.lifecycleGeneration += 1;
     this.move = { x: 0, y: 0 };
     this.viewMotion = zeroViewMotion();
     this.sendInput();
@@ -400,10 +404,17 @@ export class ControllerApp {
     this.socket?.setInput({ move: this.move, viewMotion: this.viewMotion });
   }
 
+  isLifecycleCurrent(generation) {
+    return generation === this.lifecycleGeneration
+      && !this.paused
+      && (typeof document === "undefined" || !document.hidden);
+  }
+
   async setPaused(paused) {
     this.paused = paused;
     this.pauseMenu.hidden = !paused;
     if (paused) {
+      this.lifecycleGeneration += 1;
       this.move = { x: 0, y: 0 };
       this.viewMotion = zeroViewMotion();
       this.sendInput();
@@ -413,8 +424,12 @@ export class ControllerApp {
       return;
     }
 
-    if (this.motionEnabled && this.cameraEnabled) {
-      const cameraGranted = await this.motion.resume();
+    const generation = this.lifecycleGeneration;
+    if (this.motionEnabled) {
+      let cameraGranted = false;
+      if (this.cameraEnabled) cameraGranted = await this.motion.resume();
+      else this.motion.resumeSensors();
+      if (!this.isLifecycleCurrent(generation)) return;
       this.motion.reset();
       this.viewMotion = zeroViewMotion();
       this.sendInput();
@@ -471,6 +486,7 @@ export class ControllerApp {
   }
 
   destroy() {
+    this.lifecycleGeneration += 1;
     window.clearTimeout(this.calibrationTimer);
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);
