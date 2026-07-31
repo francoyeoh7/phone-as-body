@@ -8,7 +8,7 @@ import {
 import { createWristGestureDetector } from "../shared/wrist-gesture.js";
 
 const GRAVITY = 9.81;
-const ANGULAR_FREEZE_THRESHOLD = 12;
+const ANGULAR_FREEZE_THRESHOLD = 55;
 const REORIENTATION_GRACE_MS = 350;
 
 function defaultEventTarget() {

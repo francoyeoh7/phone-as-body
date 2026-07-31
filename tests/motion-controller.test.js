@@ -269,7 +269,7 @@ describe("motion controller permissions and lifecycle", () => {
     expect(harness.controller.cameraActive).toBe(false);
   });
 
-  it("derives gamma rate across the wrap boundary and freezes then unfreezes camera motion", async () => {
+  it("keeps a small wrap-boundary orientation change available for translation", async () => {
     const harness = createController();
     await harness.controller.requestPermission();
 
@@ -286,8 +286,7 @@ describe("motion controller permissions and lifecycle", () => {
       timeStamp: 140,
     });
 
-    expect(harness.cameraTracker.setFrozen).toHaveBeenNthCalledWith(1, true);
-    expect(harness.cameraTracker.setFrozen).toHaveBeenLastCalledWith(false);
+    expect(harness.cameraTracker.setFrozen).not.toHaveBeenCalled();
   });
 
   it("consumes a derived gamma fallback for only one motion event", async () => {
@@ -336,7 +335,7 @@ describe("motion controller permissions and lifecycle", () => {
     const harness = createController();
     await harness.controller.requestPermission();
 
-    for (const alpha of [12, 220]) {
+    for (const alpha of [55, 220]) {
       harness.target.dispatch("devicemotion", {
         accelerationIncludingGravity: { x: 0, y: 0, z: 9.81 },
         rotationRate: { alpha, beta: 0, gamma: 0 },
@@ -353,6 +352,19 @@ describe("motion controller permissions and lifecycle", () => {
       });
       expect(harness.cameraTracker.setFrozen).toHaveBeenLastCalledWith(false);
     }
+  });
+
+  it("does not freeze camera translation for ordinary hand motion", async () => {
+    const harness = createController();
+    await harness.controller.requestPermission();
+
+    harness.target.dispatch("devicemotion", {
+      accelerationIncludingGravity: { x: 0, y: 0, z: 9.81 },
+      rotationRate: { alpha: 20, beta: 0, gamma: 0 },
+      timeStamp: 20,
+    });
+
+    expect(harness.cameraTracker.setFrozen).not.toHaveBeenCalled();
   });
 
   it("routes real opposite twist candidates to the two callbacks", async () => {
