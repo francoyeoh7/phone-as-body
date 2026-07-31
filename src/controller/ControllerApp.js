@@ -362,7 +362,7 @@ export class ControllerApp {
       this.suspendForBackground();
       return;
     }
-    if (!this.motionEnabled) return;
+    if (!this.motionEnabled || this.paused) return;
     this.showContinuePrompt();
   }
 
@@ -397,7 +397,7 @@ export class ControllerApp {
   handlePageShow(event) {
     if (!this.bfcacheSuspended && !event?.persisted) return;
     this.bfcacheSuspended = false;
-    if (this.motionEnabled) this.showContinuePrompt();
+    if (this.motionEnabled && !this.paused) this.showContinuePrompt();
   }
 
   sendInput() {

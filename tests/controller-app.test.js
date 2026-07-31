@@ -123,6 +123,33 @@ describe("controller app lifecycle", () => {
     expect(motion.resume).not.toHaveBeenCalled();
   });
 
+  it("keeps the manual pause flow after returning from the background", async () => {
+    const { app, motion, actions } = createApp();
+
+    await app.setPaused(true);
+    app.handlePageHide({ persisted: true });
+    app.handlePageShow({ persisted: true });
+
+    expect(app.paused).toBe(true);
+    expect(app.requiresContinue).toBe(false);
+    expect(motion.resume).not.toHaveBeenCalled();
+
+    await app.setPaused(false);
+    expect(motion.resume).toHaveBeenCalledTimes(1);
+    expect(actions).toHaveBeenLastCalledWith("resume");
+  });
+
+  it("does not show the visibility continuation while manually paused", () => {
+    const { app, motion } = createApp();
+    vi.stubGlobal("document", { hidden: false });
+    app.paused = true;
+
+    app.handleVisibility();
+
+    expect(app.requiresContinue).toBe(false);
+    expect(motion.resume).not.toHaveBeenCalled();
+  });
+
   it("destroys on a non-persisted pagehide", () => {
     const { app } = createApp();
 
