@@ -8,6 +8,7 @@ import {
   quaternionToYawPitch,
   relativeQuaternion,
 } from "../src/shared/orientation.js";
+import { deviceOrientationToQuaternion } from "../src/controller/MotionController.js";
 
 const radians = (degrees) => (degrees * Math.PI) / 180;
 
@@ -60,5 +61,14 @@ describe("orientation math", () => {
   it("responds more quickly when angular speed is high", () => {
     expect(adaptiveAlpha(300, 0.7)).toBeGreaterThan(adaptiveAlpha(5, 0.7));
     expect(adaptiveAlpha(30, 0)).toBe(1);
+  });
+
+  it("converts device orientation and screen rotation into normalized quaternions", () => {
+    const portrait = deviceOrientationToQuaternion({ alpha: 20, beta: 15, gamma: -8 }, 0);
+    const landscape = deviceOrientationToQuaternion({ alpha: 20, beta: 15, gamma: -8 }, 90);
+    expect(Math.hypot(portrait.x, portrait.y, portrait.z, portrait.w)).toBeCloseTo(1, 6);
+    expect(Math.hypot(landscape.x, landscape.y, landscape.z, landscape.w)).toBeCloseTo(1, 6);
+    expect(landscape).not.toEqual(portrait);
+    expect(deviceOrientationToQuaternion({ alpha: null, beta: 0, gamma: 0 }, 0)).toBeNull();
   });
 });

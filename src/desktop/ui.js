@@ -72,9 +72,10 @@ export function createDesktopUI(root) {
 
   return {
     elements,
-    setRoom({ code, qrDataUrl }) {
+    setRoom({ code, url, qrDataUrl }) {
       elements.roomCode.textContent = code;
       elements.qr.src = qrDataUrl;
+      elements.qr.dataset.controllerUrl = url;
       elements.qr.hidden = false;
       elements.pairingStatus.innerHTML = "<span></span>打开手机相机扫描";
     },

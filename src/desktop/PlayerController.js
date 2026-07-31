@@ -63,7 +63,14 @@ export class PlayerController {
   }
 
   setSettings(settings = {}) {
-    this.settings = { ...this.settings, ...settings };
+    const sensitivity = Number(settings.sensitivity);
+    const smoothing = Number(settings.smoothing);
+    this.settings = {
+      ...this.settings,
+      sensitivity: Number.isFinite(sensitivity) ? Math.min(2, Math.max(0.4, sensitivity)) : this.settings.sensitivity,
+      smoothing: Number.isFinite(smoothing) ? Math.min(1, Math.max(0, smoothing)) : this.settings.smoothing,
+      invertY: typeof settings.invertY === "boolean" ? settings.invertY : this.settings.invertY,
+    };
     if (this.phoneInput.orientation) {
       this.orientationTracker = createOrientationTracker({ smoothingStrength: this.settings.smoothing });
       this.orientationTracker.calibrate(this.phoneInput.orientation);

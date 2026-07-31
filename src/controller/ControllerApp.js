@@ -42,12 +42,15 @@ function pulse(pattern = 12) {
 export class ControllerApp {
   constructor(root) {
     this.root = root;
-    this.room = new URLSearchParams(location.search).get("room") ?? "";
+    const parameters = new URLSearchParams(location.search);
+    this.room = parameters.get("room") ?? "";
+    this.preview = import.meta.env.DEV && parameters.has("preview");
     this.move = { x: 0, y: 0 };
     this.orientation = null;
     this.settings = loadSettings();
     this.audioContext = null;
     this.paused = false;
+    this.motionEnabled = false;
   }
 
   mount() {
@@ -73,7 +76,7 @@ export class ControllerApp {
           </div>
 
           <div class="action-zone">
-            <button class="action-button flashlight-button" id="flashlight" aria-label="开关手电筒">
+            <button class="action-button flashlight-button is-active" id="flashlight" aria-label="开关手电筒">
               <i data-lucide="flashlight"></i>
             </button>
             <button class="action-button interact-button" id="interact" aria-label="交互">
@@ -117,7 +120,12 @@ export class ControllerApp {
     createIcons({ icons, attrs: { "stroke-width": 1.8 } });
     this.cacheElements();
     this.bindControls();
-    this.connect();
+    if (this.preview) {
+      this.updateConnection("joined");
+      this.permissionPanel.hidden = true;
+    } else {
+      this.connect();
+    }
   }
 
   cacheElements() {
@@ -166,6 +174,7 @@ export class ControllerApp {
       this.messagePanel.hidden = true;
     });
     this.bindSettings();
+    document.addEventListener("visibilitychange", () => this.handleVisibility());
     window.addEventListener("pagehide", () => this.destroy(), { once: true });
   }
 
@@ -209,6 +218,14 @@ export class ControllerApp {
   }
 
   async enableSensors() {
+    if (this.motionEnabled) {
+      this.permissionPanel.hidden = true;
+      this.socket?.sendAction("recenter");
+      this.socket?.sendAction("resume");
+      this.enableMotion.textContent = "启用体感";
+      pulse([15, 35, 15]);
+      return;
+    }
     this.enableMotion.disabled = true;
     this.permissionTitle.textContent = "正在校准";
     this.permissionCopy.textContent = "请保持当前姿势片刻。";
@@ -218,6 +235,7 @@ export class ControllerApp {
       this.enableMotion.disabled = false;
       return;
     }
+    this.motionEnabled = true;
     window.setTimeout(() => {
       this.socket?.sendAction("recenter");
       this.socket?.sendAction("settings", { settings: this.settings });
@@ -233,10 +251,30 @@ export class ControllerApp {
       denied: ["体感权限未开启", "请在浏览器设置中允许动作与方向访问。"],
       reorienting: ["正在适配方向", "保持手机稳定。"],
     };
+    if (state === "waiting" && this.motionEnabled) {
+      this.socket?.sendAction("recenter");
+      this.permissionPanel.hidden = true;
+      return;
+    }
     if (!messages[state]) return;
     this.permissionPanel.hidden = false;
     [this.permissionTitle.textContent, this.permissionCopy.textContent] = messages[state];
     this.enableMotion.disabled = state === "reorienting";
+  }
+
+  handleVisibility() {
+    if (document.hidden) {
+      this.move = { x: 0, y: 0 };
+      this.sendInput();
+      this.socket?.sendAction("pause");
+      return;
+    }
+    if (!this.motionEnabled) return;
+    this.permissionPanel.hidden = false;
+    this.permissionTitle.textContent = "控制已暂停";
+    this.permissionCopy.textContent = "继续前请重新确认手机方向。";
+    this.enableMotion.textContent = "继续";
+    this.enableMotion.disabled = false;
   }
 
   sendInput() {

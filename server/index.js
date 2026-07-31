@@ -12,9 +12,11 @@ const server = createServer(app);
 const io = new SocketIOServer(server, { serveClient: false });
 const sessions = createSessionRegistry();
 const port = Number(process.env.PORT) || 4173;
+const publicControllerOrigin = process.env.PUBLIC_CONTROLLER_ORIGIN || null;
+const publicControllerHost = publicControllerOrigin ? new URL(publicControllerOrigin).hostname : null;
 
 app.get("/api/config", (_request, response) => {
-  response.json({ controllerOrigin: process.env.PUBLIC_CONTROLLER_ORIGIN || null });
+  response.json({ controllerOrigin: publicControllerOrigin });
 });
 
 io.on("connection", (socket) => {
@@ -87,7 +89,13 @@ if (process.env.NODE_ENV === "production") {
   });
 } else {
   const { createServer: createViteServer } = await import("vite");
-  const vite = await createViteServer({ root, server: { middlewareMode: true } });
+  const vite = await createViteServer({
+    root,
+    server: {
+      middlewareMode: true,
+      allowedHosts: publicControllerHost ? [publicControllerHost] : [],
+    },
+  });
   app.use(vite.middlewares);
 }
 

@@ -21,6 +21,7 @@ function createHarness() {
   const onComplete = vi.fn();
   const experience = {
     camera,
+    world: { removeCollider: vi.fn() },
     objects: {
       fuse: { enabled: true, root: new THREE.Group() },
       panel: {
@@ -29,6 +30,7 @@ function createHarness() {
         },
       },
       elevator: { enabled: true, root: new THREE.Group() },
+      elevatorCollider: { handle: 42 },
       elevatorDoors,
       silhouette: new THREE.Group(),
       flashlight: { visible: true },
@@ -60,6 +62,8 @@ describe("horror director", () => {
 
     expect(director.handleInteraction("panel")).toBe(true);
     expect(experience.objects.elevator.root.visible).toBe(true);
+    expect(experience.world.removeCollider).toHaveBeenCalledOnce();
+    expect(experience.objects.elevatorCollider).toBeNull();
     expect(director.story.current()).toBe("reach-elevator");
 
     expect(director.handleInteraction("elevator")).toBe(true);

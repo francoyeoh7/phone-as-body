@@ -29,7 +29,11 @@ export class HorrorDirector {
   }
 
   setSettings(settings = {}) {
-    this.settings = { ...this.settings, ...settings };
+    this.settings = {
+      ...this.settings,
+      subtitles: typeof settings.subtitles === "boolean" ? settings.subtitles : this.settings.subtitles,
+      reducedMotion: typeof settings.reducedMotion === "boolean" ? settings.reducedMotion : this.settings.reducedMotion,
+    };
     if (!this.settings.subtitles) this.ui.setSubtitle(null, false);
   }
 
@@ -72,6 +76,10 @@ export class HorrorDirector {
     panel.lamp.material.color.setHex(0x7da468);
     panel.lamp.material.emissive.setHex(0x577e46);
     elevator.root.visible = true;
+    if (this.experience.objects.elevatorCollider) {
+      this.experience.world.removeCollider(this.experience.objects.elevatorCollider, true);
+      this.experience.objects.elevatorCollider = null;
+    }
     for (const light of ceilingLights) light.intensity = 0;
     this.powerSequenceAt = this.elapsed + 0.2;
     this.pursuitAt = this.elapsed + 4.2;

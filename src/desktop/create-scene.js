@@ -258,6 +258,7 @@ export async function createScene(host) {
   doorRight.position.x = 0.58;
   elevatorDoors.add(doorLeft, doorRight);
   scene.add(elevatorDoors);
+  const elevatorCollider = addFixedCollider(world, 0, 1.25, -27.55, 1.25, 1.25, 0.12);
   const elevator = addInteractable(scene, "elevator", "进入电梯", [0, 1.05, -26.7], new THREE.BoxGeometry(2.1, 2.3, 0.2), new THREE.MeshStandardMaterial({ color: 0x202522, roughness: 0.44, metalness: 0.8, transparent: true, opacity: 0.16 }));
   elevator.root.visible = false;
 
@@ -295,7 +296,7 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
-    objects: { flashlight, ceilingLights, emergencyLights, stormLight, hemi, dust, silhouette, elevatorDoors, elevator, panel, fuse },
+    objects: { flashlight, ceilingLights, emergencyLights, stormLight, hemi, dust, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse },
     update(delta, elapsed) {
       dust.rotation.y += delta * 0.006;
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
