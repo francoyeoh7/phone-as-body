@@ -37,6 +37,22 @@ export function isJoystickVector(value) {
   );
 }
 
+export function isViewMotion(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    isFiniteNumber(value.confidence) &&
+    value.x >= -1 &&
+    value.x <= 1 &&
+    value.y >= -1 &&
+    value.y <= 1 &&
+    value.confidence >= 0 &&
+    value.confidence <= 1
+  );
+}
+
 export function isQuaternion(value) {
   if (value === null || typeof value !== "object") return false;
   const components = [value.x, value.y, value.z, value.w];
@@ -53,7 +69,7 @@ export function isControllerInput(value) {
     isFiniteNumber(value.sentAt) &&
     value.sentAt >= 0 &&
     isJoystickVector(value.move) &&
-    (value.orientation === null || isQuaternion(value.orientation))
+    isViewMotion(value.viewMotion)
   );
 }
 

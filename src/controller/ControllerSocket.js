@@ -9,7 +9,10 @@ export class ControllerSocket {
     this.socket = null;
     this.joined = false;
     this.sequence = 0;
-    this.latest = { move: { x: 0, y: 0 }, orientation: null };
+    this.latest = {
+      move: { x: 0, y: 0 },
+      viewMotion: { x: 0, y: 0, confidence: 0 },
+    };
     this.timer = null;
   }
 
@@ -44,7 +47,7 @@ export class ControllerSocket {
   setInput(input) {
     this.latest = {
       move: { ...input.move },
-      orientation: input.orientation ? { ...input.orientation } : null,
+      viewMotion: { ...input.viewMotion },
     };
   }
 

@@ -5,7 +5,7 @@ import { EVENTS } from "../shared/protocol.js";
 const stoppedInput = () => ({
   seq: -1,
   move: { x: 0, y: 0 },
-  orientation: null,
+  viewMotion: { x: 0, y: 0, confidence: 0 },
   receivedAt: 0,
 });
 
@@ -24,7 +24,12 @@ export class PhoneSession extends EventTarget {
     this.socket.on("disconnect", () => this.setPeerConnected(false));
     this.socket.on(EVENTS.peerStatus, ({ connected }) => this.setPeerConnected(Boolean(connected)));
     this.socket.on(EVENTS.controllerInput, (input) => {
-      this.input = { ...input, receivedAt: performance.now() };
+      this.input = {
+        ...input,
+        move: { ...input.move },
+        viewMotion: { ...input.viewMotion },
+        receivedAt: performance.now(),
+      };
       this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
     });
     this.socket.on(EVENTS.controllerAction, (action) => {
@@ -66,13 +71,23 @@ export class PhoneSession extends EventTarget {
 
   setPeerConnected(connected) {
     this.connected = connected;
-    if (!connected) this.input = { ...this.input, move: { x: 0, y: 0 } };
+    if (!connected) {
+      this.input = {
+        ...this.input,
+        move: { x: 0, y: 0 },
+        viewMotion: { x: 0, y: 0, confidence: 0 },
+      };
+    }
     this.dispatchEvent(new CustomEvent("peer", { detail: { connected } }));
   }
 
   currentInput(maxAgeMs = 500) {
     if (!this.connected || performance.now() - this.input.receivedAt > maxAgeMs) {
-      return { ...this.input, move: { x: 0, y: 0 } };
+      return {
+        ...this.input,
+        move: { x: 0, y: 0 },
+        viewMotion: { x: 0, y: 0, confidence: 0 },
+      };
     }
     return this.input;
   }

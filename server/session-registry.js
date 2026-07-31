@@ -4,7 +4,7 @@ const stoppedInput = () => ({
   seq: -1,
   sentAt: 0,
   move: { x: 0, y: 0 },
-  orientation: null,
+  viewMotion: { x: 0, y: 0, confidence: 0 },
 });
 
 function defaultRandomCode() {
@@ -56,7 +56,11 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
       seq: input.seq,
       sentAt: input.sentAt,
       move: { x: input.move.x, y: input.move.y },
-      orientation: input.orientation ? { ...input.orientation } : null,
+      viewMotion: {
+        x: input.viewMotion.x,
+        y: input.viewMotion.y,
+        confidence: input.viewMotion.confidence,
+      },
     };
     return { ok: true, room };
   }
