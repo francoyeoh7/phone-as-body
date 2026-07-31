@@ -46,11 +46,17 @@ export class ControllerApp {
     this.room = parameters.get("room") ?? "";
     this.preview = import.meta.env.DEV && parameters.has("preview");
     this.move = { x: 0, y: 0 };
-    this.orientation = null;
+    this.viewMotion = { x: 0, y: 0, confidence: 0 };
     this.settings = loadSettings();
     this.audioContext = null;
     this.paused = false;
     this.motionEnabled = false;
+    this.cameraEnabled = false;
+    this.touchFallback = false;
+    this.requiresContinue = false;
+    this.calibrationTimer = null;
+    this.handleVisibility = this.handleVisibility.bind(this);
+    this.handlePageHide = this.destroy.bind(this);
   }
 
   mount() {
@@ -147,11 +153,16 @@ export class ControllerApp {
       },
     });
     this.motion = new MotionController({
-      onSample: (orientation) => {
-        this.orientation = orientation;
+      onSample: (viewMotion) => {
+        this.viewMotion = viewMotion;
         this.sendInput();
       },
       onState: (state) => this.handleMotionState(state),
+      onTwistCandidate: () => pulse(10),
+      onInteract: () => {
+        pulse([18, 36, 18]);
+        this.socket?.sendAction("interact");
+      },
     });
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
@@ -166,6 +177,7 @@ export class ControllerApp {
     });
     this.root.querySelector("#recenter").addEventListener("click", () => {
       pulse([10, 30, 10]);
+      this.motion.reset();
       this.socket?.sendAction("recenter");
     });
     this.root.querySelector("#pause").addEventListener("click", () => this.setPaused(true));
@@ -174,8 +186,8 @@ export class ControllerApp {
       this.messagePanel.hidden = true;
     });
     this.bindSettings();
-    document.addEventListener("visibilitychange", () => this.handleVisibility());
-    window.addEventListener("pagehide", () => this.destroy(), { once: true });
+    document.addEventListener("visibilitychange", this.handleVisibility);
+    window.addEventListener("pagehide", this.handlePageHide, { once: true });
   }
 
   connect() {
@@ -218,6 +230,14 @@ export class ControllerApp {
   }
 
   async enableSensors() {
+    if (this.requiresContinue) {
+      await this.continueAfterVisibility();
+      return;
+    }
+    if (this.touchFallback) {
+      this.continueWithTouchControls();
+      return;
+    }
     if (this.motionEnabled) {
       this.permissionPanel.hidden = true;
       this.socket?.sendAction("recenter");
@@ -230,18 +250,68 @@ export class ControllerApp {
     this.permissionTitle.textContent = "正在校准";
     this.permissionCopy.textContent = "请保持当前姿势片刻。";
     this.ensureAudioContext();
-    const granted = await this.motion.requestPermission();
-    if (!granted) {
+    const { motionGranted, cameraGranted } = await this.motion.requestPermission();
+    if (!motionGranted) {
       this.enableMotion.disabled = false;
       return;
     }
     this.motionEnabled = true;
-    window.setTimeout(() => {
+    this.cameraEnabled = cameraGranted;
+    if (!cameraGranted) {
+      this.showCameraFallback();
+      return;
+    }
+    this.calibrationTimer = window.setTimeout(() => {
+      this.calibrationTimer = null;
+      this.motion.reset();
       this.socket?.sendAction("recenter");
       this.socket?.sendAction("settings", { settings: this.settings });
       this.permissionPanel.hidden = true;
       pulse([15, 35, 15]);
     }, 420);
+  }
+
+  showCameraFallback() {
+    window.clearTimeout(this.calibrationTimer);
+    this.calibrationTimer = null;
+    this.cameraEnabled = false;
+    this.touchFallback = true;
+    this.permissionPanel.hidden = false;
+    this.permissionTitle.textContent = "需要相机视角";
+    this.permissionCopy.textContent = "相机不可用。继续后可使用移动、触控交互和手势。";
+    this.enableMotion.textContent = "继续使用触控";
+    this.enableMotion.disabled = false;
+  }
+
+  continueWithTouchControls() {
+    this.touchFallback = false;
+    this.permissionPanel.hidden = true;
+    this.enableMotion.textContent = "启用体感";
+    this.motion.reset();
+    this.socket?.sendAction("recenter");
+    this.socket?.sendAction("resume");
+    this.socket?.sendAction("settings", { settings: this.settings });
+  }
+
+  async continueAfterVisibility() {
+    this.enableMotion.disabled = true;
+    this.permissionTitle.textContent = "正在恢复";
+    this.permissionCopy.textContent = "请保持当前姿势片刻。";
+    const cameraGranted = await this.motion.resume();
+    this.motion.reset();
+    this.viewMotion = { x: 0, y: 0, confidence: 0 };
+    this.sendInput();
+    this.socket?.sendAction("resume");
+    this.socket?.sendAction("recenter");
+    this.requiresContinue = false;
+    this.cameraEnabled = cameraGranted;
+    if (!cameraGranted) {
+      this.showCameraFallback();
+      return;
+    }
+    this.touchFallback = false;
+    this.enableMotion.textContent = "启用体感";
+    this.permissionPanel.hidden = true;
   }
 
   handleMotionState(state) {
@@ -251,7 +321,21 @@ export class ControllerApp {
       denied: ["体感权限未开启", "请在浏览器设置中允许动作与方向访问。"],
       reorienting: ["正在适配方向", "保持手机稳定。"],
     };
-    if (state === "waiting" && this.motionEnabled) {
+    if (state === "tracking-weak") {
+      this.status.dataset.status = "tracking-weak";
+      this.connectionLabel.textContent = "相机追踪较弱";
+      return;
+    }
+    if (state === "camera-active") {
+      this.status.dataset.status = "joined";
+      this.connectionLabel.textContent = "已连接";
+      return;
+    }
+    if (["camera-denied", "camera-unavailable"].includes(state)) {
+      if (this.motionEnabled) this.showCameraFallback();
+      return;
+    }
+    if (state === "waiting" && this.motionEnabled && this.cameraEnabled && !this.requiresContinue) {
       this.socket?.sendAction("recenter");
       this.permissionPanel.hidden = true;
       return;
@@ -265,11 +349,15 @@ export class ControllerApp {
   handleVisibility() {
     if (document.hidden) {
       this.move = { x: 0, y: 0 };
+      this.viewMotion = { x: 0, y: 0, confidence: 0 };
       this.sendInput();
+      this.motion.suspend();
       this.socket?.sendAction("pause");
       return;
     }
     if (!this.motionEnabled) return;
+    this.requiresContinue = true;
+    this.touchFallback = false;
     this.permissionPanel.hidden = false;
     this.permissionTitle.textContent = "控制已暂停";
     this.permissionCopy.textContent = "继续前请重新确认手机方向。";
@@ -278,7 +366,7 @@ export class ControllerApp {
   }
 
   sendInput() {
-    this.socket?.setInput({ move: this.move, orientation: this.orientation });
+    this.socket?.setInput({ move: this.move, viewMotion: this.viewMotion });
   }
 
   setPaused(paused) {
@@ -334,6 +422,9 @@ export class ControllerApp {
   }
 
   destroy() {
+    window.clearTimeout(this.calibrationTimer);
+    document.removeEventListener("visibilitychange", this.handleVisibility);
+    window.removeEventListener("pagehide", this.handlePageHide);
     this.joystick?.destroy();
     this.motion?.destroy();
     this.socket?.destroy();

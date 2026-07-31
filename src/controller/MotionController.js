@@ -1,100 +1,372 @@
-import { Euler, Quaternion, Vector3 } from "three";
+import { CameraMotionTracker } from "./CameraMotionTracker.js";
+import {
+  alignMotionToGrip,
+  blendVerticalMotion,
+  gravityAlignedRoll,
+  normalizeViewMotion,
+} from "../shared/view-motion.js";
+import { createWristGestureDetector } from "../shared/wrist-gesture.js";
 
-const zee = new Vector3(0, 0, 1);
-const deviceCorrection = new Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-const toRadians = Math.PI / 180;
+const GRAVITY = 9.81;
+const ANGULAR_FREEZE_THRESHOLD = 12;
+const REORIENTATION_GRACE_MS = 350;
 
-function screenAngle() {
-  const angle = window.screen?.orientation?.angle;
-  return Number.isFinite(angle) ? angle : Number(window.orientation) || 0;
+function defaultEventTarget() {
+  return typeof window !== "undefined" ? window : globalThis;
 }
 
-export function deviceOrientationToQuaternion({ alpha, beta, gamma }, orientationAngle = screenAngle()) {
-  if (![alpha, beta, gamma, orientationAngle].every(Number.isFinite)) return null;
-  const euler = new Euler(beta * toRadians, alpha * toRadians, -gamma * toRadians, "YXZ");
-  const quaternion = new Quaternion().setFromEuler(euler);
-  quaternion.multiply(deviceCorrection);
-  quaternion.multiply(new Quaternion().setFromAxisAngle(zee, -orientationAngle * toRadians));
-  quaternion.normalize();
-  return { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w };
+function zeroViewMotion() {
+  return { x: 0, y: 0, confidence: 0 };
+}
+
+function finiteOrZero(value) {
+  return Number.isFinite(value) ? value : 0;
+}
+
+const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+
+export function wrappedAngleDelta(previous, current) {
+  if (!Number.isFinite(previous) || !Number.isFinite(current)) return 0;
+  const rawDelta = current - previous;
+  if (!Number.isFinite(rawDelta)) return 0;
+
+  let delta = rawDelta % 360;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  if (delta === -180 && rawDelta > 0) return 180;
+  return Object.is(delta, -0) ? 0 : delta;
+}
+
+export function chooseTwistRate(rotationRate, derivedGammaRate) {
+  if (Number.isFinite(rotationRate?.gamma)) return rotationRate.gamma;
+  if (Number.isFinite(derivedGammaRate)) return derivedGammaRate;
+  return 0;
+}
+
+export function totalRotationSpeed(rotationRate, derivedGammaRate) {
+  const speed = Math.hypot(
+    finiteOrZero(rotationRate?.alpha),
+    finiteOrZero(rotationRate?.beta),
+    chooseTwistRate(rotationRate, derivedGammaRate),
+  );
+  return Number.isFinite(speed) ? speed : Number.MAX_VALUE;
+}
+
+export function normalizeRoll(currentGamma, baselineGamma) {
+  return wrappedAngleDelta(baselineGamma, currentGamma);
+}
+
+export function mapCameraSample(raw, options = {}) {
+  if (
+    !raw
+    || !Number.isFinite(raw.x)
+    || !Number.isFinite(raw.y)
+    || !Number.isFinite(raw.scaleVelocity)
+    || !Number.isFinite(raw.confidence)
+  ) {
+    return zeroViewMotion();
+  }
+
+  const { gravity, currentGamma, baselineGamma } = options ?? {};
+  const relativeRoll = normalizeRoll(currentGamma, baselineGamma);
+  const gravityRoll = gravityAlignedRoll({ x: gravity?.x, y: gravity?.y }, relativeRoll);
+  const aligned = alignMotionToGrip({ x: raw.x, y: raw.y }, gravityRoll);
+  const screenUpWeight = Number.isFinite(gravity?.z)
+    ? clamp(Math.abs(gravity.z) / GRAVITY, 0, 1)
+    : 0;
+  const y = blendVerticalMotion({
+    imageY: aligned.y,
+    scaleVelocity: raw.scaleVelocity,
+    screenUpWeight,
+  });
+
+  return normalizeViewMotion({ x: aligned.x, y, confidence: raw.confidence });
 }
 
 export class MotionController {
-  constructor({ onSample, onState }) {
+  constructor({
+    onSample,
+    onState,
+    onTwistCandidate,
+    onInteract,
+    cameraTracker,
+    eventTarget,
+    window: injectedWindow,
+    motionEventType = "devicemotion",
+    orientationEventType = "deviceorientation",
+    now = () => Date.now(),
+  } = {}) {
     this.onSample = onSample;
     this.onState = onState;
-    this.latest = null;
-    this.frame = null;
-    this.active = false;
-    this.suspendedUntil = 0;
+    this.onTwistCandidate = onTwistCandidate;
+    this.onInteract = onInteract;
+    this.eventTarget = eventTarget ?? injectedWindow ?? defaultEventTarget();
+    this.motionEventType = motionEventType;
+    this.orientationEventType = orientationEventType;
+    this.now = typeof now === "function" ? now : () => Date.now();
+
+    this.cameraTracker = cameraTracker ?? new CameraMotionTracker({
+      onSample: (sample) => this.handleCameraSample(sample),
+      onState: (state) => this.handleCameraState(state),
+    });
+    if (cameraTracker) {
+      this.cameraTracker.onSample = (sample) => this.handleCameraSample(sample);
+      this.cameraTracker.onState = (state) => this.handleCameraState(state);
+    }
+
+    this.motionGranted = false;
+    this.permissionPromise = null;
+    this.cameraActive = false;
+    this.listenersStarted = false;
+    this.suspended = false;
+    this.destroyed = false;
+    this.frozen = false;
+    this.reorienting = false;
     this.resumeTimer = null;
+    this.currentGamma = null;
+    this.baselineGamma = null;
+    this.previousGammaTimestamp = null;
+    this.derivedGammaRate = 0;
+    this.gravity = null;
+    this.wristDetector = createWristGestureDetector({
+      onCandidate: () => this.onTwistCandidate?.(),
+      onInteract: () => this.onInteract?.(),
+    });
+
+    this.handleMotion = this.handleMotion.bind(this);
     this.handleOrientation = this.handleOrientation.bind(this);
     this.handleScreenOrientation = this.handleScreenOrientation.bind(this);
   }
 
   get supported() {
-    return typeof window.DeviceOrientationEvent !== "undefined";
+    return typeof this.eventTarget.DeviceMotionEvent !== "undefined";
   }
 
-  async requestPermission() {
-    if (!window.isSecureContext && location.hostname !== "localhost") {
+  getTimestamp(event) {
+    const timestamp = event?.timeStamp;
+    if (Number.isFinite(timestamp)) return timestamp;
+    const currentTime = this.now();
+    return Number.isFinite(currentTime) ? currentTime : 0;
+  }
+
+  async requestStaticPermission(EventType) {
+    if (!EventType) return "granted";
+    const request = EventType.requestPermission;
+    return typeof request === "function" ? request.call(EventType) : "granted";
+  }
+
+  requestPermission() {
+    if (this.permissionPromise) return this.permissionPromise;
+    const permission = this.requestPermissionInternal();
+    this.permissionPromise = permission;
+    permission.then(
+      () => {
+        if (this.permissionPromise === permission) this.permissionPromise = null;
+      },
+      () => {
+        if (this.permissionPromise === permission) this.permissionPromise = null;
+      },
+    );
+    return permission;
+  }
+
+  async requestPermissionInternal() {
+    if (this.destroyed) return { motionGranted: false, cameraGranted: false };
+
+    const location = this.eventTarget.location ?? globalThis.location;
+    if (!this.eventTarget.isSecureContext && location?.hostname !== "localhost") {
       this.onState?.("insecure");
-      return false;
+      return { motionGranted: false, cameraGranted: false };
     }
     if (!this.supported) {
       this.onState?.("unsupported");
-      return false;
+      return { motionGranted: false, cameraGranted: false };
     }
 
-    try {
-      const request = window.DeviceOrientationEvent.requestPermission;
-      const permission = typeof request === "function" ? await request.call(window.DeviceOrientationEvent) : "granted";
-      if (permission !== "granted") {
+    if (!this.motionGranted) {
+      try {
+        const [motionPermission, orientationPermission] = await Promise.all([
+          this.requestStaticPermission(this.eventTarget.DeviceMotionEvent),
+          this.requestStaticPermission(this.eventTarget.DeviceOrientationEvent),
+        ]);
+        if (motionPermission !== "granted" || orientationPermission !== "granted") {
+          throw new Error("Sensor permission denied");
+        }
+        this.motionGranted = true;
+      } catch {
         this.onState?.("denied");
-        return false;
+        return { motionGranted: false, cameraGranted: false };
       }
-      this.start();
-      return true;
+    }
+
+    this.suspended = false;
+    this.start();
+    const cameraGranted = await this.startCamera();
+    return { motionGranted: true, cameraGranted };
+  }
+
+  async startCamera() {
+    if (this.destroyed || this.suspended) return false;
+    if (this.cameraActive) return true;
+    try {
+      const started = Boolean(await this.cameraTracker.start());
+      this.cameraActive = started;
+      return started;
     } catch {
-      this.onState?.("denied");
+      this.onState?.("camera-unavailable");
       return false;
     }
   }
 
   start() {
-    if (this.active) return;
-    this.active = true;
-    window.addEventListener("deviceorientation", this.handleOrientation, true);
-    window.screen?.orientation?.addEventListener("change", this.handleScreenOrientation);
-    window.addEventListener("orientationchange", this.handleScreenOrientation);
+    if (this.destroyed || this.listenersStarted) return;
+    this.listenersStarted = true;
+    this.eventTarget.addEventListener(this.orientationEventType, this.handleOrientation, true);
+    this.eventTarget.addEventListener(this.motionEventType, this.handleMotion, true);
+    this.eventTarget.screen?.orientation?.addEventListener("change", this.handleScreenOrientation);
+    this.eventTarget.addEventListener("orientationchange", this.handleScreenOrientation);
     this.onState?.("waiting");
   }
 
   handleOrientation(event) {
-    if (Date.now() < this.suspendedUntil) return;
-    const sample = deviceOrientationToQuaternion(event);
-    if (!sample) return;
-    this.latest = sample;
-    if (this.frame !== null) return;
-    this.frame = requestAnimationFrame(() => {
-      this.frame = null;
-      this.onSample?.(this.latest);
-      this.onState?.("active");
+    if (this.destroyed || this.suspended) return;
+    const gamma = event?.gamma;
+    if (!Number.isFinite(gamma)) return;
+
+    const timestamp = this.getTimestamp(event);
+    if (this.currentGamma !== null && this.previousGammaTimestamp !== null) {
+      const deltaMs = timestamp - this.previousGammaTimestamp;
+      this.derivedGammaRate = deltaMs > 0 && Number.isFinite(deltaMs)
+        ? wrappedAngleDelta(this.currentGamma, gamma) * 1000 / deltaMs
+        : 0;
+      if (!Number.isFinite(this.derivedGammaRate)) this.derivedGammaRate = 0;
+    } else {
+      this.derivedGammaRate = 0;
+    }
+    this.currentGamma = gamma;
+    this.previousGammaTimestamp = timestamp;
+  }
+
+  handleMotion(event) {
+    if (this.destroyed || this.suspended) return;
+
+    this.gravity = event?.accelerationIncludingGravity ?? null;
+    const derivedGammaRate = this.derivedGammaRate;
+    this.derivedGammaRate = 0;
+    const twistRate = chooseTwistRate(event?.rotationRate, derivedGammaRate);
+    const result = this.wristDetector.update({
+      timeMs: this.getTimestamp(event),
+      twistRate,
     });
+    const rotating = Boolean(result?.rotating)
+      || totalRotationSpeed(event?.rotationRate, derivedGammaRate) >= ANGULAR_FREEZE_THRESHOLD;
+    this.setCameraFrozen(rotating);
+  }
+
+  setCameraFrozen(frozen) {
+    const nextFrozen = Boolean(frozen);
+    if (nextFrozen === this.frozen) return;
+    this.frozen = nextFrozen;
+    this.cameraTracker.setFrozen?.(nextFrozen);
+  }
+
+  handleCameraSample(raw) {
+    if (this.destroyed || this.suspended || this.reorienting || this.frozen) {
+      this.emitZero();
+      return;
+    }
+    this.onSample?.(mapCameraSample(raw, {
+      gravity: this.gravity,
+      currentGamma: this.currentGamma,
+      baselineGamma: this.baselineGamma,
+    }));
+  }
+
+  handleCameraState(state) {
+    if (state === "camera-active") this.cameraActive = true;
+    if (["camera-denied", "camera-unavailable"].includes(state)) this.cameraActive = false;
+    if (!this.destroyed) this.onState?.(state);
+  }
+
+  emitZero() {
+    this.onSample?.(zeroViewMotion());
+  }
+
+  reset() {
+    if (this.destroyed) return;
+    this.baselineGamma = this.currentGamma;
+    this.derivedGammaRate = 0;
+    this.previousGammaTimestamp = null;
+    this.gravity = null;
+    this.wristDetector.reset();
+    this.cameraTracker.reset?.();
+    this.emitZero();
+  }
+
+  suspend() {
+    if (this.destroyed) return;
+    this.suspended = true;
+    this.reorienting = false;
+    this.clearResumeTimer();
+    this.derivedGammaRate = 0;
+    this.previousGammaTimestamp = null;
+    this.gravity = null;
+    this.wristDetector.reset();
+    this.frozen = false;
+    this.cameraActive = false;
+    this.cameraTracker.stop?.();
+    this.emitZero();
+  }
+
+  async resume() {
+    if (this.destroyed || !this.motionGranted) return false;
+    this.suspended = false;
+    this.cameraTracker.setFrozen?.(false);
+    this.frozen = false;
+    return this.startCamera();
+  }
+
+  clearResumeTimer() {
+    if (this.resumeTimer === null) return;
+    this.eventTarget.clearTimeout?.(this.resumeTimer);
+    this.resumeTimer = null;
   }
 
   handleScreenOrientation() {
-    this.suspendedUntil = Date.now() + 350;
+    if (this.destroyed || this.suspended) return;
+    this.reorienting = true;
+    this.cameraTracker.reset?.();
+    this.setCameraFrozen(true);
+    this.emitZero();
     this.onState?.("reorienting");
-    window.clearTimeout(this.resumeTimer);
-    this.resumeTimer = window.setTimeout(() => this.onState?.("waiting"), 350);
+    this.clearResumeTimer();
+    const setTimeoutFn = this.eventTarget.setTimeout?.bind(this.eventTarget) ?? setTimeout;
+    this.resumeTimer = setTimeoutFn(() => {
+      this.resumeTimer = null;
+      if (this.destroyed || this.suspended) return;
+      this.reorienting = false;
+      this.baselineGamma = this.currentGamma;
+      this.derivedGammaRate = 0;
+      this.previousGammaTimestamp = null;
+      this.gravity = null;
+      this.wristDetector.reset();
+      this.setCameraFrozen(false);
+      this.onState?.("waiting");
+    }, REORIENTATION_GRACE_MS);
   }
 
   destroy() {
-    window.removeEventListener("deviceorientation", this.handleOrientation, true);
-    window.screen?.orientation?.removeEventListener("change", this.handleScreenOrientation);
-    window.removeEventListener("orientationchange", this.handleScreenOrientation);
-    window.clearTimeout(this.resumeTimer);
-    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.cameraActive = false;
+    this.clearResumeTimer();
+    if (this.listenersStarted) {
+      this.eventTarget.removeEventListener(this.orientationEventType, this.handleOrientation, true);
+      this.eventTarget.removeEventListener(this.motionEventType, this.handleMotion, true);
+      this.eventTarget.screen?.orientation?.removeEventListener("change", this.handleScreenOrientation);
+      this.eventTarget.removeEventListener("orientationchange", this.handleScreenOrientation);
+      this.listenersStarted = false;
+    }
+    this.cameraTracker.destroy?.();
   }
 }
