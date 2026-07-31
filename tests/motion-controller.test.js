@@ -214,6 +214,49 @@ describe("motion controller permissions and lifecycle", () => {
     expect(harness.cameraTracker.start).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start camera when suspension interrupts pending permission", async () => {
+    const target = createEventTarget();
+    let resolveMotion;
+    target.DeviceMotionEvent.requestPermission.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMotion = resolve;
+    }));
+    const harness = createController({ target });
+    const permission = harness.controller.requestPermission();
+    await Promise.resolve();
+
+    harness.controller.suspend();
+    resolveMotion("granted");
+
+    await expect(permission).resolves.toEqual({
+      motionGranted: true,
+      cameraGranted: false,
+    });
+    expect(harness.cameraTracker.start).not.toHaveBeenCalled();
+    expect(harness.controller.suspended).toBe(true);
+  });
+
+  it("does not reactivate camera when startup resolves after suspension", async () => {
+    const cameraTracker = createCameraTracker();
+    let resolveStart;
+    cameraTracker.start.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStart = resolve;
+    }));
+    const harness = createController({ cameraTracker });
+    const permission = harness.controller.requestPermission();
+    for (let index = 0; index < 6; index += 1) await Promise.resolve();
+
+    expect(cameraTracker.start).toHaveBeenCalledTimes(1);
+    harness.controller.suspend();
+    resolveStart(true);
+
+    await expect(permission).resolves.toEqual({
+      motionGranted: true,
+      cameraGranted: false,
+    });
+    expect(harness.controller.suspended).toBe(true);
+    expect(harness.controller.cameraActive).toBe(false);
+  });
+
   it("derives gamma rate across the wrap boundary and freezes then unfreezes camera motion", async () => {
     const harness = createController();
     await harness.controller.requestPermission();
@@ -252,6 +295,29 @@ describe("motion controller permissions and lifecycle", () => {
 
     expect(harness.cameraTracker.setFrozen).toHaveBeenNthCalledWith(1, true);
     expect(harness.cameraTracker.setFrozen).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it("holds camera output neutral until the first calibration reset", async () => {
+    const harness = createController();
+    await harness.controller.requestPermission();
+
+    harness.cameraTracker.emitSample({ x: 1, y: 0, scaleVelocity: 0, confidence: 1 });
+    expect(harness.samples.at(-1)).toEqual({ x: 0, y: 0, confidence: 0 });
+
+    harness.controller.reset();
+    harness.cameraTracker.emitSample({ x: 1, y: 0, scaleVelocity: 0, confidence: 1 });
+    expect(harness.samples.at(-1).x).toBeGreaterThan(0);
+
+    harness.target.dispatch("orientationchange");
+    vi.advanceTimersByTime(350);
+    harness.cameraTracker.emitSample({ x: 1, y: 0, scaleVelocity: 0, confidence: 1 });
+    expect(harness.samples.at(-1)).toEqual({ x: 0, y: 0, confidence: 0 });
+
+    harness.controller.reset();
+    harness.controller.suspend();
+    await harness.controller.resume();
+    harness.cameraTracker.emitSample({ x: 1, y: 0, scaleVelocity: 0, confidence: 1 });
+    expect(harness.samples.at(-1)).toEqual({ x: 0, y: 0, confidence: 0 });
   });
 
   it("suppresses camera samples during both threshold and fast rotation", async () => {

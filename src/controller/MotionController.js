@@ -116,12 +116,14 @@ export class MotionController {
 
     this.motionGranted = false;
     this.permissionPromise = null;
+    this.lifecycleGeneration = 0;
     this.cameraActive = false;
     this.listenersStarted = false;
     this.suspended = false;
     this.destroyed = false;
     this.frozen = false;
     this.reorienting = false;
+    this.calibrated = false;
     this.resumeTimer = null;
     this.currentGamma = null;
     this.baselineGamma = null;
@@ -157,7 +159,8 @@ export class MotionController {
 
   requestPermission() {
     if (this.permissionPromise) return this.permissionPromise;
-    const permission = this.requestPermissionInternal();
+    const generation = this.lifecycleGeneration;
+    const permission = this.requestPermissionInternal(generation);
     this.permissionPromise = permission;
     permission.then(
       () => {
@@ -170,7 +173,7 @@ export class MotionController {
     return permission;
   }
 
-  async requestPermissionInternal() {
+  async requestPermissionInternal(permissionGeneration) {
     if (this.destroyed) return { motionGranted: false, cameraGranted: false };
 
     const location = this.eventTarget.location ?? globalThis.location;
@@ -199,17 +202,27 @@ export class MotionController {
       }
     }
 
+    if (this.destroyed || this.lifecycleGeneration !== permissionGeneration) {
+      return { motionGranted: true, cameraGranted: false };
+    }
     this.suspended = false;
     this.start();
     const cameraGranted = await this.startCamera();
+    if (this.destroyed || this.suspended || this.lifecycleGeneration !== permissionGeneration) {
+      return { motionGranted: true, cameraGranted: false };
+    }
     return { motionGranted: true, cameraGranted };
   }
 
-  async startCamera() {
-    if (this.destroyed || this.suspended) return false;
+  async startCamera(startGeneration = this.lifecycleGeneration) {
+    if (this.destroyed || this.suspended || this.lifecycleGeneration !== startGeneration) return false;
     if (this.cameraActive) return true;
     try {
       const started = Boolean(await this.cameraTracker.start());
+      if (this.destroyed || this.suspended || this.lifecycleGeneration !== startGeneration) {
+        this.cameraActive = false;
+        return false;
+      }
       this.cameraActive = started;
       return started;
     } catch {
@@ -271,7 +284,7 @@ export class MotionController {
   }
 
   handleCameraSample(raw) {
-    if (this.destroyed || this.suspended || this.reorienting || this.frozen) {
+    if (this.destroyed || this.suspended || this.reorienting || this.frozen || !this.calibrated) {
       this.emitZero();
       return;
     }
@@ -283,7 +296,7 @@ export class MotionController {
   }
 
   handleCameraState(state) {
-    if (state === "camera-active") this.cameraActive = true;
+    if (state === "camera-active" && !this.destroyed && !this.suspended) this.cameraActive = true;
     if (["camera-denied", "camera-unavailable"].includes(state)) this.cameraActive = false;
     if (!this.destroyed) this.onState?.(state);
   }
@@ -300,11 +313,13 @@ export class MotionController {
     this.gravity = null;
     this.wristDetector.reset();
     this.cameraTracker.reset?.();
+    this.calibrated = true;
     this.emitZero();
   }
 
   suspend() {
     if (this.destroyed) return;
+    this.lifecycleGeneration += 1;
     this.suspended = true;
     this.reorienting = false;
     this.clearResumeTimer();
@@ -312,6 +327,7 @@ export class MotionController {
     this.previousGammaTimestamp = null;
     this.gravity = null;
     this.wristDetector.reset();
+    this.calibrated = false;
     this.frozen = false;
     this.cameraActive = false;
     this.cameraTracker.stop?.();
@@ -321,6 +337,7 @@ export class MotionController {
   async resume() {
     if (this.destroyed || !this.motionGranted) return false;
     this.suspended = false;
+    this.calibrated = false;
     this.cameraTracker.setFrozen?.(false);
     this.frozen = false;
     return this.startCamera();
@@ -335,6 +352,7 @@ export class MotionController {
   handleScreenOrientation() {
     if (this.destroyed || this.suspended) return;
     this.reorienting = true;
+    this.calibrated = false;
     this.cameraTracker.reset?.();
     this.setCameraFrozen(true);
     this.emitZero();
@@ -358,6 +376,7 @@ export class MotionController {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.lifecycleGeneration += 1;
     this.cameraActive = false;
     this.clearResumeTimer();
     if (this.listenersStarted) {

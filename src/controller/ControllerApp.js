@@ -39,6 +39,10 @@ function pulse(pattern = 12) {
   navigator.vibrate?.(pattern);
 }
 
+function zeroViewMotion() {
+  return { x: 0, y: 0, confidence: 0 };
+}
+
 export class ControllerApp {
   constructor(root) {
     this.root = root;
@@ -54,9 +58,11 @@ export class ControllerApp {
     this.cameraEnabled = false;
     this.touchFallback = false;
     this.requiresContinue = false;
+    this.bfcacheSuspended = false;
     this.calibrationTimer = null;
     this.handleVisibility = this.handleVisibility.bind(this);
-    this.handlePageHide = this.destroy.bind(this);
+    this.handlePageHide = this.handlePageHide.bind(this);
+    this.handlePageShow = this.handlePageShow.bind(this);
   }
 
   mount() {
@@ -187,7 +193,8 @@ export class ControllerApp {
     });
     this.bindSettings();
     document.addEventListener("visibilitychange", this.handleVisibility);
-    window.addEventListener("pagehide", this.handlePageHide, { once: true });
+    window.addEventListener("pagehide", this.handlePageHide);
+    window.addEventListener("pageshow", this.handlePageShow);
   }
 
   connect() {
@@ -336,6 +343,7 @@ export class ControllerApp {
       return;
     }
     if (state === "waiting" && this.motionEnabled && this.cameraEnabled && !this.requiresContinue) {
+      this.motion.reset();
       this.socket?.sendAction("recenter");
       this.permissionPanel.hidden = true;
       return;
@@ -348,14 +356,22 @@ export class ControllerApp {
 
   handleVisibility() {
     if (document.hidden) {
-      this.move = { x: 0, y: 0 };
-      this.viewMotion = { x: 0, y: 0, confidence: 0 };
-      this.sendInput();
-      this.motion.suspend();
-      this.socket?.sendAction("pause");
+      this.suspendForBackground();
       return;
     }
     if (!this.motionEnabled) return;
+    this.showContinuePrompt();
+  }
+
+  suspendForBackground() {
+    this.move = { x: 0, y: 0 };
+    this.viewMotion = zeroViewMotion();
+    this.sendInput();
+    this.motion?.suspend();
+    this.socket?.sendAction("pause");
+  }
+
+  showContinuePrompt() {
     this.requiresContinue = true;
     this.touchFallback = false;
     this.permissionPanel.hidden = false;
@@ -365,14 +381,47 @@ export class ControllerApp {
     this.enableMotion.disabled = false;
   }
 
+  handlePageHide(event) {
+    if (event?.persisted) {
+      this.bfcacheSuspended = true;
+      this.suspendForBackground();
+      return;
+    }
+    this.destroy();
+  }
+
+  handlePageShow(event) {
+    if (!this.bfcacheSuspended && !event?.persisted) return;
+    this.bfcacheSuspended = false;
+    if (this.motionEnabled) this.showContinuePrompt();
+  }
+
   sendInput() {
     this.socket?.setInput({ move: this.move, viewMotion: this.viewMotion });
   }
 
-  setPaused(paused) {
+  async setPaused(paused) {
     this.paused = paused;
     this.pauseMenu.hidden = !paused;
-    this.socket?.sendAction(paused ? "pause" : "resume");
+    if (paused) {
+      this.move = { x: 0, y: 0 };
+      this.viewMotion = zeroViewMotion();
+      this.sendInput();
+      this.motion?.suspend();
+      this.socket?.sendAction("pause");
+      pulse();
+      return;
+    }
+
+    if (this.motionEnabled && this.cameraEnabled) {
+      const cameraGranted = await this.motion.resume();
+      this.motion.reset();
+      this.viewMotion = zeroViewMotion();
+      this.sendInput();
+      if (cameraGranted) this.cameraEnabled = true;
+      if (this.cameraEnabled && !cameraGranted) this.showCameraFallback();
+    }
+    this.socket?.sendAction("resume");
     pulse();
   }
 
@@ -425,6 +474,7 @@ export class ControllerApp {
     window.clearTimeout(this.calibrationTimer);
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);
+    window.removeEventListener("pageshow", this.handlePageShow);
     this.joystick?.destroy();
     this.motion?.destroy();
     this.socket?.destroy();
