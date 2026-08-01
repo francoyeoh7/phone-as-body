@@ -440,8 +440,8 @@ describe("camera motion tracker frames", () => {
     expect(vision.yape06.detect).toHaveBeenCalledTimes(1);
     expect(vision.optical_flow_lk.track).toHaveBeenCalledTimes(4);
     expect(vision.optical_flow_lk.track.mock.calls[0][5]).toBe(15);
-    expect(vision.yape06.laplacian_threshold).toBe(30);
-    expect(vision.yape06.min_eigen_value_threshold).toBe(25);
+    expect(vision.yape06.laplacian_threshold).toBe(10);
+    expect(vision.yape06.min_eigen_value_threshold).toBe(5);
   });
 
   it("retains three stable warmup frames after unfreezing", async () => {

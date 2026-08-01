@@ -196,8 +196,8 @@ export class CameraMotionTracker {
     this.previousPointPool = Array.from({ length: MAXIMUM_CORNERS }, () => ({ x: 0, y: 0 }));
     this.currentPointPool = Array.from({ length: MAXIMUM_CORNERS }, () => ({ x: 0, y: 0 }));
 
-    vision.yape06.laplacian_threshold = 30;
-    vision.yape06.min_eigen_value_threshold = 25;
+    vision.yape06.laplacian_threshold = 10;
+    vision.yape06.min_eigen_value_threshold = 5;
   }
 
   setFrozen(frozen) {
