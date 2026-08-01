@@ -16,8 +16,12 @@ The controller remains an install-free phone web page. It no longer requests cam
 ### View Control
 
 - Enabling motion or pressing recenter records the current phone orientation as the neutral reference.
-- Subsequent orientation events are converted to normalized quaternions and compared with the previous valid sample.
-- Relative horizontal and vertical angular deltas are accumulated, not mapped to an absolute screen angle. Returning the phone to its original pose therefore does not snap the game camera back.
+- Subsequent orientation events are converted to normalized quaternions. The phone's local long axis, pointing from its bottom edge toward its top edge, is transformed into a world-space aim vector.
+- View control uses a ratcheting gesture around that neutral aim vector. During the outward part of a gesture, each increase in horizontal or vertical excursion emits the corresponding view delta. Movement back toward the neutral cone emits no reverse delta and only rearms the next gesture. This lets the player turn, relax the wrist back to center, and turn again without undoing the camera movement.
+- Entering a 2.5-degree neutral cone completes and rearms the gesture. An opposite turn is accepted at full sensitivity as soon as the phone has re-entered that cone; there is no timed lockout.
+- Rotation around the aim vector is treated as grip roll and discarded. Changing from the face-on grip in Figure 1 to the edge-on grip in Figure 4 therefore produces no intended view motion.
+- Figure 1 to Figures 2/3 and Figure 4 to Figures 5/6 change the aim vector's horizontal azimuth and therefore control yaw. Changing its elevation controls pitch in either grip.
+- Grip-transition filtering activates only when roll clearly dominates swing: at least 25 degrees of roll within a 250 ms window and at least 2.5 times the aim-vector change. While that condition holds, aim drift below 3 degrees is suppressed and drift from 3 to 6 degrees is smoothly blended from zero to full strength. Aim changes above 6 degrees retain full response. There is no hard view lock during a grip change, so a deliberate horizontal or vertical turn remains immediately detectable.
 - Default gain is 4:1: approximately 20 degrees of deliberate phone rotation produces approximately 80 degrees of game-camera rotation.
 - The existing sensitivity setting scales that gain while preserving a useful minimum and maximum.
 - Per-sample tremor below 0.8 degrees is discarded. Each valid physical delta is clamped to 25 degrees before gain is applied so a dropped or corrupt sensor sample cannot jump the view.
@@ -67,7 +71,9 @@ Controller input snapshots become:
 
 ### Orientation Conversion
 
-The existing quaternion helpers remain the mathematical base. A new device-orientation conversion helper handles alpha, beta, gamma, and current screen orientation without relying on compass headings. Relative quaternion changes are projected into camera yaw and pitch in the calibrated phone frame.
+The existing quaternion helpers remain the mathematical base. A new device-orientation conversion helper handles alpha, beta, gamma, and current screen orientation without relying on one fixed Euler axis.
+
+Each sample rotates the phone's local long-axis unit vector into the calibrated world frame. Its wrapped azimuth and elevation are compared with the current gesture's neutral vector. The gesture tracker emits only increasing outward excursion and rearms after returning to the neutral cone. Quaternion swing-twist decomposition around the long axis measures and removes grip roll, so the same yaw and pitch gestures work while the phone is face-on, edge-on, or transitioning between those grips.
 
 ### MotionController
 
@@ -105,7 +111,12 @@ This work removes `CameraMotionTracker`, its tests, and the `jsfeat` dependency 
 Automated tests cover:
 
 - wrapped device-orientation deltas and screen-orientation correction,
+- face-on and edge-on gestures producing the same yaw and pitch signs,
+- a 90-degree grip roll preserving the long-axis aim vector and producing no view delta,
+- roll-dominant grip transitions suppressing sub-3-degree residual movement, blending 3-to-6-degree movement, and preserving full response above 6 degrees,
 - 20 degrees of phone motion producing approximately 80 degrees of camera motion at default sensitivity,
+- returning from an outward turn to the neutral cone producing no reverse view delta and rearming the next gesture,
+- an opposite turn after rearming producing full response with the correct sign,
 - no output for stationary jitter inside the dead zone,
 - accumulated sensor deltas surviving a slower network flush,
 - each sequence being applied once on the desktop,
@@ -120,6 +131,8 @@ Automated tests cover:
 Browser and physical-device verification covers:
 
 - horizontal and vertical response in the supplied phone posture,
+- Figure 1 to Figure 4 grip changes producing little or no camera movement,
+- Figure 1 to Figures 2/3 and Figure 4 to Figures 5/6 producing equivalent horizontal response,
 - no drift while the phone is still,
 - no snap-back when the phone returns to neutral,
 - repeated joystick use without accidental interaction,
@@ -129,6 +142,8 @@ Browser and physical-device verification covers:
 ## Acceptance Criteria
 
 - Deliberately rotating the phone approximately 20 degrees rotates the desktop camera approximately 60 to 90 degrees.
+- Rolling the phone between the supplied face-on and edge-on grips produces no intended camera rotation and only a small bounded response to imperfect hand movement.
+- Horizontal and vertical turns retain the same meaning and sensitivity in both supplied grips.
 - A still phone does not cause visible camera drift.
 - The camera retains its new direction after the phone stops or returns toward neutral.
 - Joystick movement cannot trigger interaction.
