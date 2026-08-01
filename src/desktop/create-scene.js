@@ -120,7 +120,7 @@ export async function createScene(host) {
   await RAPIER.init();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x07090a);
-  scene.fog = new THREE.FogExp2(0x080b0b, 0.035);
+  scene.fog = new THREE.FogExp2(0x080b0b, 0.026);
 
   const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 70);
   camera.position.set(0, 1.58, 1.2);
@@ -132,7 +132,7 @@ export async function createScene(host) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.84;
+  renderer.toneMappingExposure = 1.02;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   host.replaceChildren(renderer.domElement);
 
@@ -187,7 +187,7 @@ export async function createScene(host) {
       new THREE.MeshStandardMaterial({ color: 0x9b9f91, emissive: 0x7e8a73, emissiveIntensity: 1.1, roughness: 0.42 }),
       [0, 3.37, z],
     );
-    const light = new THREE.PointLight(0x9aa990, 0.5, 6, 2.1);
+    const light = new THREE.PointLight(0x9aa990, 0.68, 7, 2.1);
     light.position.set(0, 3.05, z);
     scene.add(light);
     ceilingLights.push(light);
@@ -195,7 +195,7 @@ export async function createScene(host) {
 
   const emergencyLights = [];
   for (const z of [-3.2, -13.2, -23.2]) {
-    const light = new THREE.PointLight(0xb24c36, 0.65, 8, 2);
+    const light = new THREE.PointLight(0xb24c36, 0.78, 9, 2);
     light.position.set(0, 2.6, z);
     scene.add(light);
     emergencyLights.push(light);
@@ -204,18 +204,37 @@ export async function createScene(host) {
   const stormLight = new THREE.DirectionalLight(0x9bbcc2, 0);
   stormLight.position.set(-5, 4, -10);
   scene.add(stormLight);
-  const hemi = new THREE.HemisphereLight(0x586864, 0x090b0b, 0.32);
+  const hemi = new THREE.HemisphereLight(0x687a70, 0x101313, 0.46);
   scene.add(hemi);
 
   const flashlightTarget = new THREE.Object3D();
   flashlightTarget.position.set(0, -0.08, -9);
   camera.add(flashlightTarget);
-  const flashlight = new THREE.SpotLight(0xffefc5, 4.7, 22, 0.42, 0.56, 1.35);
+  const flashlightGroup = new THREE.Group();
+  flashlightGroup.name = "flashlight";
+  const flashlight = new THREE.SpotLight(0xfff1cf, 7.2, 26, 0.46, 0.52, 1.18);
   flashlight.position.set(0.06, -0.03, 0.02);
   flashlight.castShadow = true;
   flashlight.shadow.mapSize.set(512, 512);
   flashlight.target = flashlightTarget;
-  camera.add(flashlight);
+  const flashlightSpill = new THREE.SpotLight(0xffdca2, 1.8, 13, 0.92, 0.9, 1.05);
+  flashlightSpill.position.set(0.02, -0.02, 0.02);
+  flashlightSpill.target = flashlightTarget;
+  const beam = new THREE.Mesh(
+    new THREE.ConeGeometry(2.5, 8, 32, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0xffe7b4,
+      transparent: true,
+      opacity: 0.055,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  beam.rotation.x = -Math.PI / 2;
+  beam.position.set(0.02, -0.03, -4);
+  flashlightGroup.add(flashlight, flashlightSpill, beam);
+  camera.add(flashlightGroup);
   scene.add(camera);
 
   const dustPositions = new Float32Array(220 * 3);
@@ -296,7 +315,7 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
-    objects: { flashlight, ceilingLights, emergencyLights, stormLight, hemi, dust, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse },
+    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, dust, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse },
     update(delta, elapsed) {
       dust.rotation.y += delta * 0.006;
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;

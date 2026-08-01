@@ -5,37 +5,33 @@ function createPlayer() {
   return Object.assign(Object.create(PlayerController.prototype), {
     cameraYaw: 0.8,
     cameraPitch: -0.35,
-    viewVelocity: { x: 1.2, y: -0.7 },
-    phoneInput: { viewMotion: { x: 1, y: 0, confidence: 1 }, move: { x: 0, y: 0 } },
-    phoneConnected: true,
-    fallback: false,
-    paused: false,
+    lastViewSequence: -1,
+    settings: { sensitivity: 1, invertY: false },
   });
 }
 
-describe("player view lifecycle", () => {
-  it("recenter clears view velocity without changing the current camera angle", () => {
+describe("player phone view deltas", () => {
+  it("applies each view delta once in degrees", () => {
     const player = createPlayer();
+    const input = { seq: 4, viewDelta: { yaw: 90, pitch: 20 } };
 
-    player.recenter();
+    player.applyPhoneViewDelta(input);
+    const firstYaw = player.cameraYaw;
+    player.applyPhoneViewDelta(input);
 
-    expect(player.viewVelocity).toEqual({ x: 0, y: 0 });
-    expect(player.cameraYaw).toBe(0.8);
-    expect(player.cameraPitch).toBe(-0.35);
+    expect(firstYaw).toBeCloseTo(0.8 + Math.PI / 2, 6);
+    expect(player.cameraYaw).toBeCloseTo(firstYaw, 6);
+    expect(player.cameraPitch).toBeCloseTo(-0.35 + 20 * Math.PI / 180, 6);
   });
 
-  it("clears view velocity on disconnect, fallback, and pause", () => {
+  it("honors sensitivity, inversion, and pitch clamp", () => {
     const player = createPlayer();
+    player.settings = { sensitivity: 0.5, invertY: true };
+    player.cameraPitch = -1.2;
 
-    player.setControllerInput(null, false);
-    expect(player.viewVelocity).toEqual({ x: 0, y: 0 });
+    player.applyPhoneViewDelta({ seq: 1, viewDelta: { yaw: 40, pitch: 40 } });
 
-    player.viewVelocity = { x: 1, y: 1 };
-    player.setFallback(true);
-    expect(player.viewVelocity).toEqual({ x: 0, y: 0 });
-
-    player.viewVelocity = { x: 1, y: 1 };
-    player.setPaused(true);
-    expect(player.viewVelocity).toEqual({ x: 0, y: 0 });
+    expect(player.cameraYaw).toBeCloseTo(0.8 + 20 * Math.PI / 180, 6);
+    expect(player.cameraPitch).toBeCloseTo(-1.25, 6);
   });
 });

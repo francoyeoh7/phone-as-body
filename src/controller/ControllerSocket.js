@@ -11,8 +11,8 @@ export class ControllerSocket {
     this.sequence = 0;
     this.latest = {
       move: { x: 0, y: 0 },
-      viewMotion: { x: 0, y: 0, confidence: 0 },
     };
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
     this.timer = null;
   }
 
@@ -47,16 +47,29 @@ export class ControllerSocket {
   setInput(input) {
     this.latest = {
       move: { ...input.move },
-      viewMotion: { ...input.viewMotion },
     };
+    if (input.viewDelta) {
+      const delta = input.viewDelta;
+      this.pendingViewDelta = {
+        yaw: Math.max(-180, Math.min(180, this.pendingViewDelta.yaw + (Number.isFinite(delta.yaw) ? delta.yaw : 0))),
+        pitch: Math.max(-180, Math.min(180, this.pendingViewDelta.pitch + (Number.isFinite(delta.pitch) ? delta.pitch : 0))),
+      };
+    }
+  }
+
+  clearPendingViewDelta() {
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
   }
 
   flush() {
     if (!this.joined || !this.socket?.connected) return;
     this.sequence += 1;
+    const viewDelta = this.pendingViewDelta;
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
     this.socket.emit(EVENTS.controllerInput, {
       seq: this.sequence,
       sentAt: performance.now(),
+      viewDelta,
       ...this.latest,
     });
   }

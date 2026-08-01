@@ -13,7 +13,6 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.0",
     "express": "^5.1.0",
-    "jsfeat": "0.0.8",
     "lucide": "^0.468.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",

@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { cameraRelativeMovement, dampVector } from "../shared/movement.js";
-import { integrateViewMotion } from "../shared/view-motion.js";
 import { chooseAssistedTarget } from "../shared/interaction.js";
 
 export class PlayerController {
@@ -13,12 +12,12 @@ export class PlayerController {
     this.onAction = onAction;
     this.onPrompt = onPrompt;
     this.keys = new Set();
-    this.phoneInput = { viewMotion: { x: 0, y: 0, confidence: 0 }, move: { x: 0, y: 0 } };
+    this.phoneInput = { seq: -1, viewDelta: { yaw: 0, pitch: 0 }, move: { x: 0, y: 0 } };
     this.phoneConnected = false;
     this.velocity = { x: 0, z: 0 };
     this.cameraYaw = 0;
     this.cameraPitch = 0;
-    this.viewVelocity = { x: 0, y: 0 };
+    this.lastViewSequence = -1;
     this.paused = false;
     this.fallback = false;
     this.settings = { sensitivity: 1, smoothing: 0.55, invertY: false };
@@ -55,11 +54,12 @@ export class PlayerController {
 
   setControllerInput(input, connected) {
     this.phoneInput = input ?? {
-      viewMotion: { x: 0, y: 0, confidence: 0 },
+      seq: -1,
+      viewDelta: { yaw: 0, pitch: 0 },
       move: { x: 0, y: 0 },
     };
     this.phoneConnected = connected;
-    if (!connected) this.clearViewVelocity();
+    if (!connected) this.recenter();
   }
 
   setSettings(settings = {}) {
@@ -74,11 +74,23 @@ export class PlayerController {
   }
 
   recenter() {
-    this.clearViewVelocity();
+    this.lastViewSequence = this.phoneInput?.seq ?? this.lastViewSequence;
   }
 
-  clearViewVelocity() {
-    this.viewVelocity = { x: 0, y: 0 };
+  applyPhoneViewDelta(input = this.phoneInput) {
+    const sequence = Number.isInteger(input?.seq) ? input.seq : -1;
+    if (sequence <= this.lastViewSequence) return;
+    const delta = input?.viewDelta;
+    if (!delta || !Number.isFinite(delta.yaw) || !Number.isFinite(delta.pitch)) {
+      this.lastViewSequence = sequence;
+      return;
+    }
+    const sensitivity = Number.isFinite(this.settings.sensitivity) ? this.settings.sensitivity : 1;
+    const invertY = this.settings.invertY ? -1 : 1;
+    const degreesToRadians = Math.PI / 180;
+    this.cameraYaw += delta.yaw * sensitivity * degreesToRadians;
+    this.cameraPitch = Math.max(-1.25, Math.min(1.25, this.cameraPitch + delta.pitch * sensitivity * invertY * degreesToRadians));
+    this.lastViewSequence = sequence;
   }
 
   update(delta) {
@@ -87,22 +99,7 @@ export class PlayerController {
       return;
     }
 
-    if (this.phoneConnected && !this.fallback) {
-      const view = integrateViewMotion(
-        {
-          yaw: this.cameraYaw,
-          pitch: this.cameraPitch,
-          vx: this.viewVelocity.x,
-          vy: this.viewVelocity.y,
-        },
-        this.phoneInput.viewMotion,
-        delta,
-        this.settings,
-      );
-      this.cameraYaw = view.yaw;
-      this.cameraPitch = view.pitch;
-      this.viewVelocity = { x: view.vx, y: view.vy };
-    }
+    if (this.phoneConnected && !this.fallback) this.applyPhoneViewDelta();
 
     const move = this.phoneConnected && !this.fallback ? this.phoneInput.move : this.keyboardVector();
     const target = cameraRelativeMovement(move, this.cameraYaw);
@@ -175,7 +172,7 @@ export class PlayerController {
 
   setPaused(paused) {
     this.paused = paused;
-    if (paused) this.clearViewVelocity();
+    if (paused) this.recenter();
   }
 
   handleKeyDown(event) {

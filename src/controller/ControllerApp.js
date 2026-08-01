@@ -39,8 +39,8 @@ function pulse(pattern = 12) {
   navigator.vibrate?.(pattern);
 }
 
-function zeroViewMotion() {
-  return { x: 0, y: 0, confidence: 0 };
+function zeroViewDelta() {
+  return { yaw: 0, pitch: 0 };
 }
 
 export class ControllerApp {
@@ -50,17 +50,17 @@ export class ControllerApp {
     this.room = parameters.get("room") ?? "";
     this.preview = import.meta.env.DEV && parameters.has("preview");
     this.move = { x: 0, y: 0 };
-    this.viewMotion = { x: 0, y: 0, confidence: 0 };
+    this.viewDelta = zeroViewDelta();
     this.settings = loadSettings();
     this.audioContext = null;
     this.paused = false;
     this.motionEnabled = false;
-    this.cameraEnabled = false;
     this.touchFallback = false;
     this.requiresContinue = false;
     this.bfcacheSuspended = false;
     this.lifecycleGeneration = 0;
     this.calibrationTimer = null;
+    this.tapCandidate = null;
     this.handleVisibility = this.handleVisibility.bind(this);
     this.handlePageHide = this.handlePageHide.bind(this);
     this.handlePageShow = this.handlePageShow.bind(this);
@@ -150,6 +150,7 @@ export class ControllerApp {
     this.enableMotion = this.root.querySelector("#enable-motion");
     this.pauseMenu = this.root.querySelector("#pause-menu");
     this.messagePanel = this.root.querySelector("#private-message");
+    this.playSurface = this.root.querySelector(".play-surface");
   }
 
   bindControls() {
@@ -160,12 +161,11 @@ export class ControllerApp {
       },
     });
     this.motion = new MotionController({
-      onSample: (viewMotion) => {
-        this.viewMotion = viewMotion;
-        this.sendInput();
+      onSample: (viewDelta) => {
+        this.viewDelta = viewDelta;
+        this.sendInput({ includeViewDelta: true });
       },
       onState: (state) => this.handleMotionState(state),
-      onTwistCandidate: () => pulse(10),
       onInteract: () => {
         pulse([18, 36, 18]);
         this.socket?.sendAction("interact");
@@ -177,6 +177,30 @@ export class ControllerApp {
       pulse();
       this.socket?.sendAction("interact");
     });
+    this.playSurface.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button, #joystick")) {
+        this.tapCandidate = null;
+        return;
+      }
+      this.tapCandidate = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        time: performance.now(),
+      };
+    });
+    this.playSurface.addEventListener("pointerup", (event) => {
+      const candidate = this.tapCandidate;
+      this.tapCandidate = null;
+      if (!candidate || candidate.pointerId !== event.pointerId) return;
+      if (event.target.closest("button, #joystick")) return;
+      const distance = Math.hypot(event.clientX - candidate.x, event.clientY - candidate.y);
+      if (distance <= 14 && performance.now() - candidate.time <= 450) {
+        pulse();
+        this.socket?.sendAction("interact");
+      }
+    });
+    this.playSurface.addEventListener("pointercancel", () => { this.tapCandidate = null; });
     this.root.querySelector("#flashlight").addEventListener("click", (event) => {
       event.currentTarget.classList.toggle("is-active");
       pulse();
@@ -258,17 +282,12 @@ export class ControllerApp {
     this.permissionTitle.textContent = "正在校准";
     this.permissionCopy.textContent = "请保持当前姿势片刻。";
     this.ensureAudioContext();
-    const { motionGranted, cameraGranted } = await this.motion.requestPermission();
+    const { motionGranted } = await this.motion.requestPermission();
     if (!motionGranted) {
       this.enableMotion.disabled = false;
       return;
     }
     this.motionEnabled = true;
-    this.cameraEnabled = cameraGranted;
-    if (!cameraGranted) {
-      this.showCameraFallback();
-      return;
-    }
     this.calibrationTimer = window.setTimeout(() => {
       this.calibrationTimer = null;
       this.motion.reset();
@@ -277,18 +296,6 @@ export class ControllerApp {
       this.permissionPanel.hidden = true;
       pulse([15, 35, 15]);
     }, 420);
-  }
-
-  showCameraFallback() {
-    window.clearTimeout(this.calibrationTimer);
-    this.calibrationTimer = null;
-    this.cameraEnabled = false;
-    this.touchFallback = true;
-    this.permissionPanel.hidden = false;
-    this.permissionTitle.textContent = "需要相机视角";
-    this.permissionCopy.textContent = "相机不可用。继续后可使用移动、触控交互和手势。";
-    this.enableMotion.textContent = "继续使用触控";
-    this.enableMotion.disabled = false;
   }
 
   continueWithTouchControls() {
@@ -306,19 +313,14 @@ export class ControllerApp {
     this.enableMotion.disabled = true;
     this.permissionTitle.textContent = "正在恢复";
     this.permissionCopy.textContent = "请保持当前姿势片刻。";
-    const cameraGranted = await this.motion.resume();
+    await this.motion.resume();
     if (!this.isLifecycleCurrent(generation)) return;
     this.motion.reset();
-    this.viewMotion = { x: 0, y: 0, confidence: 0 };
+    this.viewDelta = zeroViewDelta();
     this.sendInput();
     this.socket?.sendAction("resume");
     this.socket?.sendAction("recenter");
     this.requiresContinue = false;
-    this.cameraEnabled = cameraGranted;
-    if (!cameraGranted) {
-      this.showCameraFallback();
-      return;
-    }
     this.touchFallback = false;
     this.enableMotion.textContent = "启用体感";
     this.permissionPanel.hidden = true;
@@ -331,21 +333,7 @@ export class ControllerApp {
       denied: ["体感权限未开启", "请在浏览器设置中允许动作与方向访问。"],
       reorienting: ["正在适配方向", "保持手机稳定。"],
     };
-    if (state === "tracking-weak") {
-      this.status.dataset.status = "tracking-weak";
-      this.connectionLabel.textContent = "相机追踪较弱";
-      return;
-    }
-    if (state === "camera-active") {
-      this.status.dataset.status = "joined";
-      this.connectionLabel.textContent = "已连接";
-      return;
-    }
-    if (["camera-denied", "camera-unavailable"].includes(state)) {
-      if (this.motionEnabled) this.showCameraFallback();
-      return;
-    }
-    if (state === "waiting" && this.motionEnabled && this.cameraEnabled && !this.requiresContinue) {
+    if (state === "waiting" && this.motionEnabled && !this.requiresContinue) {
       this.motion.reset();
       this.socket?.sendAction("recenter");
       this.permissionPanel.hidden = true;
@@ -369,7 +357,7 @@ export class ControllerApp {
   suspendForBackground() {
     this.lifecycleGeneration += 1;
     this.move = { x: 0, y: 0 };
-    this.viewMotion = zeroViewMotion();
+    this.viewDelta = zeroViewDelta();
     this.sendInput();
     this.motion?.suspend();
     this.socket?.sendAction("pause");
@@ -400,8 +388,10 @@ export class ControllerApp {
     if (this.motionEnabled && !this.paused) this.showContinuePrompt();
   }
 
-  sendInput() {
-    this.socket?.setInput({ move: this.move, viewMotion: this.viewMotion });
+  sendInput({ includeViewDelta = false } = {}) {
+    const input = { move: this.move };
+    if (includeViewDelta) input.viewDelta = this.viewDelta;
+    this.socket?.setInput(input);
   }
 
   isLifecycleCurrent(generation) {
@@ -416,7 +406,8 @@ export class ControllerApp {
     if (paused) {
       this.lifecycleGeneration += 1;
       this.move = { x: 0, y: 0 };
-      this.viewMotion = zeroViewMotion();
+      this.viewDelta = zeroViewDelta();
+      this.socket?.clearPendingViewDelta?.();
       this.sendInput();
       this.motion?.suspend();
       this.socket?.sendAction("pause");
@@ -426,15 +417,12 @@ export class ControllerApp {
 
     const generation = this.lifecycleGeneration;
     if (this.motionEnabled) {
-      let cameraGranted = false;
-      if (this.cameraEnabled) cameraGranted = await this.motion.resume();
-      else this.motion.resumeSensors();
+      this.motion.resumeSensors();
       if (!this.isLifecycleCurrent(generation)) return;
       this.motion.reset();
-      this.viewMotion = zeroViewMotion();
+      this.viewDelta = zeroViewDelta();
+      this.socket?.clearPendingViewDelta?.();
       this.sendInput();
-      if (cameraGranted) this.cameraEnabled = true;
-      if (this.cameraEnabled && !cameraGranted) this.showCameraFallback();
     }
     this.socket?.sendAction("resume");
     pulse();

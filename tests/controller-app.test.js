@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ControllerApp } from "../src/controller/ControllerApp.js";
 
-function createApp({ motionEnabled = true, cameraEnabled = true } = {}) {
+function createApp({ motionEnabled = true } = {}) {
   const actions = vi.fn();
   const motion = {
     suspend: vi.fn(),
@@ -13,9 +13,8 @@ function createApp({ motionEnabled = true, cameraEnabled = true } = {}) {
   const app = Object.assign(Object.create(ControllerApp.prototype), {
     motion,
     motionEnabled,
-    cameraEnabled,
     move: { x: 0.5, y: -0.5 },
-    viewMotion: { x: 0.5, y: -0.25, confidence: 1 },
+    viewDelta: { yaw: 42, pitch: -18 },
     paused: false,
     pauseMenu: { hidden: false },
     permissionPanel: { hidden: true },
@@ -45,61 +44,54 @@ describe("controller app lifecycle", () => {
   beforeEach(() => vi.stubGlobal("navigator", { vibrate: vi.fn() }));
   afterEach(() => vi.unstubAllGlobals());
 
-  it("suspends motion on manual pause and reacquires the camera on resume", async () => {
+  it("suspends motion on manual pause and recalibrates sensors on resume", async () => {
     const { app, motion, actions } = createApp();
 
     await app.setPaused(true);
 
     expect(motion.suspend).toHaveBeenCalledTimes(1);
     expect(app.move).toEqual({ x: 0, y: 0 });
-    expect(app.viewMotion).toEqual({ x: 0, y: 0, confidence: 0 });
+    expect(app.viewDelta).toEqual({ yaw: 0, pitch: 0 });
     expect(app.sendInput).toHaveBeenCalledTimes(1);
     expect(actions).toHaveBeenNthCalledWith(1, "pause");
 
     await app.setPaused(false);
 
-    expect(motion.resume).toHaveBeenCalledTimes(1);
+    expect(motion.resumeSensors).toHaveBeenCalledTimes(1);
     expect(motion.reset).toHaveBeenCalledTimes(1);
     expect(actions).toHaveBeenNthCalledWith(2, "resume");
   });
 
-  it("resumes sensors without restarting an unavailable camera", async () => {
-    const { app, motion, actions } = createApp({ cameraEnabled: false });
+  it("resumes sensors without requesting camera access", async () => {
+    const { app, motion, actions } = createApp();
 
     await app.setPaused(true);
     await app.setPaused(false);
 
     expect(motion.suspend).toHaveBeenCalledTimes(1);
-    expect(motion.resume).not.toHaveBeenCalled();
     expect(motion.resumeSensors).toHaveBeenCalledTimes(1);
     expect(actions).toHaveBeenNthCalledWith(2, "resume");
   });
 
-  it("does not resume after a background suspension interrupts camera restart", async () => {
+  it("pauses immediately when backgrounded during an active session", async () => {
     const { app, motion, actions } = createApp();
-    const pendingCamera = deferred();
-    motion.resume.mockReturnValueOnce(pendingCamera.promise);
 
-    const resume = app.setPaused(false);
-    await Promise.resolve();
     app.suspendForBackground();
-    pendingCamera.resolve(true);
-    await resume;
 
-    expect(motion.reset).not.toHaveBeenCalled();
     expect(actions).not.toHaveBeenCalledWith("resume");
     expect(actions).toHaveBeenCalledWith("pause");
+    expect(motion.suspend).toHaveBeenCalledTimes(1);
   });
 
   it("does not continue after a background suspension interrupts visibility recovery", async () => {
     const { app, motion, actions } = createApp();
-    const pendingCamera = deferred();
-    motion.resume.mockReturnValueOnce(pendingCamera.promise);
+    const pendingRecovery = deferred();
+    motion.resume.mockReturnValueOnce(pendingRecovery.promise);
 
     const resume = app.continueAfterVisibility();
     await Promise.resolve();
     app.suspendForBackground();
-    pendingCamera.resolve(true);
+    pendingRecovery.resolve(true);
     await resume;
 
     expect(motion.reset).not.toHaveBeenCalled();
@@ -135,7 +127,7 @@ describe("controller app lifecycle", () => {
     expect(motion.resume).not.toHaveBeenCalled();
 
     await app.setPaused(false);
-    expect(motion.resume).toHaveBeenCalledTimes(1);
+    expect(motion.resumeSensors).toHaveBeenCalledTimes(1);
     expect(actions).toHaveBeenLastCalledWith("resume");
   });
 

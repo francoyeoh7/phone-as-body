@@ -5,7 +5,7 @@ import { EVENTS } from "../shared/protocol.js";
 const stoppedInput = () => ({
   seq: -1,
   move: { x: 0, y: 0 },
-  viewMotion: { x: 0, y: 0, confidence: 0 },
+  viewDelta: { yaw: 0, pitch: 0 },
   receivedAt: 0,
 });
 
@@ -27,7 +27,7 @@ export class PhoneSession extends EventTarget {
       this.input = {
         ...input,
         move: { ...input.move },
-        viewMotion: { ...input.viewMotion },
+        viewDelta: { ...input.viewDelta },
         receivedAt: performance.now(),
       };
       this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
@@ -75,7 +75,7 @@ export class PhoneSession extends EventTarget {
       this.input = {
         ...this.input,
         move: { x: 0, y: 0 },
-        viewMotion: { x: 0, y: 0, confidence: 0 },
+        viewDelta: { yaw: 0, pitch: 0 },
       };
     }
     this.dispatchEvent(new CustomEvent("peer", { detail: { connected } }));
@@ -86,7 +86,7 @@ export class PhoneSession extends EventTarget {
       return {
         ...this.input,
         move: { x: 0, y: 0 },
-        viewMotion: { x: 0, y: 0, confidence: 0 },
+        viewDelta: { yaw: 0, pitch: 0 },
       };
     }
     return this.input;

@@ -27,6 +27,7 @@ export class VirtualJoystick {
   handleDown(event) {
     if (this.pointerId !== null) return;
     event.preventDefault();
+    event.stopPropagation();
     const bounds = this.element.getBoundingClientRect();
     this.pointerId = event.pointerId;
     this.origin = { x: event.clientX, y: event.clientY };
@@ -40,6 +41,7 @@ export class VirtualJoystick {
   handleMove(event) {
     if (event.pointerId !== this.pointerId) return;
     event.preventDefault();
+    event.stopPropagation();
     this.update(event);
   }
 
@@ -56,6 +58,7 @@ export class VirtualJoystick {
 
   handleEnd(event) {
     if (event?.pointerId !== undefined && event.pointerId !== this.pointerId) return;
+    event?.stopPropagation?.();
     this.reset();
   }
 

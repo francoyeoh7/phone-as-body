@@ -37,19 +37,16 @@ export function isJoystickVector(value) {
   );
 }
 
-export function isViewMotion(value) {
+export function isViewDelta(value) {
   return (
     value !== null &&
     typeof value === "object" &&
-    isFiniteNumber(value.x) &&
-    isFiniteNumber(value.y) &&
-    isFiniteNumber(value.confidence) &&
-    value.x >= -1 &&
-    value.x <= 1 &&
-    value.y >= -1 &&
-    value.y <= 1 &&
-    value.confidence >= 0 &&
-    value.confidence <= 1
+    isFiniteNumber(value.yaw) &&
+    isFiniteNumber(value.pitch) &&
+    value.yaw >= -180 &&
+    value.yaw <= 180 &&
+    value.pitch >= -180 &&
+    value.pitch <= 180
   );
 }
 
@@ -69,7 +66,7 @@ export function isControllerInput(value) {
     isFiniteNumber(value.sentAt) &&
     value.sentAt >= 0 &&
     isJoystickVector(value.move) &&
-    isViewMotion(value.viewMotion)
+    isViewDelta(value.viewDelta)
   );
 }
 
