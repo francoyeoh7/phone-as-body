@@ -61,42 +61,23 @@ export function quaternionToAimVector(value) {
     : null;
 }
 
-function quaternionFromEulerYXZ(x, y, z) {
-  const c1 = Math.cos(x / 2);
-  const c2 = Math.cos(y / 2);
-  const c3 = Math.cos(z / 2);
-  const s1 = Math.sin(x / 2);
-  const s2 = Math.sin(y / 2);
-  const s3 = Math.sin(z / 2);
+function axisQuaternion(axis, degrees) {
+  const halfAngle = degrees * Math.PI / 360;
+  const sine = Math.sin(halfAngle);
   return normalizeQuaternion({
-    x: s1 * c2 * s3 + c1 * s2 * c3,
-    y: s1 * c2 * c3 + c1 * s2 * s3,
-    z: c1 * c2 * s3 - s1 * s2 * c3,
-    w: c1 * c2 * c3 - s1 * s2 * s3,
+    x: axis.x * sine,
+    y: axis.y * sine,
+    z: axis.z * sine,
+    w: Math.cos(halfAngle),
   });
 }
 
-export function deviceOrientationToQuaternion({ alpha, beta, gamma, screenAngle = 0 } = {}) {
+export function deviceOrientationToQuaternion({ alpha, beta, gamma } = {}) {
   if (![alpha, beta, gamma].every(Number.isFinite)) return null;
-  const base = quaternionFromEulerYXZ(
-    beta * Math.PI / 180,
-    alpha * Math.PI / 180,
-    -gamma * Math.PI / 180,
-  );
-  if (!base) return null;
-  const screen = normalizeQuaternion({
-    x: 0,
-    y: 0,
-    z: Math.sin(-screenAngle * Math.PI / 360),
-    w: Math.cos(-screenAngle * Math.PI / 360),
-  });
-  const cameraCorrection = normalizeQuaternion({
-    x: -Math.SQRT1_2,
-    y: 0,
-    z: 0,
-    w: Math.SQRT1_2,
-  });
-  return multiplyQuaternions(multiplyQuaternions(base, cameraCorrection), screen);
+  const alphaRotation = axisQuaternion({ x: 0, y: 0, z: 1 }, alpha);
+  const betaRotation = axisQuaternion({ x: 1, y: 0, z: 0 }, beta);
+  const gammaRotation = axisQuaternion({ x: 0, y: 1, z: 0 }, gamma);
+  return multiplyQuaternions(multiplyQuaternions(alphaRotation, betaRotation), gammaRotation);
 }
 
 function vectorAngles(vector) {
@@ -127,7 +108,15 @@ function gripRollDegrees(previousQuaternion, currentQuaternion, previousAim, cur
   return Math.max(0, total - swing);
 }
 
-const noDelta = (valid = false) => ({ yaw: 0, pitch: 0, roll: 0, valid });
+const noDelta = (valid = false) => ({
+  yaw: 0,
+  pitch: 0,
+  physicalYaw: 0,
+  physicalPitch: 0,
+  transitionScale: 0,
+  roll: 0,
+  valid,
+});
 
 export function createOrientationTracker({
   deadZoneDeg = 0.8,
@@ -199,6 +188,17 @@ export function createOrientationTracker({
 
       if (Math.abs(angles.yaw) <= neutralConeDeg && Math.abs(angles.pitch) <= neutralConeDeg) {
         resetExcursion();
+        previousAim = aim;
+        previousQuaternion = normalized;
+        return {
+          yaw: 0,
+          pitch: 0,
+          physicalYaw: angles.yaw,
+          physicalPitch: angles.pitch,
+          transitionScale,
+          roll,
+          valid: true,
+        };
       }
 
       const shouldRememberExcursion = transitionScale > 0;
@@ -218,6 +218,9 @@ export function createOrientationTracker({
       return {
         yaw: yawResult.delta * transitionScale * gain * smoothing,
         pitch: clamp(pitchResult.delta * transitionScale * gain * smoothing, -maxPitchDeg, maxPitchDeg),
+        physicalYaw: angles.yaw,
+        physicalPitch: angles.pitch,
+        transitionScale,
         roll,
         valid: true,
       };

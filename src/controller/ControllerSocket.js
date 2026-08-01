@@ -2,10 +2,12 @@ import { io } from "socket.io-client";
 import { EVENTS } from "../shared/protocol.js";
 
 export class ControllerSocket {
-  constructor({ room, onStatus, onEvent }) {
+  constructor({ room, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
     this.room = room;
     this.onStatus = onStatus;
     this.onEvent = onEvent;
+    this.onTelemetry = onTelemetry;
+    this.now = now;
     this.socket = null;
     this.joined = false;
     this.sequence = 0;
@@ -13,7 +15,20 @@ export class ControllerSocket {
       move: { x: 0, y: 0 },
     };
     this.pendingViewDelta = { yaw: 0, pitch: 0 };
+    this.sentAtBySequence = new Map();
+    this.lastSentAt = null;
+    this.telemetry = {
+      serverRttMs: null,
+      appliedRttMs: null,
+      sendHz: 0,
+      transport: "connecting",
+      cameraYaw: 0,
+      cameraPitch: 0,
+    };
     this.timer = null;
+    this.peerConnection = null;
+    this.dataChannel = null;
+    this.pendingCandidates = [];
   }
 
   connect() {
@@ -40,14 +55,13 @@ export class ControllerSocket {
       this.onStatus?.("session-ended");
     });
     this.socket.on(EVENTS.desktopEvent, (event) => this.onEvent?.(event));
+    this.socket.on(EVENTS.rtcSignal, (signal) => this.handleRtcSignal(signal));
 
-    this.timer = window.setInterval(() => this.flush(), 1000 / 30);
+    this.timer = window.setInterval(() => this.flush(), 1000 / 15);
   }
 
-  setInput(input) {
-    this.latest = {
-      move: { ...input.move },
-    };
+  setInput(input, { immediate = false } = {}) {
+    if (input.move) this.latest = { move: { ...input.move } };
     if (input.viewDelta) {
       const delta = input.viewDelta;
       this.pendingViewDelta = {
@@ -55,6 +69,7 @@ export class ControllerSocket {
         pitch: Math.max(-180, Math.min(180, this.pendingViewDelta.pitch + (Number.isFinite(delta.pitch) ? delta.pitch : 0))),
       };
     }
+    if (immediate) this.flush();
   }
 
   clearPendingViewDelta() {
@@ -64,14 +79,114 @@ export class ControllerSocket {
   flush() {
     if (!this.joined || !this.socket?.connected) return;
     this.sequence += 1;
+    const sentAt = this.now();
+    const interval = this.lastSentAt === null ? 0 : sentAt - this.lastSentAt;
+    this.lastSentAt = sentAt;
+    this.sentAtBySequence.set(this.sequence, sentAt);
+    while (this.sentAtBySequence.size > 120) {
+      this.sentAtBySequence.delete(this.sentAtBySequence.keys().next().value);
+    }
     const viewDelta = this.pendingViewDelta;
     this.pendingViewDelta = { yaw: 0, pitch: 0 };
-    this.socket.emit(EVENTS.controllerInput, {
+    const payload = {
       seq: this.sequence,
-      sentAt: performance.now(),
+      sentAt,
       viewDelta,
       ...this.latest,
+    };
+    if (this.dataChannel?.readyState === "open") {
+      this.dataChannel.send(JSON.stringify({ type: "input", payload }));
+    } else {
+      this.socket.emit(EVENTS.controllerInput, payload, () => {
+        this.reportTelemetry({ serverRttMs: Math.max(0, this.now() - sentAt) });
+      });
+    }
+    this.reportTelemetry({
+      sendHz: interval > 0 ? 1000 / interval : this.telemetry.sendHz,
+      transport: this.dataChannel?.readyState === "open"
+        ? "webrtc"
+        : this.socket.io?.engine?.transport?.name ?? "unknown",
     });
+  }
+
+  ensurePeerConnection() {
+    if (this.peerConnection || typeof RTCPeerConnection === "undefined") return this.peerConnection;
+    const peer = new RTCPeerConnection();
+    peer.onicecandidate = ({ candidate }) => {
+      if (candidate) this.socket?.emit(EVENTS.rtcSignal, { candidate });
+    };
+    peer.ondatachannel = ({ channel }) => this.attachDataChannel(channel);
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "failed") this.closePeerConnection();
+    };
+    this.peerConnection = peer;
+    return peer;
+  }
+
+  attachDataChannel(channel) {
+    this.dataChannel = channel;
+    channel.onopen = () => this.reportTelemetry({ transport: "webrtc", serverRttMs: null });
+    channel.onclose = () => {
+      if (this.dataChannel === channel) this.dataChannel = null;
+      this.reportTelemetry({ transport: this.socket?.io?.engine?.transport?.name ?? "unknown" });
+    };
+    channel.onmessage = ({ data }) => {
+      try {
+        const message = JSON.parse(data);
+        if (message?.type === "feedback") this.onEvent?.(message.payload);
+      } catch {
+        // Ignore malformed peer messages and keep the fallback socket alive.
+      }
+    };
+  }
+
+  async handleRtcSignal(signal) {
+    const peer = this.ensurePeerConnection();
+    if (!peer) return;
+    try {
+      if (signal?.description) {
+        await peer.setRemoteDescription(signal.description);
+        for (const candidate of this.pendingCandidates.splice(0)) await peer.addIceCandidate(candidate);
+        if (signal.description.type === "offer") {
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+          this.socket?.emit(EVENTS.rtcSignal, { description: peer.localDescription });
+        }
+      } else if (signal?.candidate) {
+        if (peer.remoteDescription) await peer.addIceCandidate(signal.candidate);
+        else this.pendingCandidates.push(signal.candidate);
+      }
+    } catch {
+      this.closePeerConnection();
+    }
+  }
+
+  closePeerConnection() {
+    this.dataChannel?.close?.();
+    this.peerConnection?.close?.();
+    this.dataChannel = null;
+    this.peerConnection = null;
+    this.pendingCandidates = [];
+  }
+
+  markApplied({ seq, cameraYaw, cameraPitch } = {}) {
+    if (!Number.isInteger(seq)) return;
+    const sentAt = this.sentAtBySequence.get(seq);
+    if (!Number.isFinite(sentAt)) return;
+    const appliedRttMs = Math.max(0, this.now() - sentAt);
+    for (const sequence of this.sentAtBySequence.keys()) {
+      if (sequence <= seq) this.sentAtBySequence.delete(sequence);
+    }
+    this.reportTelemetry({
+      appliedRttMs,
+      cameraYaw: Number.isFinite(cameraYaw) ? cameraYaw : this.telemetry.cameraYaw,
+      cameraPitch: Number.isFinite(cameraPitch) ? cameraPitch : this.telemetry.cameraPitch,
+    });
+  }
+
+  reportTelemetry(update) {
+    this.telemetry = { ...this.telemetry, ...update };
+    this.onTelemetry?.({ ...this.telemetry });
   }
 
   sendAction(action, detail = {}) {
@@ -81,6 +196,7 @@ export class ControllerSocket {
 
   destroy() {
     window.clearInterval(this.timer);
+    this.closePeerConnection();
     this.socket?.disconnect();
   }
 }

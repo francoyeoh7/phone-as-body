@@ -111,6 +111,116 @@ button {
   gap: 10px;
 }
 
+.motion-diagnostics {
+  position: absolute;
+  z-index: 4;
+  top: 76px;
+  left: 0;
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 10px;
+  width: min(310px, 100%);
+  min-height: 126px;
+  padding: 9px;
+  border: 1px solid rgba(171, 177, 168, 0.28);
+  border-radius: 6px;
+  color: #c8cbc3;
+  background: rgba(9, 12, 11, 0.86);
+  font: 500 10px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.aim-plot {
+  position: relative;
+  align-self: start;
+  width: 72px;
+  height: 72px;
+  overflow: hidden;
+  border: 1px solid #3c413d;
+  background: #101312;
+}
+
+.plot-axis {
+  position: absolute;
+  background: rgba(190, 196, 186, 0.2);
+}
+
+.plot-axis-x {
+  top: 50%;
+  left: 6px;
+  width: 58px;
+  height: 1px;
+}
+
+.plot-axis-y {
+  top: 6px;
+  left: 50%;
+  width: 1px;
+  height: 58px;
+}
+
+.physical-aim-dot,
+.output-aim-dot {
+  position: absolute;
+  top: calc(50% - 4px);
+  left: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.physical-aim-dot {
+  border: 1px solid #f1f0e8;
+  background: #171a18;
+}
+
+.output-aim-dot {
+  width: 5px;
+  height: 5px;
+  top: calc(50% - 2.5px);
+  left: calc(50% - 2.5px);
+  background: #d2ad63;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-content: start;
+  gap: 2px 7px;
+  min-width: 0;
+  margin: 0;
+}
+
+.telemetry-grid dt {
+  color: #777d76;
+}
+
+.telemetry-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #e3e4dd;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-height: 520px) {
+  .motion-diagnostics {
+    top: 58px;
+    grid-template-columns: 62px minmax(0, 1fr);
+    width: min(285px, calc(100% - 116px));
+    min-height: 108px;
+    padding: 7px;
+  }
+
+  .aim-plot {
+    width: 60px;
+    height: 60px;
+  }
+}
+
 .icon-button,
 .action-button,
 .message-close {

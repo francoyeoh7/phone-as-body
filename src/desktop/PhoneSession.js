@@ -1,6 +1,6 @@
 import QRCode from "qrcode";
 import { io } from "socket.io-client";
-import { EVENTS } from "../shared/protocol.js";
+import { EVENTS, isControllerInput } from "../shared/protocol.js";
 
 const stoppedInput = () => ({
   seq: -1,
@@ -16,6 +16,9 @@ export class PhoneSession extends EventTarget {
     this.room = null;
     this.input = stoppedInput();
     this.connected = false;
+    this.peerConnection = null;
+    this.dataChannel = null;
+    this.pendingCandidates = [];
   }
 
   start() {
@@ -23,18 +26,22 @@ export class PhoneSession extends EventTarget {
     this.socket.on("connect", () => this.createRoom());
     this.socket.on("disconnect", () => this.setPeerConnected(false));
     this.socket.on(EVENTS.peerStatus, ({ connected }) => this.setPeerConnected(Boolean(connected)));
-    this.socket.on(EVENTS.controllerInput, (input) => {
-      this.input = {
-        ...input,
-        move: { ...input.move },
-        viewDelta: { ...input.viewDelta },
-        receivedAt: performance.now(),
-      };
-      this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
-    });
+    this.socket.on(EVENTS.controllerInput, (input) => this.acceptInput(input));
     this.socket.on(EVENTS.controllerAction, (action) => {
       this.dispatchEvent(new CustomEvent("action", { detail: action }));
     });
+    this.socket.on(EVENTS.rtcSignal, (signal) => this.handleRtcSignal(signal));
+  }
+
+  acceptInput(input) {
+    if (!isControllerInput(input) || input.seq <= this.input.seq) return;
+    this.input = {
+      ...input,
+      move: { ...input.move },
+      viewDelta: { ...input.viewDelta },
+      receivedAt: performance.now(),
+    };
+    this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
   }
 
   createRoom() {
@@ -79,6 +86,74 @@ export class PhoneSession extends EventTarget {
       };
     }
     this.dispatchEvent(new CustomEvent("peer", { detail: { connected } }));
+    if (connected) this.startRtcOffer();
+    else this.closePeerConnection();
+  }
+
+  createPeerConnection() {
+    if (typeof RTCPeerConnection === "undefined") return null;
+    this.closePeerConnection();
+    const peer = new RTCPeerConnection();
+    peer.onicecandidate = ({ candidate }) => {
+      if (candidate) this.socket?.emit(EVENTS.rtcSignal, { candidate });
+    };
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "failed") this.closePeerConnection();
+    };
+    this.peerConnection = peer;
+    return peer;
+  }
+
+  attachDataChannel(channel) {
+    this.dataChannel = channel;
+    channel.onclose = () => {
+      if (this.dataChannel === channel) this.dataChannel = null;
+    };
+    channel.onmessage = ({ data }) => {
+      try {
+        const message = JSON.parse(data);
+        if (message?.type === "input") this.acceptInput(message.payload);
+      } catch {
+        // Ignore malformed peer messages; Socket.IO remains the fallback.
+      }
+    };
+  }
+
+  async startRtcOffer() {
+    const peer = this.createPeerConnection();
+    if (!peer) return;
+    try {
+      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false, maxRetransmits: 0 }));
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      this.socket?.emit(EVENTS.rtcSignal, { description: peer.localDescription });
+    } catch {
+      this.closePeerConnection();
+    }
+  }
+
+  async handleRtcSignal(signal) {
+    const peer = this.peerConnection;
+    if (!peer) return;
+    try {
+      if (signal?.description) {
+        await peer.setRemoteDescription(signal.description);
+        for (const candidate of this.pendingCandidates.splice(0)) await peer.addIceCandidate(candidate);
+      } else if (signal?.candidate) {
+        if (peer.remoteDescription) await peer.addIceCandidate(signal.candidate);
+        else this.pendingCandidates.push(signal.candidate);
+      }
+    } catch {
+      this.closePeerConnection();
+    }
+  }
+
+  closePeerConnection() {
+    this.dataChannel?.close?.();
+    this.peerConnection?.close?.();
+    this.dataChannel = null;
+    this.peerConnection = null;
+    this.pendingCandidates = [];
   }
 
   currentInput(maxAgeMs = 500) {
@@ -93,10 +168,15 @@ export class PhoneSession extends EventTarget {
   }
 
   send(event) {
+    if (event?.type === "control-feedback" && this.dataChannel?.readyState === "open") {
+      this.dataChannel.send(JSON.stringify({ type: "feedback", payload: event }));
+      return;
+    }
     if (this.room && this.socket?.connected) this.socket.emit(EVENTS.desktopEvent, event);
   }
 
   destroy() {
+    this.closePeerConnection();
     this.socket?.disconnect();
   }
 }

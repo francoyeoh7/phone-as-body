@@ -67,6 +67,15 @@ io.on("connection", (socket) => {
     if (typeof acknowledge === "function") acknowledge({ ok: accepted.ok, reason: accepted.reason });
   });
 
+  socket.on(EVENTS.rtcSignal, (payload) => {
+    const code = socket.data.roomCode;
+    const room = sessions.get(code);
+    if (!room || payload === null || typeof payload !== "object") return;
+    if (JSON.stringify(payload).length > 32_768) return;
+    const targetId = socket.data.role === "desktop" ? room.controllerId : room.desktopId;
+    if (targetId) io.to(targetId).emit(EVENTS.rtcSignal, payload);
+  });
+
   socket.on(EVENTS.desktopEvent, (payload) => {
     const room = sessions.get(socket.data.roomCode);
     if (room?.desktopId === socket.id && room.controllerId && isDesktopEvent(payload)) {

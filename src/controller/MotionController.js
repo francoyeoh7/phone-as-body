@@ -34,6 +34,7 @@ export function highPassAcceleration(previous, current, alpha = 0.85) {
 export class MotionController {
   constructor({
     onSample,
+    onTelemetry,
     onState,
     onInteract,
     eventTarget,
@@ -44,6 +45,7 @@ export class MotionController {
     tracker,
   } = {}) {
     this.onSample = onSample;
+    this.onTelemetry = onTelemetry;
     this.onState = onState;
     this.onInteract = onInteract;
     this.eventTarget = eventTarget ?? injectedWindow ?? (typeof window !== "undefined" ? window : globalThis);
@@ -59,6 +61,7 @@ export class MotionController {
     this.destroyed = false;
     this.reorienting = false;
     this.lastOrientation = null;
+    this.lastOrientationTimestamp = null;
     this.previousGravity = null;
     this.impactStartedAt = null;
     this.lastImpactAt = -Infinity;
@@ -150,8 +153,25 @@ export class MotionController {
     if (this.destroyed || this.suspended || this.reorienting) return;
     const quaternion = this.orientationQuaternion(event);
     if (quaternion) {
+      const timestamp = this.getTimestamp(event);
+      const interval = this.lastOrientationTimestamp === null ? 0 : timestamp - this.lastOrientationTimestamp;
+      this.lastOrientationTimestamp = timestamp;
       this.lastOrientation = quaternion;
-      if (this.tracker.calibrated) this.onSample?.(this.tracker.update(quaternion));
+      const result = this.tracker.calibrated ? this.tracker.update(quaternion) : null;
+      if (result) this.onSample?.(result);
+      this.onTelemetry?.({
+        alpha: Number.isFinite(event?.alpha) ? event.alpha : 0,
+        beta: Number.isFinite(event?.beta) ? event.beta : 0,
+        gamma: Number.isFinite(event?.gamma) ? event.gamma : 0,
+        sensorHz: interval > 0 ? 1000 / interval : 0,
+        physicalYaw: result?.physicalYaw ?? 0,
+        physicalPitch: result?.physicalPitch ?? 0,
+        outputYaw: result?.yaw ?? 0,
+        outputPitch: result?.pitch ?? 0,
+        roll: result?.roll ?? 0,
+        transitionScale: result?.transitionScale ?? 0,
+        calibrated: this.tracker.calibrated,
+      });
     }
   }
 
@@ -185,6 +205,7 @@ export class MotionController {
     if (this.destroyed) return false;
     const quaternion = this.lastOrientation;
     this.previousGravity = null;
+    this.lastOrientationTimestamp = null;
     this.impactStartedAt = null;
     if (!quaternion || !this.tracker.calibrate(quaternion)) return false;
     this.onSample?.(zeroViewDelta());
@@ -199,6 +220,7 @@ export class MotionController {
     this.clearResumeTimer();
     this.tracker = createOrientationTracker();
     this.previousGravity = null;
+    this.lastOrientationTimestamp = null;
     this.impactStartedAt = null;
     this.onSample?.(zeroViewDelta());
   }

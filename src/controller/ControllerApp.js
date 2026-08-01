@@ -13,6 +13,7 @@ import {
 import { isRoomCode } from "../shared/protocol.js";
 import { ControllerSocket } from "./ControllerSocket.js";
 import { MotionController } from "./MotionController.js";
+import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
 import "./styles.css";
 
@@ -61,6 +62,7 @@ export class ControllerApp {
     this.lifecycleGeneration = 0;
     this.calibrationTimer = null;
     this.tapCandidate = null;
+    this.diagnostics = null;
     this.handleVisibility = this.handleVisibility.bind(this);
     this.handlePageHide = this.handlePageHide.bind(this);
     this.handlePageShow = this.handlePageShow.bind(this);
@@ -83,6 +85,26 @@ export class ControllerApp {
             <button class="icon-button" id="recenter" aria-label="重新校准方向"><i data-lucide="crosshair"></i></button>
             <button class="icon-button" id="pause" aria-label="暂停"><i data-lucide="pause"></i></button>
           </div>
+
+          <aside class="motion-diagnostics" id="motion-diagnostics" aria-label="体感诊断">
+            <div class="aim-plot" aria-hidden="true">
+              <span class="plot-axis plot-axis-x"></span>
+              <span class="plot-axis plot-axis-y"></span>
+              <span class="physical-aim-dot"></span>
+              <span class="output-aim-dot"></span>
+            </div>
+            <dl class="telemetry-grid">
+              <dt>RAW αβγ</dt><dd data-telemetry="raw">0 / 0 / 0</dd>
+              <dt>AIM Y/P</dt><dd data-telemetry="aim">0 / 0</dd>
+              <dt>OUT Y/P</dt><dd data-telemetry="output">0 / 0</dd>
+              <dt>ROLL/F</dt><dd data-telemetry="roll">0 / 0%</dd>
+              <dt>STICK</dt><dd data-telemetry="joystick">0 / 0</dd>
+              <dt>SEND</dt><dd data-telemetry="rates">0 / 0 Hz</dd>
+              <dt>NET</dt><dd data-telemetry="network">connecting · -- ms</dd>
+              <dt>APPLY</dt><dd data-telemetry="applied">-- ms</dd>
+              <dt>CAM Y/P</dt><dd data-telemetry="camera">0 / 0</dd>
+            </dl>
+          </aside>
 
           <div class="joystick-zone" id="joystick" aria-label="移动摇杆">
             <div class="joystick-base"><div class="joystick-ring"></div><div class="joystick-thumb"></div></div>
@@ -151,20 +173,20 @@ export class ControllerApp {
     this.pauseMenu = this.root.querySelector("#pause-menu");
     this.messagePanel = this.root.querySelector("#private-message");
     this.playSurface = this.root.querySelector(".play-surface");
+    this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
   }
 
   bindControls() {
     this.joystick = new VirtualJoystick(this.root.querySelector("#joystick"), {
       onChange: (move) => {
         this.move = move;
-        this.sendInput();
+        this.diagnostics.updateJoystick(move);
+        this.sendInput({ immediate: true });
       },
     });
     this.motion = new MotionController({
-      onSample: (viewDelta) => {
-        this.viewDelta = viewDelta;
-        this.sendInput({ includeViewDelta: true });
-      },
+      onSample: (viewDelta) => this.handleMotionSample(viewDelta),
+      onTelemetry: (telemetry) => this.diagnostics.updateSensor(telemetry),
       onState: (state) => this.handleMotionState(state),
       onInteract: () => {
         pulse([18, 36, 18]);
@@ -231,6 +253,7 @@ export class ControllerApp {
       room: this.room,
       onStatus: (status) => this.updateConnection(status),
       onEvent: (event) => this.handleDesktopEvent(event),
+      onTelemetry: (telemetry) => this.diagnostics.updateNetwork(telemetry),
     });
     this.socket.connect();
   }
@@ -388,10 +411,16 @@ export class ControllerApp {
     if (this.motionEnabled && !this.paused) this.showContinuePrompt();
   }
 
-  sendInput({ includeViewDelta = false } = {}) {
+  handleMotionSample(viewDelta) {
+    this.viewDelta = viewDelta;
+    this.diagnostics?.updateMotion(viewDelta);
+    this.sendInput({ includeViewDelta: true, immediate: true });
+  }
+
+  sendInput({ includeViewDelta = false, immediate = false } = {}) {
     const input = { move: this.move };
     if (includeViewDelta) input.viewDelta = this.viewDelta;
-    this.socket?.setInput(input);
+    this.socket?.setInput(input, { immediate });
   }
 
   isLifecycleCurrent(generation) {
@@ -442,6 +471,10 @@ export class ControllerApp {
   }
 
   handleDesktopEvent(event) {
+    if (event.type === "control-feedback") {
+      this.socket?.markApplied(event);
+      return;
+    }
     if (event.type !== "private-message") return;
     this.root.querySelector("#message-text").textContent = event.text ?? "别回头";
     this.messagePanel.hidden = false;
@@ -481,6 +514,7 @@ export class ControllerApp {
     window.removeEventListener("pageshow", this.handlePageShow);
     this.joystick?.destroy();
     this.motion?.destroy();
+    this.diagnostics?.destroy();
     this.socket?.destroy();
     this.audioContext?.close();
   }

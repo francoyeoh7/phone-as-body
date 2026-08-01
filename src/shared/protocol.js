@@ -4,6 +4,7 @@ export const EVENTS = Object.freeze({
   controllerInput: "controller:input",
   controllerAction: "controller:action",
   desktopEvent: "desktop:event",
+  rtcSignal: "rtc:signal",
   peerStatus: "peer:status",
   controllerReplaced: "controller:replaced",
   sessionEnded: "session:ended",

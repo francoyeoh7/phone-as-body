@@ -22,6 +22,7 @@ export class DesktopApp {
     this.audio = createGameAudio();
     this.director = null;
     this.debugFrames = 0;
+    this.lastFeedbackSequence = -1;
   }
 
   mount() {
@@ -124,8 +125,10 @@ export class DesktopApp {
     this.lastFrame = time;
     if (!this.paused) {
       this.elapsed += delta;
-      this.player.setControllerInput(this.phone.currentInput(), this.phone.connected);
+      const phoneInput = this.phone.currentInput();
+      this.player.setControllerInput(phoneInput, this.phone.connected);
       this.player.update(delta);
+      this.sendControlFeedback(phoneInput);
       this.experience.world.timestep = delta;
       this.experience.world.step();
       this.player.syncAfterPhysics();
@@ -151,6 +154,19 @@ export class DesktopApp {
     }
     this.experience.renderer.render(this.experience.scene, this.experience.camera);
     this.frame = requestAnimationFrame((nextTime) => this.tick(nextTime));
+  }
+
+  sendControlFeedback(input) {
+    const sequence = Number.isInteger(input?.seq) ? input.seq : -1;
+    if (sequence < 0 || sequence <= this.lastFeedbackSequence || !this.player) return;
+    this.lastFeedbackSequence = sequence;
+    const radiansToDegrees = 180 / Math.PI;
+    this.phone?.send({
+      type: "control-feedback",
+      seq: sequence,
+      cameraYaw: Number((this.player.cameraYaw * radiansToDegrees).toFixed(2)),
+      cameraPitch: Number((this.player.cameraPitch * radiansToDegrees).toFixed(2)),
+    });
   }
 
   destroy() {

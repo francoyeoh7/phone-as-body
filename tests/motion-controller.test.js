@@ -22,16 +22,18 @@ function createEventTarget({ motionPermission = "granted", orientationPermission
 
 function createController({ target = createEventTarget(), ...options } = {}) {
   const samples = [];
+  const telemetry = [];
   const states = [];
   const interacts = vi.fn();
   const controller = new MotionController({
     eventTarget: target,
     onSample: (sample) => samples.push(sample),
+    onTelemetry: (sample) => telemetry.push(sample),
     onState: (state) => states.push(state),
     onInteract: interacts,
     ...options,
   });
-  return { controller, target, samples, states, interacts };
+  return { controller, target, samples, telemetry, states, interacts };
 }
 
 describe("motion controller", () => {
@@ -55,6 +57,44 @@ describe("motion controller", () => {
 
     expect(harness.samples.at(-1).yaw).toBeGreaterThan(0);
     expect(harness.samples.at(-1).pitch).toBe(0);
+  });
+
+  it("reports raw sensor axes, physical aim, output, and sample rate", async () => {
+    const harness = createController();
+    await harness.controller.requestPermission();
+
+    harness.target.dispatch("deviceorientation", {
+      alpha: 10,
+      beta: 20,
+      gamma: 30,
+      quaternion: { x: 0, y: 0, z: 0, w: 1 },
+      timeStamp: 100,
+    });
+    harness.controller.reset();
+    harness.target.dispatch("deviceorientation", {
+      alpha: 12,
+      beta: 21,
+      gamma: 29,
+      quaternion: { x: 0, y: 0, z: Math.sin(Math.PI / 36), w: Math.cos(Math.PI / 36) },
+      timeStamp: 120,
+    });
+    harness.target.dispatch("deviceorientation", {
+      alpha: 12,
+      beta: 21,
+      gamma: 29,
+      quaternion: { x: 0, y: 0, z: Math.sin(Math.PI / 36), w: Math.cos(Math.PI / 36) },
+      timeStamp: 140,
+    });
+
+    expect(harness.telemetry.at(-1)).toMatchObject({
+      alpha: 12,
+      beta: 21,
+      gamma: 29,
+      sensorHz: 50,
+      physicalYaw: 10,
+      outputYaw: 0,
+      outputPitch: 0,
+    });
   });
 
   it("turns one physical impact into one interaction and enforces cooldown", async () => {

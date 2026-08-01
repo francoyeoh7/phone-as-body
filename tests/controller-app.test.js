@@ -25,7 +25,8 @@ function createApp({ motionEnabled = true } = {}) {
     touchFallback: false,
     bfcacheSuspended: false,
     lifecycleGeneration: 0,
-    socket: { sendAction: actions },
+    socket: { sendAction: actions, markApplied: vi.fn() },
+    diagnostics: { updateMotion: vi.fn(), updateNetwork: vi.fn(), updateJoystick: vi.fn() },
     sendInput: vi.fn(),
     destroy: vi.fn(),
   });
@@ -148,5 +149,41 @@ describe("controller app lifecycle", () => {
     app.handlePageHide({ persisted: false });
 
     expect(app.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches desktop control feedback to the sent packet", () => {
+    const { app } = createApp();
+    const feedback = { type: "control-feedback", seq: 7, cameraYaw: 48, cameraPitch: -6 };
+
+    app.handleDesktopEvent(feedback);
+
+    expect(app.socket.markApplied).toHaveBeenCalledWith(feedback);
+  });
+
+  it("shows each motion sample and sends its output immediately", () => {
+    const { app } = createApp();
+    const sample = { yaw: 12, pitch: -4, physicalYaw: 3, physicalPitch: -1 };
+
+    app.handleMotionSample(sample);
+
+    expect(app.viewDelta).toBe(sample);
+    expect(app.diagnostics.updateMotion).toHaveBeenCalledWith(sample);
+    expect(app.sendInput).toHaveBeenCalledWith({ includeViewDelta: true, immediate: true });
+  });
+
+  it("passes immediate input through to the controller socket", () => {
+    const setInput = vi.fn();
+    const app = Object.assign(Object.create(ControllerApp.prototype), {
+      move: { x: 0.2, y: 0.8 },
+      viewDelta: { yaw: 9, pitch: 2 },
+      socket: { setInput },
+    });
+
+    app.sendInput({ includeViewDelta: true, immediate: true });
+
+    expect(setInput).toHaveBeenCalledWith({
+      move: { x: 0.2, y: 0.8 },
+      viewDelta: { yaw: 9, pitch: 2 },
+    }, { immediate: true });
   });
 });

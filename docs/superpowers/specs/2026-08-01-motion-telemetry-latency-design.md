@@ -25,7 +25,7 @@ A two-axis plot shows the calibrated physical aim and filtered output together. 
 
 ## Correct Orientation Conversion
 
-`deviceOrientationToQuaternion` will match Three.js's established `YXZ` Euler conversion used by DeviceOrientationControls, followed by the camera and screen-orientation corrections. Tests compare several real `alpha/beta/gamma/screenAngle` combinations against Three.js and then run posture-independent gesture traces through the tracker.
+`deviceOrientationToQuaternion` will implement the W3C Device Orientation physical frame directly: intrinsic `Z-X'-Y''` rotations, with device `x` pointing right, `y` pointing toward the screen top, and `z` pointing out of the screen. This avoids the camera-coordinate correction that previously pushed the phone long axis toward a singularity while the phone was flat. Tests compare several real `alpha/beta/gamma` combinations against equivalent Three.js axis-quaternion composition and then run posture-independent gesture traces through the tracker.
 
 The tracker will expose diagnostic fields alongside its existing yaw and pitch output. Protocol payloads continue to send only bounded yaw and pitch values.
 
@@ -37,7 +37,7 @@ Each controller input has a sequence number and local send timestamp. The server
 
 Joystick and orientation changes flush immediately instead of waiting for the 30 Hz interval. The interval remains as a heartbeat so sustained movement survives dropped pointer events. Immediate sends are naturally limited by browser pointer and orientation event rates. Joystick release sends zero immediately.
 
-If the measured desktop-applied RTT remains high after removing the batching delay, the remaining delay is the public tunnel and can be addressed separately with a direct WebRTC data channel.
+Runtime measurement showed the public tunnel adding roughly 440-510 ms of RTT, so controller snapshots and desktop feedback use an unordered, zero-retransmit WebRTC data channel after Socket.IO performs signaling. This keeps movement and view updates on the local peer-to-peer path while preserving Socket.IO as an automatic fallback. Controller actions remain on the reliable Socket.IO path.
 
 ## Verification
 
