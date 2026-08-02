@@ -1,7 +1,7 @@
 .worktrees/
+.superpowers/
 node_modules/
 dist/
 .DS_Store
 .env
 *.log
-
