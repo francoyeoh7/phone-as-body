@@ -67,7 +67,8 @@ export function isControllerInput(value) {
     isFiniteNumber(value.sentAt) &&
     value.sentAt >= 0 &&
     isJoystickVector(value.move) &&
-    isViewDelta(value.viewDelta)
+    isViewDelta(value.viewDelta) &&
+    typeof value.clutch === "boolean"
   );
 }
 

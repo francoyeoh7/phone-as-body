@@ -2,16 +2,13 @@ import * as THREE from "three";
 import { createObjectiveState } from "../shared/objectives.js";
 
 export class HorrorDirector {
-  constructor({ experience, ui, phone, audio, onComplete }) {
+  constructor({ experience, ui, audio, onComplete }) {
     this.experience = experience;
     this.ui = ui;
-    this.phone = phone;
     this.audio = audio;
     this.onComplete = onComplete;
     this.story = createObjectiveState();
     this.elapsed = 0;
-    this.messageAt = Infinity;
-    this.messageSent = false;
     this.silhouetteArmed = false;
     this.silhouetteShownAt = Infinity;
     this.silhouetteVanished = false;
@@ -55,7 +52,6 @@ export class HorrorDirector {
     this.ui.setObjective(this.story.label());
     this.showSubtitle("保险丝还是温的。", 2.2);
     this.audio.cue("pickup");
-    this.messageAt = this.elapsed + 1.1;
     this.silhouetteArmed = true;
     silhouette.position.set(
       this.experience.camera.position.x + 0.4,
@@ -112,7 +108,6 @@ export class HorrorDirector {
   update(delta, elapsed) {
     this.elapsed = elapsed;
     if (elapsed >= this.subtitleUntil) this.ui.setSubtitle(null, false);
-    this.updatePrivateMessage();
     this.updateSilhouette(delta);
     this.updatePowerSequence();
     this.updatePursuit(delta);
@@ -122,12 +117,6 @@ export class HorrorDirector {
       this.completionAt = Infinity;
       this.onComplete?.();
     }
-  }
-
-  updatePrivateMessage() {
-    if (this.messageSent || this.elapsed < this.messageAt) return;
-    this.messageSent = true;
-    this.phone.send({ type: "private-message", text: "别回头" });
   }
 
   updateSilhouette() {

@@ -5,6 +5,7 @@ const stoppedInput = () => ({
   sentAt: 0,
   move: { x: 0, y: 0 },
   viewDelta: { yaw: 0, pitch: 0 },
+  clutch: false,
 });
 
 function defaultRandomCode() {
@@ -57,6 +58,7 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
       sentAt: input.sentAt,
       move: { x: input.move.x, y: input.move.y },
       viewDelta: { yaw: input.viewDelta.yaw, pitch: input.viewDelta.pitch },
+      clutch: input.clutch,
     };
     return { ok: true, room };
   }

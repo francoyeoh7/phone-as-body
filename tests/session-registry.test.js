@@ -7,6 +7,7 @@ function sampleInput(overrides = {}) {
     sentAt: 100,
     move: { x: 0, y: 1 },
     viewDelta: { yaw: 42, pitch: -18 },
+    clutch: true,
     ...overrides,
   };
 }

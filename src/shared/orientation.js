@@ -120,26 +120,16 @@ const noDelta = (valid = false) => ({
 
 export function createOrientationTracker({
   deadZoneDeg = 0.8,
-  neutralConeDeg = 2.5,
   maxPhysicalDeltaDeg = 25,
   maxPitchDeg = 90,
-  gain = 4,
+  gain = 3,
   smoothingStrength = 0,
 } = {}) {
   let baselineAim = null;
   let previousAim = null;
   let previousQuaternion = null;
-  let positiveYaw = 0;
-  let negativeYaw = 0;
-  let positivePitch = 0;
-  let negativePitch = 0;
-
-  const resetExcursion = () => {
-    positiveYaw = 0;
-    negativeYaw = 0;
-    positivePitch = 0;
-    negativePitch = 0;
-  };
+  let previousTargetYaw = 0;
+  let previousTargetPitch = 0;
 
   const relativeAngles = (aim) => {
     const baseline = vectorAngles(baselineAim);
@@ -153,13 +143,6 @@ export function createOrientationTracker({
     };
   };
 
-  const excursionDelta = (value, positive, negative) => {
-    if (Math.abs(value) <= deadZoneDeg) return { delta: 0, positive, negative };
-    if (value > positive) return { delta: value - positive, positive: value, negative };
-    if (value < negative) return { delta: value - negative, positive, negative: value };
-    return { delta: 0, positive, negative };
-  };
-
   return {
     calibrate(sample) {
       const normalized = normalizeQuaternion(sample);
@@ -168,7 +151,8 @@ export function createOrientationTracker({
       baselineAim = aim;
       previousAim = aim;
       previousQuaternion = normalized;
-      resetExcursion();
+      previousTargetYaw = 0;
+      previousTargetPitch = 0;
       return true;
     },
 
@@ -186,38 +170,26 @@ export function createOrientationTracker({
           : Math.hypot(angles.yaw, angles.pitch) < 6 ? 0.35 : 1
         : 1;
 
-      if (Math.abs(angles.yaw) <= neutralConeDeg && Math.abs(angles.pitch) <= neutralConeDeg) {
-        resetExcursion();
-        previousAim = aim;
-        previousQuaternion = normalized;
-        return {
-          yaw: 0,
-          pitch: 0,
-          physicalYaw: angles.yaw,
-          physicalPitch: angles.pitch,
-          transitionScale,
-          roll,
-          valid: true,
-        };
-      }
-
-      const shouldRememberExcursion = transitionScale > 0;
-      const yawResult = excursionDelta(angles.yaw, positiveYaw, negativeYaw);
-      const pitchResult = excursionDelta(angles.pitch, positivePitch, negativePitch);
-      if (shouldRememberExcursion) {
-        positiveYaw = yawResult.positive;
-        negativeYaw = yawResult.negative;
-        positivePitch = pitchResult.positive;
-        negativePitch = pitchResult.negative;
-      }
-
-      previousAim = aim;
-      previousQuaternion = normalized;
       const smooth = clamp(Number.isFinite(smoothingStrength) ? smoothingStrength : 0, 0, 1);
       const smoothing = 1 - smooth * 0.35;
+      const targetYaw = (Math.abs(angles.yaw) <= deadZoneDeg ? 0 : angles.yaw) * gain * smoothing;
+      const targetPitch = clamp(
+        (Math.abs(angles.pitch) <= deadZoneDeg ? 0 : angles.pitch) * gain * smoothing,
+        -maxPitchDeg,
+        maxPitchDeg,
+      );
+      const yaw = (targetYaw - previousTargetYaw) * transitionScale;
+      const pitch = (targetPitch - previousTargetPitch) * transitionScale;
+
+      // Track the target that was actually emitted so temporary roll suppression cannot
+      // leave a hidden target offset that later becomes a phantom turn.
+      previousTargetYaw += yaw;
+      previousTargetPitch += pitch;
+      previousAim = aim;
+      previousQuaternion = normalized;
       return {
-        yaw: yawResult.delta * transitionScale * gain * smoothing,
-        pitch: clamp(pitchResult.delta * transitionScale * gain * smoothing, -maxPitchDeg, maxPitchDeg),
+        yaw,
+        pitch,
         physicalYaw: angles.yaw,
         physicalPitch: angles.pitch,
         transitionScale,

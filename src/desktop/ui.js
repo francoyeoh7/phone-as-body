@@ -23,7 +23,7 @@ export function createDesktopUI(root) {
         <div class="pairing-copy">
           <p class="desktop-eyebrow">手机即手电筒</p>
           <h1>Corridor 617</h1>
-          <p>扫描二维码连接手机。体感控制视线，左侧摇杆移动。</p>
+          <p>扫描二维码连接手机。整块屏幕按住拖动行走与转向，轻点进行交互。</p>
           <div class="pairing-status" id="pairing-status"><span></span>正在创建安全会话</div>
           <button class="start-button" id="start-button" hidden><i data-lucide="volume-2"></i>进入走廊</button>
           <button class="fallback-button" id="fallback-button"><i data-lucide="keyboard"></i>使用键鼠测试</button>

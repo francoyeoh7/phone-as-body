@@ -6,6 +6,7 @@ const stoppedInput = () => ({
   seq: -1,
   move: { x: 0, y: 0 },
   viewDelta: { yaw: 0, pitch: 0 },
+  clutch: false,
   receivedAt: 0,
 });
 
@@ -15,6 +16,7 @@ export class PhoneSession extends EventTarget {
     this.socket = null;
     this.room = null;
     this.input = stoppedInput();
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
     this.connected = false;
     this.peerConnection = null;
     this.dataChannel = null;
@@ -35,10 +37,15 @@ export class PhoneSession extends EventTarget {
 
   acceptInput(input) {
     if (!isControllerInput(input) || input.seq <= this.input.seq) return;
+    this.pendingViewDelta = {
+      yaw: this.pendingViewDelta.yaw + input.viewDelta.yaw,
+      pitch: this.pendingViewDelta.pitch + input.viewDelta.pitch,
+    };
     this.input = {
       ...input,
       move: { ...input.move },
       viewDelta: { ...input.viewDelta },
+      clutch: input.clutch,
       receivedAt: performance.now(),
     };
     this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
@@ -77,13 +84,19 @@ export class PhoneSession extends EventTarget {
   }
 
   setPeerConnected(connected) {
+    const wasConnected = this.connected;
     this.connected = connected;
-    if (!connected) {
+    if (connected && !wasConnected) {
+      this.input = stoppedInput();
+      this.pendingViewDelta = { yaw: 0, pitch: 0 };
+    } else if (!connected) {
       this.input = {
         ...this.input,
         move: { x: 0, y: 0 },
         viewDelta: { yaw: 0, pitch: 0 },
+        clutch: false,
       };
+      this.pendingViewDelta = { yaw: 0, pitch: 0 };
     }
     this.dispatchEvent(new CustomEvent("peer", { detail: { connected } }));
     if (connected) this.startRtcOffer();
@@ -123,7 +136,7 @@ export class PhoneSession extends EventTarget {
     const peer = this.createPeerConnection();
     if (!peer) return;
     try {
-      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false, maxRetransmits: 0 }));
+      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false }));
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       this.socket?.emit(EVENTS.rtcSignal, { description: peer.localDescription });
@@ -157,14 +170,18 @@ export class PhoneSession extends EventTarget {
   }
 
   currentInput(maxAgeMs = 500) {
-    if (!this.connected || performance.now() - this.input.receivedAt > maxAgeMs) {
+    const fresh = this.connected && performance.now() - this.input.receivedAt <= maxAgeMs;
+    const viewDelta = fresh ? this.pendingViewDelta : { yaw: 0, pitch: 0 };
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
+    if (!fresh) {
       return {
         ...this.input,
         move: { x: 0, y: 0 },
-        viewDelta: { yaw: 0, pitch: 0 },
+        viewDelta,
+        clutch: false,
       };
     }
-    return this.input;
+    return { ...this.input, viewDelta };
   }
 
   send(event) {

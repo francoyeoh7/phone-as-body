@@ -4,6 +4,8 @@ import { ControllerApp } from "../src/controller/ControllerApp.js";
 function createApp({ motionEnabled = true } = {}) {
   const actions = vi.fn();
   const motion = {
+    engage: vi.fn(() => true),
+    disengage: vi.fn(),
     suspend: vi.fn(),
     resume: vi.fn(async () => true),
     resumeSensors: vi.fn(),
@@ -25,8 +27,21 @@ function createApp({ motionEnabled = true } = {}) {
     touchFallback: false,
     bfcacheSuspended: false,
     lifecycleGeneration: 0,
-    socket: { sendAction: actions, markApplied: vi.fn() },
-    diagnostics: { updateMotion: vi.fn(), updateNetwork: vi.fn(), updateJoystick: vi.fn() },
+    viewEngaged: false,
+    playSurface: { dataset: {} },
+    joystick: { reset: vi.fn() },
+    socket: {
+      sendAction: actions,
+      markApplied: vi.fn(),
+      clearPendingViewDelta: vi.fn(),
+      setInput: vi.fn(),
+    },
+    diagnostics: {
+      updateMotion: vi.fn(),
+      updateNetwork: vi.fn(),
+      updateJoystick: vi.fn(),
+      updateEngagement: vi.fn(),
+    },
     sendInput: vi.fn(),
     destroy: vi.fn(),
   });
@@ -171,11 +186,39 @@ describe("controller app lifecycle", () => {
     expect(app.sendInput).toHaveBeenCalledWith({ includeViewDelta: true, immediate: true });
   });
 
+  it("uses joystick contact as the motion clutch", () => {
+    const { app, motion } = createApp();
+
+    expect(app.handleJoystickEngagement).toBeTypeOf("function");
+    app.handleJoystickEngagement(true);
+    expect(motion.engage).toHaveBeenCalledTimes(1);
+    expect(app.diagnostics.updateEngagement).toHaveBeenLastCalledWith(true);
+
+    app.handleJoystickEngagement(false);
+    expect(motion.disengage).toHaveBeenCalledTimes(1);
+    expect(app.diagnostics.updateEngagement).toHaveBeenLastCalledWith(false);
+    expect(app.socket.clearPendingViewDelta).toHaveBeenCalledTimes(1);
+    expect(app.sendInput).toHaveBeenLastCalledWith({ includeViewDelta: true, immediate: true });
+  });
+
+  it("does not keep the clutch active while the phone is reorienting", () => {
+    const { app } = createApp();
+
+    app.viewEngaged = true;
+    app.handleMotionState("reorienting");
+
+    expect(app.viewEngaged).toBe(false);
+    expect(app.joystick.reset).toHaveBeenCalledTimes(1);
+    expect(app.socket.clearPendingViewDelta).toHaveBeenCalledTimes(1);
+    expect(app.sendInput).toHaveBeenLastCalledWith({ includeViewDelta: true, immediate: true });
+  });
+
   it("passes immediate input through to the controller socket", () => {
     const setInput = vi.fn();
     const app = Object.assign(Object.create(ControllerApp.prototype), {
       move: { x: 0.2, y: 0.8 },
       viewDelta: { yaw: 9, pitch: 2 },
+      viewEngaged: true,
       socket: { setInput },
     });
 
@@ -184,6 +227,7 @@ describe("controller app lifecycle", () => {
     expect(setInput).toHaveBeenCalledWith({
       move: { x: 0.2, y: 0.8 },
       viewDelta: { yaw: 9, pitch: 2 },
+      clutch: true,
     }, { immediate: true });
   });
 });

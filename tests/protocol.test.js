@@ -8,6 +8,7 @@ const controllerInput = (overrides = {}) => ({
   sentAt: 100,
   move: { x: 0, y: 1 },
   viewDelta: { yaw: 42, pitch: -18 },
+  clutch: true,
   ...overrides,
 });
 
@@ -15,6 +16,11 @@ describe("view delta protocol", () => {
   it("accepts finite bounded view deltas in degrees", () => {
     expect(protocol.isViewDelta({ yaw: 42, pitch: -18 })).toBe(true);
     expect(protocol.isControllerInput(controllerInput())).toBe(true);
+  });
+
+  it("requires an explicit clutch state on every controller packet", () => {
+    expect(protocol.isControllerInput(controllerInput({ clutch: false }))).toBe(true);
+    expect(protocol.isControllerInput(controllerInput({ clutch: undefined }))).toBe(false);
   });
 
   it.each([
@@ -34,7 +40,7 @@ describe("controller snapshot flush", () => {
     socket.joined = true;
     socket.socket = { connected: true, emit: vi.fn() };
 
-    socket.setInput({ move: { x: 0, y: 1 }, viewDelta: { yaw: 40, pitch: -10 } });
+    socket.setInput({ move: { x: 0, y: 1 }, viewDelta: { yaw: 40, pitch: -10 }, clutch: true });
     socket.setInput({ move: { x: 0, y: 1 }, viewDelta: { yaw: 20, pitch: 5 } });
     socket.flush();
 
@@ -43,6 +49,7 @@ describe("controller snapshot flush", () => {
       expect.objectContaining({
         move: { x: 0, y: 1 },
         viewDelta: { yaw: 60, pitch: -5 },
+        clutch: true,
       }),
       expect.any(Function),
     );
@@ -119,6 +126,42 @@ describe("controller snapshot flush", () => {
       type: "feedback",
       payload: feedback,
     });
+  });
+
+  it("accumulates every accepted packet until the desktop consumes one frame", () => {
+    const session = new PhoneSession();
+    session.connected = true;
+
+    session.acceptInput(controllerInput({ seq: 1, viewDelta: { yaw: 7, pitch: -3 } }));
+    session.acceptInput(controllerInput({ seq: 2, viewDelta: { yaw: -2, pitch: 5 } }));
+
+    expect(session.currentInput(10_000).viewDelta).toEqual({ yaw: 5, pitch: 2 });
+    expect(session.currentInput(10_000).viewDelta).toEqual({ yaw: 0, pitch: 0 });
+  });
+
+  it("creates an ordered reliable WebRTC input channel", async () => {
+    class FakePeer {
+      constructor() {
+        this.connectionState = "new";
+        this.localDescription = null;
+      }
+
+      createDataChannel = vi.fn(() => ({ readyState: "connecting", close: vi.fn() }));
+      createOffer = vi.fn(async () => ({ type: "offer", sdp: "fake" }));
+      setLocalDescription = vi.fn(async (description) => {
+        this.localDescription = description;
+      });
+      close = vi.fn();
+    }
+
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    const session = new PhoneSession();
+    session.socket = { emit: vi.fn() };
+
+    await session.startRtcOffer();
+
+    expect(session.peerConnection.createDataChannel).toHaveBeenCalledWith("controls", { ordered: false });
+    vi.unstubAllGlobals();
   });
 
   it("clears stale tunnel RTT when WebRTC opens", () => {

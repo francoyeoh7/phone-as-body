@@ -1,10 +1,6 @@
 import {
   createIcons,
   Crosshair,
-  Flashlight,
-  Hand,
-  Pause,
-  Play,
   RotateCcw,
   Settings,
   Wifi,
@@ -17,20 +13,25 @@ import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
 import "./styles.css";
 
-const icons = { Crosshair, Flashlight, Hand, Pause, Play, RotateCcw, Settings, Wifi, X };
+const icons = { Crosshair, RotateCcw, Settings, Wifi, X };
 
 const defaultSettings = {
   sensitivity: 1,
-  smoothing: 0.55,
-  invertY: false,
-  reticle: true,
-  reducedMotion: false,
-  subtitles: true,
+  smoothing: 0.18,
 };
 
 function loadSettings() {
   try {
-    return { ...defaultSettings, ...JSON.parse(localStorage.getItem("corridor617-settings")) };
+    const saved = JSON.parse(localStorage.getItem("corridor617-settings"));
+    const sensitivity = Number(saved?.sensitivity);
+    const smoothing = Number(saved?.smoothing);
+    const legacySettings = saved && ["invertY", "reticle", "reducedMotion", "subtitles"].some((key) => key in saved);
+    return {
+      sensitivity: Number.isFinite(sensitivity) ? Math.min(1.6, Math.max(0.6, sensitivity)) : defaultSettings.sensitivity,
+      smoothing: !legacySettings && Number.isFinite(smoothing)
+        ? Math.min(1, Math.max(0, smoothing))
+        : defaultSettings.smoothing,
+    };
   } catch {
     return { ...defaultSettings };
   }
@@ -52,6 +53,7 @@ export class ControllerApp {
     this.preview = import.meta.env.DEV && parameters.has("preview");
     this.move = { x: 0, y: 0 };
     this.viewDelta = zeroViewDelta();
+    this.viewEngaged = false;
     this.settings = loadSettings();
     this.audioContext = null;
     this.paused = false;
@@ -61,7 +63,6 @@ export class ControllerApp {
     this.bfcacheSuspended = false;
     this.lifecycleGeneration = 0;
     this.calibrationTimer = null;
-    this.tapCandidate = null;
     this.diagnostics = null;
     this.handleVisibility = this.handleVisibility.bind(this);
     this.handlePageHide = this.handlePageHide.bind(this);
@@ -82,8 +83,7 @@ export class ControllerApp {
 
         <section class="play-surface" aria-label="游戏控制器">
           <div class="utility-controls">
-            <button class="icon-button" id="recenter" aria-label="重新校准方向"><i data-lucide="crosshair"></i></button>
-            <button class="icon-button" id="pause" aria-label="暂停"><i data-lucide="pause"></i></button>
+            <button class="icon-button" id="settings" aria-label="设置"><i data-lucide="settings"></i></button>
           </div>
 
           <aside class="motion-diagnostics" id="motion-diagnostics" aria-label="体感诊断">
@@ -93,30 +93,10 @@ export class ControllerApp {
               <span class="physical-aim-dot"></span>
               <span class="output-aim-dot"></span>
             </div>
-            <dl class="telemetry-grid">
-              <dt>RAW αβγ</dt><dd data-telemetry="raw">0 / 0 / 0</dd>
-              <dt>AIM Y/P</dt><dd data-telemetry="aim">0 / 0</dd>
-              <dt>OUT Y/P</dt><dd data-telemetry="output">0 / 0</dd>
-              <dt>ROLL/F</dt><dd data-telemetry="roll">0 / 0%</dd>
-              <dt>STICK</dt><dd data-telemetry="joystick">0 / 0</dd>
-              <dt>SEND</dt><dd data-telemetry="rates">0 / 0 Hz</dd>
-              <dt>NET</dt><dd data-telemetry="network">connecting · -- ms</dd>
-              <dt>APPLY</dt><dd data-telemetry="applied">-- ms</dd>
-              <dt>CAM Y/P</dt><dd data-telemetry="camera">0 / 0</dd>
-            </dl>
           </aside>
 
-          <div class="joystick-zone" id="joystick" aria-label="移动摇杆">
-            <div class="joystick-base"><div class="joystick-ring"></div><div class="joystick-thumb"></div></div>
-          </div>
-
-          <div class="action-zone">
-            <button class="action-button flashlight-button is-active" id="flashlight" aria-label="开关手电筒">
-              <i data-lucide="flashlight"></i>
-            </button>
-            <button class="action-button interact-button" id="interact" aria-label="交互">
-              <i data-lucide="hand"></i>
-            </button>
+          <div class="joystick-base" aria-hidden="true">
+            <div class="joystick-ring"></div><div class="joystick-thumb"></div>
           </div>
         </section>
 
@@ -128,27 +108,18 @@ export class ControllerApp {
           <button class="primary-button" id="enable-motion" disabled>启用体感</button>
         </div>
 
-        <div class="private-message" id="private-message" hidden>
-          <button class="message-close" aria-label="关闭"><i data-lucide="x"></i></button>
-          <p>未知号码</p>
-          <strong id="message-text">别回头</strong>
-        </div>
-
-        <div class="pause-menu" id="pause-menu" hidden>
+        <div class="pause-menu" id="settings-menu" hidden>
           <div class="pause-heading">
-            <div><p class="eyebrow">控制设置</p><h2>暂停</h2></div>
-            <button class="icon-button" id="resume" aria-label="继续"><i data-lucide="play"></i></button>
+            <div><p class="eyebrow">控制设置</p><h2>设置</h2></div>
+            <button class="icon-button" id="resume" aria-label="关闭设置"><i data-lucide="x"></i></button>
           </div>
           <label>体感灵敏度 <output id="sensitivity-value">${this.settings.sensitivity.toFixed(1)}</output>
             <input id="sensitivity" type="range" min="0.6" max="1.6" step="0.1" value="${this.settings.sensitivity}">
           </label>
-          <label>稳定强度 <output id="smoothing-value">${Math.round(this.settings.smoothing * 100)}%</output>
-            <input id="smoothing" type="range" min="0" max="1" step="0.05" value="${this.settings.smoothing}">
+          <label>转向平滑 <output id="smoothing-value">${Math.round(this.settings.smoothing * 100)}%</output>
+            <input id="smoothing" type="range" min="0" max="1" step="0.01" value="${this.settings.smoothing}">
           </label>
-          <label class="toggle-row">反转纵向 <input id="invertY" type="checkbox" ${this.settings.invertY ? "checked" : ""}><span></span></label>
-          <label class="toggle-row">准星 <input id="reticle" type="checkbox" ${this.settings.reticle ? "checked" : ""}><span></span></label>
-          <label class="toggle-row">减少动态效果 <input id="reducedMotion" type="checkbox" ${this.settings.reducedMotion ? "checked" : ""}><span></span></label>
-          <label class="toggle-row">字幕 <input id="subtitles" type="checkbox" ${this.settings.subtitles ? "checked" : ""}><span></span></label>
+          <button class="secondary-button" id="recenter" type="button"><i data-lucide="crosshair"></i><span>重新校准方向</span></button>
         </div>
       </main>`;
 
@@ -170,74 +141,39 @@ export class ControllerApp {
     this.permissionTitle = this.root.querySelector("#permission-title");
     this.permissionCopy = this.root.querySelector("#permission-copy");
     this.enableMotion = this.root.querySelector("#enable-motion");
-    this.pauseMenu = this.root.querySelector("#pause-menu");
-    this.messagePanel = this.root.querySelector("#private-message");
+    this.pauseMenu = this.root.querySelector("#settings-menu");
     this.playSurface = this.root.querySelector(".play-surface");
     this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
   }
 
   bindControls() {
-    this.joystick = new VirtualJoystick(this.root.querySelector("#joystick"), {
+    this.joystick = new VirtualJoystick(this.playSurface, {
       onChange: (move) => {
         this.move = move;
         this.diagnostics.updateJoystick(move);
         this.sendInput({ immediate: true });
       },
+      onEngagementChange: (engaged) => this.handleJoystickEngagement(engaged),
+      onTap: () => {
+        pulse();
+        this.socket?.sendAction("interact");
+      },
+      onIgnoreTarget: (target) => Boolean(target?.closest?.("button, input, .pause-menu, .permission-panel")),
     });
     this.motion = new MotionController({
       onSample: (viewDelta) => this.handleMotionSample(viewDelta),
       onTelemetry: (telemetry) => this.diagnostics.updateSensor(telemetry),
       onState: (state) => this.handleMotionState(state),
-      onInteract: () => {
-        pulse([18, 36, 18]);
-        this.socket?.sendAction("interact");
-      },
     });
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
-    this.root.querySelector("#interact").addEventListener("pointerdown", () => {
-      pulse();
-      this.socket?.sendAction("interact");
-    });
-    this.playSurface.addEventListener("pointerdown", (event) => {
-      if (event.target.closest("button, #joystick")) {
-        this.tapCandidate = null;
-        return;
-      }
-      this.tapCandidate = {
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        time: performance.now(),
-      };
-    });
-    this.playSurface.addEventListener("pointerup", (event) => {
-      const candidate = this.tapCandidate;
-      this.tapCandidate = null;
-      if (!candidate || candidate.pointerId !== event.pointerId) return;
-      if (event.target.closest("button, #joystick")) return;
-      const distance = Math.hypot(event.clientX - candidate.x, event.clientY - candidate.y);
-      if (distance <= 14 && performance.now() - candidate.time <= 450) {
-        pulse();
-        this.socket?.sendAction("interact");
-      }
-    });
-    this.playSurface.addEventListener("pointercancel", () => { this.tapCandidate = null; });
-    this.root.querySelector("#flashlight").addEventListener("click", (event) => {
-      event.currentTarget.classList.toggle("is-active");
-      pulse();
-      this.socket?.sendAction("flashlight");
-    });
     this.root.querySelector("#recenter").addEventListener("click", () => {
       pulse([10, 30, 10]);
       this.motion.reset();
       this.socket?.sendAction("recenter");
     });
-    this.root.querySelector("#pause").addEventListener("click", () => this.setPaused(true));
+    this.root.querySelector("#settings").addEventListener("click", () => this.setPaused(true));
     this.root.querySelector("#resume").addEventListener("click", () => this.setPaused(false));
-    this.root.querySelector(".message-close").addEventListener("click", () => {
-      this.messagePanel.hidden = true;
-    });
     this.bindSettings();
     document.addEventListener("visibilitychange", this.handleVisibility);
     window.addEventListener("pagehide", this.handlePageHide);
@@ -362,6 +298,15 @@ export class ControllerApp {
       this.permissionPanel.hidden = true;
       return;
     }
+    if (state === "reorienting") {
+      this.viewEngaged = false;
+      this.viewDelta = zeroViewDelta();
+      this.socket?.clearPendingViewDelta?.();
+      this.joystick?.reset();
+      this.sendInput({ includeViewDelta: true, immediate: true });
+      this.diagnostics?.updateEngagement(false);
+      if (this.playSurface) this.playSurface.dataset.clutch = "off";
+    }
     if (!messages[state]) return;
     this.permissionPanel.hidden = false;
     [this.permissionTitle.textContent, this.permissionCopy.textContent] = messages[state];
@@ -381,7 +326,10 @@ export class ControllerApp {
     this.lifecycleGeneration += 1;
     this.move = { x: 0, y: 0 };
     this.viewDelta = zeroViewDelta();
-    this.sendInput();
+    this.viewEngaged = false;
+    this.socket?.clearPendingViewDelta?.();
+    this.joystick?.reset();
+    this.sendInput({ includeViewDelta: true, immediate: true });
     this.motion?.suspend();
     this.socket?.sendAction("pause");
   }
@@ -417,8 +365,24 @@ export class ControllerApp {
     this.sendInput({ includeViewDelta: true, immediate: true });
   }
 
+  handleJoystickEngagement(engaged) {
+    this.viewDelta = zeroViewDelta();
+    this.viewEngaged = Boolean(engaged);
+    let active = false;
+    if (engaged) {
+      active = this.motion?.engage?.() === true;
+      this.viewEngaged = active;
+    } else {
+      this.socket?.clearPendingViewDelta?.();
+      this.motion?.disengage?.();
+    }
+    this.diagnostics?.updateEngagement(Boolean(active));
+    if (this.playSurface) this.playSurface.dataset.clutch = active ? "on" : "off";
+    this.sendInput({ includeViewDelta: true, immediate: true });
+  }
+
   sendInput({ includeViewDelta = false, immediate = false } = {}) {
-    const input = { move: this.move };
+    const input = { move: this.move, clutch: this.viewEngaged };
     if (includeViewDelta) input.viewDelta = this.viewDelta;
     this.socket?.setInput(input, { immediate });
   }
@@ -436,7 +400,9 @@ export class ControllerApp {
       this.lifecycleGeneration += 1;
       this.move = { x: 0, y: 0 };
       this.viewDelta = zeroViewDelta();
+      this.viewEngaged = false;
       this.socket?.clearPendingViewDelta?.();
+      this.joystick?.reset();
       this.sendInput();
       this.motion?.suspend();
       this.socket?.sendAction("pause");
@@ -458,7 +424,7 @@ export class ControllerApp {
   }
 
   bindSettings() {
-    const inputs = ["sensitivity", "smoothing", "invertY", "reticle", "reducedMotion", "subtitles"];
+    const inputs = ["sensitivity", "smoothing"];
     for (const key of inputs) {
       this.root.querySelector(`#${key}`).addEventListener("input", (event) => {
         this.settings[key] = event.target.type === "checkbox" ? event.target.checked : Number(event.target.value);
@@ -473,37 +439,13 @@ export class ControllerApp {
   handleDesktopEvent(event) {
     if (event.type === "control-feedback") {
       this.socket?.markApplied(event);
-      return;
     }
-    if (event.type !== "private-message") return;
-    this.root.querySelector("#message-text").textContent = event.text ?? "别回头";
-    this.messagePanel.hidden = false;
-    pulse([120, 80, 120, 80, 220]);
-    this.playRingtone();
   }
 
   ensureAudioContext() {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (AudioContext && !this.audioContext) this.audioContext = new AudioContext();
     this.audioContext?.resume();
-  }
-
-  playRingtone() {
-    this.ensureAudioContext();
-    if (!this.audioContext) return;
-    const start = this.audioContext.currentTime;
-    for (let index = 0; index < 4; index += 1) {
-      const oscillator = this.audioContext.createOscillator();
-      const gain = this.audioContext.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.value = index % 2 === 0 ? 620 : 780;
-      gain.gain.setValueAtTime(0.0001, start + index * 0.16);
-      gain.gain.exponentialRampToValueAtTime(0.16, start + index * 0.16 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + index * 0.16 + 0.13);
-      oscillator.connect(gain).connect(this.audioContext.destination);
-      oscillator.start(start + index * 0.16);
-      oscillator.stop(start + index * 0.16 + 0.14);
-    }
   }
 
   destroy() {

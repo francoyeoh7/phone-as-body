@@ -60,6 +60,7 @@ export class MotionController {
     this.suspended = false;
     this.destroyed = false;
     this.reorienting = false;
+    this.engaged = false;
     this.lastOrientation = null;
     this.lastOrientationTimestamp = null;
     this.previousGravity = null;
@@ -157,8 +158,13 @@ export class MotionController {
       const interval = this.lastOrientationTimestamp === null ? 0 : timestamp - this.lastOrientationTimestamp;
       this.lastOrientationTimestamp = timestamp;
       this.lastOrientation = quaternion;
-      const result = this.tracker.calibrated ? this.tracker.update(quaternion) : null;
-      if (result) this.onSample?.(result);
+      let result = null;
+      if (this.tracker.calibrated) {
+        result = this.tracker.update(quaternion);
+      } else if (this.engaged) {
+        this.tracker.calibrate(quaternion);
+      }
+      if (result && this.engaged) this.onSample?.(result);
       this.onTelemetry?.({
         alpha: Number.isFinite(event?.alpha) ? event.alpha : 0,
         beta: Number.isFinite(event?.beta) ? event.beta : 0,
@@ -166,11 +172,12 @@ export class MotionController {
         sensorHz: interval > 0 ? 1000 / interval : 0,
         physicalYaw: result?.physicalYaw ?? 0,
         physicalPitch: result?.physicalPitch ?? 0,
-        outputYaw: result?.yaw ?? 0,
-        outputPitch: result?.pitch ?? 0,
+        outputYaw: this.engaged ? result?.yaw ?? 0 : 0,
+        outputPitch: this.engaged ? result?.pitch ?? 0 : 0,
         roll: result?.roll ?? 0,
         transitionScale: result?.transitionScale ?? 0,
         calibrated: this.tracker.calibrated,
+        engaged: this.engaged,
       });
     }
   }
@@ -212,11 +219,26 @@ export class MotionController {
     return true;
   }
 
+  engage() {
+    if (this.destroyed || this.suspended || this.reorienting || !this.motionGranted) return false;
+    this.engaged = true;
+    if (!this.reset()) this.onSample?.(zeroViewDelta());
+    return true;
+  }
+
+  disengage() {
+    if (!this.engaged) return false;
+    this.engaged = false;
+    this.onSample?.(zeroViewDelta());
+    return true;
+  }
+
   suspend() {
     if (this.destroyed) return;
     this.lifecycleGeneration += 1;
     this.suspended = true;
     this.reorienting = false;
+    this.engaged = false;
     this.clearResumeTimer();
     this.tracker = createOrientationTracker();
     this.previousGravity = null;
@@ -244,6 +266,7 @@ export class MotionController {
   handleScreenOrientation() {
     if (this.destroyed || this.suspended) return;
     this.reorienting = true;
+    this.engaged = false;
     this.tracker = createOrientationTracker();
     this.onSample?.(zeroViewDelta());
     this.onState?.("reorienting");

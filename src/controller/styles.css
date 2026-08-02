@@ -39,7 +39,7 @@ button {
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: 1fr;
   min-height: 100dvh;
   padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   background:
@@ -49,15 +49,19 @@ button {
 }
 
 .controller-header {
+  position: absolute;
   z-index: 2;
+  top: max(14px, env(safe-area-inset-top));
+  right: 78px;
+  left: 78px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: 42px;
-  border-bottom: 1px solid #2a2d2b;
   color: #a8aaa3;
   font-size: 12px;
   text-transform: uppercase;
+  pointer-events: none;
 }
 
 .connection-state {
@@ -97,9 +101,22 @@ button {
 
 .play-surface {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(132px, 0.65fr);
   min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.play-surface > * {
+  pointer-events: none;
+}
+
+.play-surface .utility-controls,
+.play-surface .utility-controls button {
+  pointer-events: auto;
+}
+
+.play-surface .joystick-base {
+  pointer-events: none;
 }
 
 .utility-controls {
@@ -113,60 +130,43 @@ button {
 
 .motion-diagnostics {
   position: absolute;
-  z-index: 4;
-  top: 76px;
+  z-index: 2;
+  top: 14px;
   left: 0;
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 10px;
-  width: min(310px, 100%);
-  min-height: 126px;
-  padding: 9px;
+  width: 58px;
+  height: 58px;
+  padding: 0;
   border: 1px solid rgba(171, 177, 168, 0.28);
-  border-radius: 6px;
+  border-radius: 50%;
   color: #c8cbc3;
-  background: rgba(9, 12, 11, 0.86);
-  font: 500 10px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-variant-numeric: tabular-nums;
+  background: rgba(9, 12, 11, 0.66);
   pointer-events: none;
+}
+
+.motion-diagnostics[data-engaged="true"] {
+  border-color: rgba(210, 173, 99, 0.68);
 }
 
 .aim-plot {
   position: relative;
-  align-self: start;
-  width: 72px;
-  height: 72px;
+  width: 56px;
+  height: 56px;
   overflow: hidden;
-  border: 1px solid #3c413d;
-  background: #101312;
+  border-radius: 50%;
+  background: repeating-radial-gradient(circle, transparent 0 13px, rgba(190, 196, 186, 0.12) 14px 15px), linear-gradient(90deg, transparent 49.5%, rgba(190, 196, 186, 0.18) 50%, transparent 50.5%), linear-gradient(transparent 49.5%, rgba(190, 196, 186, 0.18) 50%, transparent 50.5%);
 }
 
 .plot-axis {
-  position: absolute;
-  background: rgba(190, 196, 186, 0.2);
-}
-
-.plot-axis-x {
-  top: 50%;
-  left: 6px;
-  width: 58px;
-  height: 1px;
-}
-
-.plot-axis-y {
-  top: 6px;
-  left: 50%;
-  width: 1px;
-  height: 58px;
+  display: none;
 }
 
 .physical-aim-dot,
 .output-aim-dot {
   position: absolute;
-  top: calc(50% - 4px);
-  left: calc(50% - 4px);
-  width: 8px;
-  height: 8px;
+  top: calc(50% - 3px);
+  left: calc(50% - 3px);
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   will-change: transform;
 }
@@ -177,96 +177,19 @@ button {
 }
 
 .output-aim-dot {
-  width: 5px;
-  height: 5px;
-  top: calc(50% - 2.5px);
-  left: calc(50% - 2.5px);
+  width: 4px;
+  height: 4px;
+  top: calc(50% - 2px);
+  left: calc(50% - 2px);
   background: #d2ad63;
 }
 
-.telemetry-grid {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  align-content: start;
-  gap: 2px 7px;
-  min-width: 0;
-  margin: 0;
-}
-
-.telemetry-grid dt {
-  color: #777d76;
-}
-
-.telemetry-grid dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: #e3e4dd;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-height: 520px) {
-  .motion-diagnostics {
-    top: 58px;
-    grid-template-columns: 62px minmax(0, 1fr);
-    width: min(285px, calc(100% - 116px));
-    min-height: 108px;
-    padding: 7px;
-  }
-
-  .aim-plot {
-    width: 60px;
-    height: 60px;
-  }
-}
-
-.icon-button,
-.action-button,
-.message-close {
-  display: inline-grid;
-  place-items: center;
-  width: 50px;
-  height: 50px;
-  padding: 0;
-  border: 1px solid #3b3e3a;
-  border-radius: 50%;
-  color: #e9e8df;
-  background: rgba(19, 22, 21, 0.92);
-}
-
-.icon-button:active,
-.action-button:active {
-  transform: scale(0.94);
-}
-
-.icon-button svg {
-  width: 21px;
-}
-
-.joystick-zone {
-  position: relative;
-  min-width: 0;
-  touch-action: none;
-}
-
-.joystick-zone::after {
-  position: absolute;
-  left: 28%;
-  bottom: 19%;
-  width: 84px;
-  height: 84px;
-  border: 1px dashed rgba(229, 230, 219, 0.12);
-  border-radius: 50%;
-  content: "";
-  transform: translate(-50%, 50%);
-}
-
+/* The touch surface is full-screen; this visual appears only during a drag. */
 .joystick-base {
   position: absolute;
-  z-index: 2;
-  left: 28%;
-  top: 81%;
+  z-index: 1;
+  left: 0;
+  top: 0;
   width: 142px;
   height: 142px;
   border: 1px solid rgba(220, 221, 211, 0.28);
@@ -276,12 +199,20 @@ button {
   opacity: 0;
   transform: translate(-50%, -50%) scale(0.88);
   transition: opacity 120ms ease, transform 120ms ease;
-  pointer-events: none;
 }
 
 .joystick-base.is-active {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
+}
+
+.play-surface[data-clutch="on"] .joystick-base.is-active {
+  border-color: rgba(242, 231, 182, 0.78);
+  box-shadow: inset 0 0 28px rgba(0, 0, 0, 0.42), 0 0 0 3px rgba(210, 173, 99, 0.12);
+}
+
+.play-surface[data-clutch="on"] .joystick-ring {
+  border-color: rgba(210, 173, 99, 0.48);
 }
 
 .joystick-ring {
@@ -305,44 +236,70 @@ button {
   will-change: transform;
 }
 
-.action-zone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 18px;
-  min-width: 132px;
-  padding: 80px 0 24px;
+.pause-menu {
+  touch-action: auto;
 }
 
-.action-button {
-  width: 76px;
-  height: 76px;
-}
-
-.action-button svg {
-  width: 28px;
-  height: 28px;
-}
-
-.flashlight-button.is-active {
-  color: #101211;
-  border-color: #f2e7b6;
-  background: #f2e7b6;
-  box-shadow: 0 0 28px rgba(242, 231, 182, 0.2);
-}
-
+/* Keep the full-screen gesture surface clear of permanent controls. */
+.action-zone,
+.joystick-zone,
+.telemetry-grid,
+.flashlight-button,
 .interact-button {
-  width: 94px;
-  height: 94px;
-  color: #14130f;
-  border-color: #c9a55b;
-  background: #c9a55b;
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.34);
+  display: none;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 48px;
+  margin-top: 24px;
+  padding: 0 18px;
+  border: 1px solid #454a43;
+  border-radius: 4px;
+  color: #d7d8d0;
+  background: #1d211e;
+}
+
+.secondary-button svg {
+  width: 17px;
+}
+
+@media (max-height: 520px) {
+  .motion-diagnostics {
+    top: 8px;
+  }
+
+  .utility-controls {
+    top: 8px;
+  }
+}
+
+.icon-button,
+.action-button {
+  display: inline-grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  padding: 0;
+  border: 1px solid #3b3e3a;
+  border-radius: 50%;
+  color: #e9e8df;
+  background: rgba(19, 22, 21, 0.92);
+}
+
+.icon-button:active,
+.action-button:active {
+  transform: scale(0.94);
+}
+
+.icon-button svg {
+  width: 21px;
 }
 
 .permission-panel,
-.private-message,
 .pause-menu {
   position: fixed;
   z-index: 20;
@@ -360,7 +317,6 @@ button {
 }
 
 .permission-panel[hidden],
-.private-message[hidden],
 .pause-menu[hidden] {
   display: none;
 }
@@ -418,37 +374,6 @@ button {
   color: #777a74;
   border-color: #30332f;
   background: #1b1e1c;
-}
-
-.private-message {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 32px;
-  color: #151515;
-  background: #e9e8df;
-}
-
-.private-message p {
-  margin: 0 0 10px;
-  color: #686960;
-  font-size: 13px;
-}
-
-.private-message strong {
-  max-width: 100%;
-  font-size: 40px;
-  font-weight: 640;
-  overflow-wrap: anywhere;
-}
-
-.message-close {
-  position: absolute;
-  top: max(18px, env(safe-area-inset-top));
-  right: max(18px, env(safe-area-inset-right));
-  color: #262723;
-  border-color: #bdbdb5;
-  background: transparent;
 }
 
 .pause-menu {
@@ -523,30 +448,14 @@ button {
 
 @media (orientation: landscape) and (max-height: 560px) {
   .controller-shell {
-    grid-template-rows: 36px 1fr;
+    grid-template-rows: 1fr;
     padding-top: max(6px, env(safe-area-inset-top));
     padding-bottom: max(6px, env(safe-area-inset-bottom));
   }
 
   .controller-header {
+    top: max(6px, env(safe-area-inset-top));
     min-height: 36px;
-  }
-
-  .play-surface {
-    grid-template-columns: 1fr 180px;
-  }
-
-  .action-zone {
-    flex-direction: row;
-    align-items: flex-end;
-    gap: 14px;
-    padding: 54px 0 14px;
-  }
-
-  .action-button,
-  .interact-button {
-    width: 74px;
-    height: 74px;
   }
 
   .utility-controls {

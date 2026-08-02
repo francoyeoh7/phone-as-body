@@ -52,11 +52,39 @@ describe("motion controller", () => {
     await harness.controller.requestPermission();
 
     harness.target.dispatch("deviceorientation", { quaternion: { x: 0, y: 0, z: 0, w: 1 } });
-    harness.controller.reset();
+    expect(harness.controller.engage).toBeTypeOf("function");
+    harness.controller.engage();
     harness.target.dispatch("deviceorientation", { quaternion: { x: 0, y: 0, z: Math.sin(Math.PI / 18), w: Math.cos(Math.PI / 18) } });
 
     expect(harness.samples.at(-1).yaw).toBeGreaterThan(0);
     expect(harness.samples.at(-1).pitch).toBe(0);
+  });
+
+  it("freezes released motion and recalibrates every engagement", async () => {
+    const harness = createController();
+    await harness.controller.requestPermission();
+    harness.target.dispatch("deviceorientation", { quaternion: { x: 0, y: 0, z: 0, w: 1 } });
+
+    expect(harness.controller.engage).toBeTypeOf("function");
+    expect(harness.controller.disengage).toBeTypeOf("function");
+    harness.controller.engage();
+    harness.target.dispatch("deviceorientation", {
+      quaternion: { x: 0, y: 0, z: Math.sin(Math.PI / 36), w: Math.cos(Math.PI / 36) },
+    });
+    expect(harness.samples.at(-1).yaw).toBeGreaterThan(0);
+
+    harness.controller.disengage();
+    const releasedSampleCount = harness.samples.length;
+    harness.target.dispatch("deviceorientation", {
+      quaternion: { x: 0, y: 0, z: -Math.sin(Math.PI / 18), w: Math.cos(Math.PI / 18) },
+    });
+    expect(harness.samples).toHaveLength(releasedSampleCount);
+
+    harness.controller.engage();
+    harness.target.dispatch("deviceorientation", {
+      quaternion: { x: 0, y: 0, z: -Math.sin(Math.PI / 12), w: Math.cos(Math.PI / 12) },
+    });
+    expect(harness.samples.at(-1).yaw).toBeLessThan(0);
   });
 
   it("reports raw sensor axes, physical aim, output, and sample rate", async () => {

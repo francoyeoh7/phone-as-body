@@ -37,7 +37,7 @@ Opening settings pauses locomotion, clears joystick engagement, and prevents bac
 
 Interaction uses one short tap anywhere on the play surface. There is no visible interaction button.
 
-The same surface also supports movement and view control. On pointer-down, the app records a floating joystick origin at the touch point. Once the pointer travels beyond the tap threshold, it becomes a drag: displacement from that origin is normalized and sent as movement, while the existing phone clutch is engaged so phone pose deltas control the view. Releasing resets movement to zero and disengages the clutch. The drag origin is visualized only while active with a small transient ring at the contact point; no permanent control panel occupies the surface.
+The same surface also supports movement and view control. On pointer-down, the app records a floating joystick origin at the touch point. Once the pointer travels beyond the tap threshold or remains held for `180 ms`, it becomes an active hold: displacement from that origin is normalized and sent as movement, while the existing phone clutch is engaged so phone pose deltas control the view. A stationary hold therefore permits turning in place. Releasing resets movement to zero and disengages the clutch. The drag origin is visualized only while active with a small transient ring at the contact point; no permanent control panel occupies the surface.
 
 A touch becomes an interaction only when all conditions are true:
 

@@ -1,6 +1,7 @@
 import { PhoneSession } from "./PhoneSession.js";
 import { PlayerController } from "./PlayerController.js";
 import { HorrorDirector } from "./HorrorDirector.js";
+import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { createDesktopUI } from "./ui.js";
@@ -21,7 +22,10 @@ export class DesktopApp {
     this.elapsed = 0;
     this.audio = createGameAudio();
     this.director = null;
+    this.shadowQuest = null;
     this.debugFrames = 0;
+    this.debugShadowAutoplay = import.meta.env.DEV && new URLSearchParams(location.search).has("playShadow");
+    this.debugShadowTriggered = false;
     this.lastFeedbackSequence = -1;
   }
 
@@ -61,10 +65,16 @@ export class DesktopApp {
       this.director = new HorrorDirector({
         experience: this.experience,
         ui: this.ui,
-        phone: this.phone,
         audio: this.audio,
         onComplete: () => this.completeGame(),
       });
+      this.shadowQuest = new ShadowQuestDirector({
+        experience: this.experience,
+        player: this.player,
+        ui: this.ui,
+        audio: this.audio,
+      });
+      this.applyDebugStart();
       this.ui.showLoading(false);
       this.lastFrame = performance.now();
       this.frame = requestAnimationFrame((time) => this.tick(time));
@@ -93,7 +103,21 @@ export class DesktopApp {
     if (action === "resume") this.setPaused(false);
   }
 
+  applyDebugStart() {
+    if (!import.meta.env.DEV || !new URLSearchParams(location.search).has("shadow")) return;
+    const translation = { x: 0, y: 1.05, z: -14.4 };
+    this.player.body.setTranslation?.(translation, true);
+    this.player.body.setNextKinematicTranslation?.(translation);
+    this.player.cameraYaw = Math.PI / 2;
+    this.player.cameraPitch = 0;
+    this.player.cameraRenderYaw = Math.PI / 2;
+    this.player.cameraRenderPitch = 0;
+    this.experience.camera.position.set(0, 1.6, -14.4);
+    this.experience.camera.rotation.set(0, Math.PI / 2, 0, "YXZ");
+  }
+
   handleInteraction(id) {
+    if (this.shadowQuest?.handleInteraction(id)) return;
     this.director?.handleInteraction(id);
   }
 
@@ -101,6 +125,7 @@ export class DesktopApp {
     this.ui.setConnected(connected);
     if (!this.started || this.fallback) return;
     if (!connected) {
+      this.shadowQuest?.abort();
       this.paused = true;
       this.player?.setPaused(true);
       this.ui.showPause(false);
@@ -133,7 +158,11 @@ export class DesktopApp {
       this.experience.world.step();
       this.player.syncAfterPhysics();
       this.experience.update(delta, this.elapsed);
-      this.director?.update(delta, this.elapsed);
+      this.shadowQuest?.update(delta, this.elapsed);
+      if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
+        this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");
+      }
+      if (!this.shadowQuest?.isCinematic()) this.director?.update(delta, this.elapsed);
       this.audio.update(delta, Math.hypot(this.player.velocity.x, this.player.velocity.z));
       if (import.meta.env.DEV) {
         const position = this.player.body.translation();
@@ -145,6 +174,7 @@ export class DesktopApp {
           pitch: Number((this.player.cameraPitch / (Math.PI / 180)).toFixed(1)),
           selected: this.player.selected?.id ?? null,
           objective: this.director?.story.current() ?? null,
+          shadowQuest: this.shadowQuest?.complete ? "complete" : this.shadowQuest?.isCinematic() ? "cinematic" : this.shadowQuest?.isAvailable() ? "available" : "hidden",
           delta: Number(delta.toFixed(4)),
           vx: Number(this.player.velocity.x.toFixed(2)),
           vz: Number(this.player.velocity.z.toFixed(2)),
@@ -153,7 +183,26 @@ export class DesktopApp {
       }
     }
     this.experience.renderer.render(this.experience.scene, this.experience.camera);
+    this.sampleDebugPixels();
     this.frame = requestAnimationFrame((nextTime) => this.tick(nextTime));
+  }
+
+  sampleDebugPixels() {
+    if (!import.meta.env.DEV || this.debugFrames % 60 !== 0) return;
+    const renderer = this.experience.renderer;
+    const gl = renderer.getContext();
+    const width = gl.drawingBufferWidth;
+    const height = gl.drawingBufferHeight;
+    const pixel = new Uint8Array(4);
+    const samples = [
+      [0.25, 0.5],
+      [0.5, 0.5],
+      [0.75, 0.5],
+    ].map(([x, y]) => {
+      gl.readPixels(Math.floor(width * x), Math.floor(height * y), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      return Array.from(pixel);
+    });
+    renderer.domElement.dataset.debugPixels = JSON.stringify(samples);
   }
 
   sendControlFeedback(input) {
@@ -171,6 +220,7 @@ export class DesktopApp {
 
   destroy() {
     cancelAnimationFrame(this.frame);
+    this.shadowQuest?.destroy();
     this.player?.destroy();
     this.experience?.dispose();
     this.audio.dispose();

@@ -11,28 +11,38 @@ function seededRandom(seed) {
 
 function makeTexture(base, accent, seed = 7) {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
+  canvas.width = 512;
+  canvas.height = 512;
   const context = canvas.getContext("2d");
   const random = seededRandom(seed);
   context.fillStyle = base;
-  context.fillRect(0, 0, 256, 256);
-  for (let index = 0; index < 340; index += 1) {
+  context.fillRect(0, 0, 512, 512);
+  for (let index = 0; index < 1600; index += 1) {
     const alpha = 0.035 + random() * 0.12;
     context.fillStyle = accent.replace("ALPHA", alpha.toFixed(3));
-    const x = random() * 256;
-    const y = random() * 256;
-    const size = 1 + random() * 12;
+    const x = random() * 512;
+    const y = random() * 512;
+    const size = 1 + random() * 10;
     context.fillRect(x, y, size, size * (0.4 + random() * 1.4));
   }
-  for (let index = 0; index < 14; index += 1) {
+  for (let index = 0; index < 28; index += 1) {
     context.strokeStyle = accent.replace("ALPHA", "0.13");
-    context.lineWidth = 1 + random() * 2;
+    context.lineWidth = 0.5 + random() * 1.8;
     context.beginPath();
-    context.moveTo(random() * 256, random() * 256);
-    context.lineTo(random() * 256, random() * 256);
+    context.moveTo(random() * 512, random() * 512);
+    context.lineTo(random() * 512, random() * 512);
     context.stroke();
   }
+  context.globalAlpha = 0.12;
+  context.strokeStyle = accent.replace("ALPHA", "1");
+  context.lineWidth = 1;
+  for (let x = 12; x < 512; x += 18 + random() * 24) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x + (random() - 0.5) * 5, 512);
+    context.stroke();
+  }
+  context.globalAlpha = 1;
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
@@ -40,8 +50,15 @@ function makeTexture(base, accent, seed = 7) {
   return texture;
 }
 
-function material(texture, roughness = 0.88, color = 0xffffff) {
-  return new THREE.MeshStandardMaterial({ map: texture, color, roughness, metalness: 0.04 });
+function material(texture, roughness = 0.88, color = 0xffffff, bumpScale = 0.055) {
+  return new THREE.MeshStandardMaterial({
+    map: texture,
+    color,
+    roughness,
+    metalness: 0.04,
+    bumpMap: texture,
+    bumpScale,
+  });
 }
 
 function box(scene, geometry, surface, position, rotation = null) {
@@ -116,6 +133,221 @@ function addInteractable(scene, id, label, position, geometry, surface) {
   return { id, label, root, mesh, halo, enabled: true };
 }
 
+function makeShadowTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.filter = "blur(10px)";
+  context.fillStyle = "rgba(0, 0, 0, 0.94)";
+  context.beginPath();
+  context.arc(128, 82, 40, 0, Math.PI * 2);
+  context.fill();
+  context.beginPath();
+  context.roundRect(76, 118, 104, 282, 44);
+  context.fill();
+  context.fillRect(55, 160, 44, 232);
+  context.fillRect(158, 160, 44, 232);
+  context.fillRect(78, 360, 42, 145);
+  context.fillRect(138, 360, 42, 145);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function makeFlashlightCookie() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  const gradient = context.createRadialGradient(128, 128, 16, 128, 128, 128);
+  gradient.addColorStop(0, "rgba(255,255,255,0.96)");
+  gradient.addColorStop(0.34, "rgba(255,248,224,0.82)");
+  gradient.addColorStop(0.72, "rgba(255,228,177,0.27)");
+  gradient.addColorStop(1, "rgba(0,0,0,0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 256, 256);
+  context.globalCompositeOperation = "screen";
+  context.globalAlpha = 0.08;
+  context.strokeStyle = "#fff4d5";
+  for (let index = 0; index < 18; index += 1) {
+    context.beginPath();
+    context.moveTo(44 + index * 10, 42);
+    context.lineTo(70 + index * 7, 214);
+    context.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.NoColorSpace;
+  return texture;
+}
+
+function createFlashlightRig(camera, target) {
+  const group = new THREE.Group();
+  group.name = "flashlight";
+
+  const flashlightTarget = new THREE.Object3D();
+  flashlightTarget.position.copy(target);
+  camera.add(flashlightTarget);
+  const core = new THREE.SpotLight(0xfff0c9, 26, 34, Math.PI / 6.8, 0.74, 1.7);
+  core.position.set(0, -0.05, 0);
+  core.target = flashlightTarget;
+  core.castShadow = true;
+  core.shadow.mapSize.set(512, 512);
+  core.shadow.bias = -0.00018;
+  core.shadow.normalBias = 0.024;
+  core.map = makeFlashlightCookie();
+  const spill = new THREE.SpotLight(0xffd6a0, 4.2, 18, Math.PI / 2.7, 0.98, 1.6);
+  spill.position.set(0, -0.04, 0);
+  spill.target = flashlightTarget;
+
+  const outerBeam = new THREE.Mesh(
+    new THREE.ConeGeometry(1.7, 8.2, 48, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd7a1,
+      transparent: true,
+      opacity: 0.026,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.BackSide,
+    }),
+  );
+  outerBeam.rotation.x = -Math.PI / 2;
+  outerBeam.position.set(0, -0.05, -4.45);
+  const innerBeam = new THREE.Mesh(
+    new THREE.ConeGeometry(0.76, 6.1, 40, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0xffedc4,
+      transparent: true,
+      opacity: 0.024,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.BackSide,
+    }),
+  );
+  innerBeam.rotation.x = -Math.PI / 2;
+  innerBeam.position.set(0, -0.05, -3.15);
+  group.add(core, spill, outerBeam, innerBeam);
+  camera.add(group);
+  return { group, core, spill, outerBeam, innerBeam, target: flashlightTarget };
+}
+
+function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial }) {
+  const root = new THREE.Group();
+  root.position.set(-2.5, 1.9, -14.4);
+  root.userData.interactableId = "shadow-window";
+
+  const glass = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 1.52, 2.24),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x526864,
+      transparent: true,
+      opacity: 0.2,
+      roughness: 0.26,
+      metalness: 0.08,
+      transmission: 0.16,
+      depthWrite: false,
+    }),
+  );
+  glass.position.x = -0.02;
+  root.add(glass);
+
+  for (const z of [-1.18, 1.18]) {
+    const upright = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.78, 0.12), trimMaterial);
+    upright.position.set(0.02, 0, z);
+    root.add(upright);
+  }
+  for (const y of [-0.83, 0.83]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 2.48), trimMaterial);
+    rail.position.set(0.02, y, 0);
+    root.add(rail);
+  }
+  const centerRail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.58, 0.07), metalMaterial);
+  centerRail.position.set(0.05, 0, 0);
+  root.add(centerRail);
+
+  const taskPoint = new THREE.Group();
+  taskPoint.position.set(0.12, 0.05, 0.48);
+  const reticleMaterial = new THREE.MeshBasicMaterial({
+    color: 0xe7dfb7,
+    transparent: true,
+    opacity: 0.92,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.14, 0.17, 32), reticleMaterial);
+  ring.rotation.y = Math.PI / 2;
+  taskPoint.add(ring);
+  const horizontal = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.46), reticleMaterial);
+  const vertical = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.46, 0.018), reticleMaterial);
+  taskPoint.add(horizontal, vertical);
+  taskPoint.visible = false;
+  root.add(taskPoint);
+  scene.add(root);
+
+  const oppositeCorridor = new THREE.Group();
+  const oppositeWall = new THREE.Mesh(new THREE.BoxGeometry(0.18, 3.35, 6.2), wallMaterial);
+  oppositeWall.position.set(-6.9, 1.58, -14.4);
+  const oppositeFloor = new THREE.Mesh(
+    new THREE.BoxGeometry(2.1, 0.16, 6.2),
+    new THREE.MeshStandardMaterial({ color: 0x1b201e, roughness: 0.94 }),
+  );
+  oppositeFloor.position.set(-5.94, -0.02, -14.4);
+  const oppositeCeiling = oppositeFloor.clone();
+  oppositeCeiling.position.y = 3.23;
+  const farLeft = new THREE.Mesh(new THREE.BoxGeometry(2.1, 3.35, 0.18), wallMaterial);
+  farLeft.position.set(-5.94, 1.58, -17.42);
+  const farRight = farLeft.clone();
+  farRight.position.z = -11.38;
+  oppositeCorridor.add(oppositeWall, oppositeFloor, oppositeCeiling, farLeft, farRight);
+
+  const operatingRoom = new THREE.Group();
+  operatingRoom.position.set(-6.78, 1.18, -12.62);
+  const operatingFrame = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.6, 1.5), metalMaterial);
+  const operatingDoor = new THREE.Mesh(
+    new THREE.BoxGeometry(0.08, 2.35, 1.24),
+    new THREE.MeshStandardMaterial({ color: 0x66736d, roughness: 0.47, metalness: 0.48 }),
+  );
+  operatingDoor.position.x = 0.08;
+  const doorWindow = new THREE.Mesh(
+    new THREE.BoxGeometry(0.035, 0.74, 0.55),
+    new THREE.MeshStandardMaterial({ color: 0x9cae9f, emissive: 0x536d5f, emissiveIntensity: 0.5, roughness: 0.18 }),
+  );
+  doorWindow.position.set(0.05, 0.38, 0);
+  operatingDoor.add(doorWindow);
+  operatingRoom.add(operatingFrame, operatingDoor);
+  oppositeCorridor.add(operatingRoom);
+
+  const shadowFigure = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: makeShadowTexture(),
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+  }));
+  shadowFigure.position.set(-6.62, 1.22, -16.4);
+  shadowFigure.scale.set(0.95, 2.42, 1);
+  shadowFigure.visible = false;
+  oppositeCorridor.add(shadowFigure);
+
+  const oppositeLight = new THREE.RectAreaLight(0xa7b2a2, 2.2, 1.4, 0.35);
+  oppositeLight.position.set(-6.15, 2.9, -14.5);
+  oppositeLight.rotation.set(0, Math.PI / 2, 0);
+  oppositeCorridor.add(oppositeLight);
+  scene.add(oppositeCorridor);
+
+  const window = {
+    id: "shadow-window",
+    label: "观察窗",
+    root,
+    mesh: glass,
+    halo: null,
+    enabled: false,
+  };
+  return { window, taskPoint, oppositeCorridor, operatingRoom, operatingDoor, shadowFigure };
+}
+
 export async function createScene(host) {
   await RAPIER.init();
   const scene = new THREE.Scene();
@@ -137,11 +369,11 @@ export async function createScene(host) {
   host.replaceChildren(renderer.domElement);
 
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
-  const wallTexture = makeTexture("#363b37", "rgba(220, 222, 203, ALPHA)", 12);
+  const wallTexture = makeTexture("#454a45", "rgba(220, 222, 203, ALPHA)", 12);
   wallTexture.repeat.set(2.2, 7);
-  const floorTexture = makeTexture("#1c211f", "rgba(193, 187, 155, ALPHA)", 32);
+  const floorTexture = makeTexture("#252a27", "rgba(193, 187, 155, ALPHA)", 32);
   floorTexture.repeat.set(12, 55);
-  const ceilingTexture = makeTexture("#242a27", "rgba(219, 223, 206, ALPHA)", 4);
+  const ceilingTexture = makeTexture("#2d332f", "rgba(219, 223, 206, ALPHA)", 4);
   ceilingTexture.repeat.set(12, 55);
   const doorTexture = makeTexture("#242322", "rgba(181, 155, 103, ALPHA)", 27);
   doorTexture.repeat.set(1, 2);
@@ -157,13 +389,19 @@ export async function createScene(host) {
 
   box(scene, new THREE.BoxGeometry(5.2, 0.3, 32), floorMaterial, [0, -0.15, -13]);
   box(scene, new THREE.BoxGeometry(5.2, 0.3, 32), ceilingMaterial, [0, 3.55, -13]);
-  box(scene, new THREE.BoxGeometry(0.3, 3.6, 32), wallMaterial, [-2.65, 1.7, -13]);
+  box(scene, new THREE.BoxGeometry(0.3, 3.6, 16.35), wallMaterial, [-2.65, 1.7, -5.075]);
+  box(scene, new THREE.BoxGeometry(0.3, 3.6, 13.55), wallMaterial, [-2.65, 1.7, -22.325]);
+  box(scene, new THREE.BoxGeometry(0.3, 1.225, 2.3), wallMaterial, [-2.65, 0.5125, -14.4]);
+  box(scene, new THREE.BoxGeometry(0.3, 0.825, 2.3), wallMaterial, [-2.65, 3.0875, -14.4]);
   box(scene, new THREE.BoxGeometry(0.3, 3.6, 32), wallMaterial, [2.65, 1.7, -13]);
   box(scene, new THREE.BoxGeometry(5.2, 3.6, 0.3), wallMaterial, [0, 1.7, 3.1]);
   box(scene, new THREE.BoxGeometry(5.2, 3.6, 0.3), wallMaterial, [0, 1.7, -29.1]);
   addFixedCollider(world, 0, -0.15, -13, 2.6, 0.15, 16.2);
   addFixedCollider(world, 0, 3.55, -13, 2.6, 0.15, 16.2);
-  addFixedCollider(world, -2.65, 1.7, -13, 0.15, 1.8, 16.2);
+  addFixedCollider(world, -2.65, 1.7, -5.075, 0.15, 1.8, 8.175);
+  addFixedCollider(world, -2.65, 1.7, -22.325, 0.15, 1.8, 6.775);
+  addFixedCollider(world, -2.65, 0.5125, -14.4, 0.15, 0.6125, 1.15);
+  addFixedCollider(world, -2.65, 3.0875, -14.4, 0.15, 0.4125, 1.15);
   addFixedCollider(world, 2.65, 1.7, -13, 0.15, 1.8, 16.2);
   addFixedCollider(world, 0, 1.7, 3.1, 2.6, 1.8, 0.15);
   addFixedCollider(world, 0, 1.7, -29.1, 2.6, 1.8, 0.15);
@@ -173,10 +411,33 @@ export async function createScene(host) {
     addDoor(scene, 2.47, z - 2.2, -1, doorMaterial, trimMaterial);
   }
 
+  const wallSeamMaterial = new THREE.MeshStandardMaterial({ color: 0x272c29, roughness: 0.58, metalness: 0.32 });
+  for (const side of [-1, 1]) {
+    for (const z of [-3.95, -9.15, -14.4, -19.65, -24.85]) {
+      box(scene, new THREE.BoxGeometry(0.035, 2.88, 0.028), wallSeamMaterial, [side * 2.47, 1.7, z]);
+    }
+    box(scene, new THREE.BoxGeometry(0.045, 0.12, 31.2), wallSeamMaterial, [side * 2.47, 0.16, -13]);
+    box(scene, new THREE.BoxGeometry(0.045, 0.08, 31.2), wallSeamMaterial, [side * 2.47, 3.2, -13]);
+  }
+
   const windowGlass = new THREE.MeshStandardMaterial({ color: 0x172827, emissive: 0x0c2525, emissiveIntensity: 0.7, roughness: 0.28, metalness: 0.18 });
-  for (const z of [-4.2, -14.4, -24.6]) {
+  for (const z of [-4.2, -24.6]) {
     box(scene, new THREE.BoxGeometry(0.07, 1.25, 1.75), windowGlass, [-2.45, 1.9, z]);
     for (const offset of [-0.78, 0.78]) box(scene, new THREE.BoxGeometry(0.09, 1.35, 0.06), trimMaterial, [-2.38, 1.9, z + offset]);
+  }
+
+  const shadowQuest = createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial });
+
+  for (const side of [-1, 1]) {
+    box(scene, new THREE.BoxGeometry(0.08, 0.09, 30.8), darkMetalMaterial, [side * 2.46, 0.92, -13]);
+    const conduit = box(
+      scene,
+      new THREE.CylinderGeometry(0.026, 0.026, 30.5, 10),
+      darkMetalMaterial,
+      [side * 2.43, 3.02, -13],
+      [Math.PI / 2, 0, 0],
+    );
+    conduit.castShadow = false;
   }
 
   const ceilingLights = [];
@@ -187,7 +448,7 @@ export async function createScene(host) {
       new THREE.MeshStandardMaterial({ color: 0x9b9f91, emissive: 0x7e8a73, emissiveIntensity: 1.1, roughness: 0.42 }),
       [0, 3.37, z],
     );
-    const light = new THREE.PointLight(0x9aa990, 0.68, 7, 2.1);
+    const light = new THREE.PointLight(0x9aa990, 0.8, 7, 2.1);
     light.position.set(0, 3.05, z);
     scene.add(light);
     ceilingLights.push(light);
@@ -195,7 +456,7 @@ export async function createScene(host) {
 
   const emergencyLights = [];
   for (const z of [-3.2, -13.2, -23.2]) {
-    const light = new THREE.PointLight(0xb24c36, 0.78, 9, 2);
+    const light = new THREE.PointLight(0xb24c36, 0.86, 9, 2);
     light.position.set(0, 2.6, z);
     scene.add(light);
     emergencyLights.push(light);
@@ -204,50 +465,16 @@ export async function createScene(host) {
   const stormLight = new THREE.DirectionalLight(0x9bbcc2, 0);
   stormLight.position.set(-5, 4, -10);
   scene.add(stormLight);
-  const hemi = new THREE.HemisphereLight(0x687a70, 0x101313, 0.46);
+  const hemi = new THREE.HemisphereLight(0x687a70, 0x151816, 0.72);
   scene.add(hemi);
+  scene.add(new THREE.AmbientLight(0x242a26, 0.16));
 
-  const flashlightTarget = new THREE.Object3D();
-  flashlightTarget.position.set(0, -0.08, -9);
-  camera.add(flashlightTarget);
-  const flashlightGroup = new THREE.Group();
-  flashlightGroup.name = "flashlight";
-  const flashlight = new THREE.SpotLight(0xfff1cf, 7.2, 26, 0.46, 0.52, 1.18);
-  flashlight.position.set(0.06, -0.03, 0.02);
-  flashlight.castShadow = true;
-  flashlight.shadow.mapSize.set(512, 512);
-  flashlight.target = flashlightTarget;
-  const flashlightSpill = new THREE.SpotLight(0xffdca2, 1.8, 13, 0.92, 0.9, 1.05);
-  flashlightSpill.position.set(0.02, -0.02, 0.02);
-  flashlightSpill.target = flashlightTarget;
-  const beam = new THREE.Mesh(
-    new THREE.ConeGeometry(2.5, 8, 32, 1, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xffe7b4,
-      transparent: true,
-      opacity: 0.055,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-  );
-  beam.rotation.x = -Math.PI / 2;
-  beam.position.set(0.02, -0.03, -4);
-  flashlightGroup.add(flashlight, flashlightSpill, beam);
-  camera.add(flashlightGroup);
+  const flashlightRig = createFlashlightRig(camera, new THREE.Vector3(0, -0.05, -9));
+  const flashlightGroup = flashlightRig.group;
+  const flashlight = flashlightRig.core;
+  const flashlightSpill = flashlightRig.spill;
+  const beam = flashlightRig.outerBeam;
   scene.add(camera);
-
-  const dustPositions = new Float32Array(220 * 3);
-  const random = seededRandom(108);
-  for (let index = 0; index < 220; index += 1) {
-    dustPositions[index * 3] = (random() - 0.5) * 4.4;
-    dustPositions[index * 3 + 1] = 0.2 + random() * 2.9;
-    dustPositions[index * 3 + 2] = 2.4 - random() * 30;
-  }
-  const dustGeometry = new THREE.BufferGeometry();
-  dustGeometry.setAttribute("position", new THREE.BufferAttribute(dustPositions, 3));
-  const dust = new THREE.Points(dustGeometry, new THREE.PointsMaterial({ color: 0xb0b6a8, size: 0.012, transparent: true, opacity: 0.25 }));
-  scene.add(dust);
 
   const fuse = addInteractable(scene, "fuse", "拾取备用保险丝", [-1.78, 1.25, -8.6], new THREE.BoxGeometry(0.16, 0.42, 0.16), new THREE.MeshStandardMaterial({ color: 0xe7d5a3, emissive: 0xa9813d, emissiveIntensity: 0.55, roughness: 0.44 }));
   fuse.root.rotation.z = -0.22;
@@ -299,7 +526,7 @@ export async function createScene(host) {
   silhouette.visible = false;
   scene.add(silhouette);
 
-  const interactables = [fuse, panel, elevator];
+  const interactables = [fuse, panel, elevator, shadowQuest.window];
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -315,9 +542,8 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
-    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, dust, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse },
+    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse, shadowQuest },
     update(delta, elapsed) {
-      dust.rotation.y += delta * 0.006;
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
       for (const light of emergencyLights) light.intensity = pulse;
     },

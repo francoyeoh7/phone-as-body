@@ -126,9 +126,19 @@ describe("phone aiming orientation", () => {
 
     expect(outward.reduce((sum, sample) => sum + sample.yaw, 0)).toBeCloseTo(80, 3);
     expect(Math.max(...outward.map((sample) => Math.abs(sample.yaw)))).toBeLessThanOrEqual(16.001);
-    expect(returning.every((sample) => sample.yaw === 0)).toBe(true);
+    expect(returning.reduce((sum, sample) => sum + sample.yaw, 0)).toBeCloseTo(-80, 3);
+    expect([...outward, ...returning].reduce((sum, sample) => sum + sample.yaw, 0)).toBeCloseTo(0, 3);
     expect(outward.at(-1).physicalYaw).toBeCloseTo(20, 6);
     expect(outward.at(-1).physicalPitch).toBeCloseTo(0, 6);
+  });
+
+  it("maps a 20-degree sweep to 60 degrees at the default gain", () => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0 });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 });
+
+    const result = tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, 20));
+
+    expect(result.yaw).toBeCloseTo(60, 3);
   });
 
   it("suppresses natural sub-degree hand tremor", () => {
@@ -142,13 +152,13 @@ describe("phone aiming orientation", () => {
     expect(output.every((sample) => sample.yaw === 0 && sample.pitch === 0)).toBe(true);
   });
 
-  it("does not reverse the camera when the player returns to neutral", () => {
+  it("reverses the camera when the player returns while still engaged", () => {
     const tracker = createOrientationTracker({ smoothingStrength: 0, gain: 4 });
     tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 });
 
     expect(tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, 20)).yaw).toBeCloseTo(80, 3);
-    expect(tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, 8)).yaw).toBe(0);
-    expect(tracker.update({ x: 0, y: 0, z: 0, w: 1 }).yaw).toBe(0);
+    expect(tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, 8)).yaw).toBeCloseTo(-48, 3);
+    expect(tracker.update({ x: 0, y: 0, z: 0, w: 1 }).yaw).toBeCloseTo(-32, 3);
     expect(tracker.update(axisQuaternion({ x: 0, y: 0, z: -1 }, 20)).yaw).toBeCloseTo(-80, 3);
   });
 
@@ -167,5 +177,19 @@ describe("phone aiming orientation", () => {
       axisQuaternion({ x: 0, y: 1, z: 0 }, 40),
     );
     expect(tracker.update(deliberateAimChange).yaw).toBeCloseTo(48, 3);
+  });
+
+  it("does not leave a residual turn after roll suppression returns to neutral", () => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0, gain: 4 });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 });
+
+    const grip = axisQuaternion({ x: 0, y: 1, z: 0 }, 40);
+    const samples = [
+      multiplyQuaternions(axisQuaternion({ x: 0, y: 0, z: 1 }, 2), grip),
+      multiplyQuaternions(axisQuaternion({ x: 0, y: 0, z: 1 }, 12), grip),
+      { x: 0, y: 0, z: 0, w: 1 },
+    ].map((sample) => tracker.update(sample));
+
+    expect(samples.reduce((sum, sample) => sum + sample.yaw, 0)).toBeCloseTo(0, 3);
   });
 });

@@ -16,7 +16,6 @@ function createHarness() {
     setPrompt: vi.fn(),
     setSubtitle: vi.fn(),
   };
-  const phone = { send: vi.fn() };
   const audio = { cue: vi.fn() };
   const onComplete = vi.fn();
   const experience = {
@@ -39,8 +38,8 @@ function createHarness() {
     },
   };
   experience.objects.elevator.root.visible = false;
-  const director = new HorrorDirector({ experience, ui, phone, audio, onComplete });
-  return { director, experience, ui, phone, audio, onComplete };
+  const director = new HorrorDirector({ experience, ui, audio, onComplete });
+  return { director, experience, ui, audio, onComplete };
 }
 
 describe("horror director", () => {
@@ -52,14 +51,11 @@ describe("horror director", () => {
     expect(ui.setSubtitle).toHaveBeenCalled();
   });
 
-  it("drives the phone message, power restoration, and escape ending", () => {
-    const { director, experience, phone, onComplete } = createHarness();
+  it("drives power restoration and the escape ending without phone messages", () => {
+    const { director, experience, onComplete } = createHarness();
 
     expect(director.handleInteraction("fuse")).toBe(true);
     expect(experience.objects.fuse.root.visible).toBe(false);
-    director.update(0.016, 1.2);
-    expect(phone.send).toHaveBeenCalledWith({ type: "private-message", text: "别回头" });
-
     expect(director.handleInteraction("panel")).toBe(true);
     expect(experience.objects.elevator.root.visible).toBe(true);
     expect(experience.world.removeCollider).toHaveBeenCalledOnce();

@@ -13,6 +13,7 @@ export class ControllerSocket {
     this.sequence = 0;
     this.latest = {
       move: { x: 0, y: 0 },
+      clutch: false,
     };
     this.pendingViewDelta = { yaw: 0, pitch: 0 };
     this.sentAtBySequence = new Map();
@@ -43,6 +44,8 @@ export class ControllerSocket {
     });
     this.socket.on("disconnect", () => {
       this.joined = false;
+      this.latest = { move: { x: 0, y: 0 }, clutch: false };
+      this.clearPendingViewDelta();
       this.onStatus?.("disconnected");
     });
     this.socket.on("connect_error", () => this.onStatus?.("connect-error"));
@@ -61,7 +64,8 @@ export class ControllerSocket {
   }
 
   setInput(input, { immediate = false } = {}) {
-    if (input.move) this.latest = { move: { ...input.move } };
+    if (input.move) this.latest.move = { ...input.move };
+    if (typeof input.clutch === "boolean") this.latest.clutch = input.clutch;
     if (input.viewDelta) {
       const delta = input.viewDelta;
       this.pendingViewDelta = {
