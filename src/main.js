@@ -12,6 +12,12 @@ if (import.meta.env.DEV && location.pathname === "/visual-test") {
     if (import.meta.env.DEV) window.__corridorController = app;
     app.mount();
   });
+} else if (location.pathname === "/ue-bridge") {
+  import("./ue-bridge/UeBridgeApp.js").then(({ UeBridgeApp }) => {
+    const app = new UeBridgeApp(root);
+    if (import.meta.env.DEV) window.__corridorUeBridge = app;
+    app.mount();
+  });
 } else {
   import("./desktop/DesktopApp.js").then(({ DesktopApp }) => {
     const app = new DesktopApp(root);

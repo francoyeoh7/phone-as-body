@@ -4,6 +4,7 @@ import path from "node:path";
 import express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import { createSessionRegistry } from "./session-registry.js";
+import { createUeBridge } from "./ue-bridge.js";
 import { EVENTS, isDesktopEvent, isRoomCode } from "../src/shared/protocol.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -11,12 +12,27 @@ const app = express();
 const server = createServer(app);
 const io = new SocketIOServer(server, { serveClient: false });
 const sessions = createSessionRegistry();
-const port = Number(process.env.PORT) || 4173;
+const port = Number(process.env.PORT) || 4174;
 const publicControllerOrigin = process.env.PUBLIC_CONTROLLER_ORIGIN || null;
 const publicControllerHost = publicControllerOrigin ? new URL(publicControllerOrigin).hostname : null;
+const ueBridge = createUeBridge();
+
+app.use(express.json({ limit: "64kb" }));
 
 app.get("/api/config", (_request, response) => {
   response.json({ controllerOrigin: publicControllerOrigin });
+});
+
+app.get("/api/ue-bridge/config", (_request, response) => {
+  response.json({ target: ueBridge.target });
+});
+
+app.post("/api/ue-bridge/input", (request, response) => {
+  response.json({ ok: ueBridge.sendInput(request.body) });
+});
+
+app.post("/api/ue-bridge/action", (request, response) => {
+  response.json({ ok: ueBridge.sendAction(request.body) });
 });
 
 io.on("connection", (socket) => {
