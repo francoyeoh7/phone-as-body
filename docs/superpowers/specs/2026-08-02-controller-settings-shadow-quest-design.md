@@ -14,14 +14,14 @@ Camera smoothing also lives only in the desktop presentation layer. Incoming del
 
 ## Phone UI
 
-The play screen prioritizes uninterrupted touch space:
+The play screen is one unified interaction surface:
 
 - A compact gyro radar sits in the upper-left corner. Numeric sensor, network, clutch, and camera telemetry is removed.
 - The existing pause control becomes a settings control in the upper-right corner.
 - Recenter moves into the settings sheet so it no longer occupies the play surface.
 - The flashlight and interaction icon buttons are removed.
-- The movement joystick remains in the lower-left and keeps its existing clutch behavior.
-- The rest of the play surface is a large, visually empty interaction area.
+- There is no fixed joystick zone. Any point on the play surface can start the same movement gesture.
+- The radar and settings control are visual overlays with pointer events disabled or explicitly excluded; they must not reduce the usable area.
 
 The settings sheet contains only:
 
@@ -35,17 +35,19 @@ Opening settings pauses locomotion, clears joystick engagement, and prevents bac
 
 ## Single-Tap Interaction
 
-Interaction uses one short tap on the empty play surface. There is no visible interaction button.
+Interaction uses one short tap anywhere on the play surface. There is no visible interaction button.
+
+The same surface also supports movement and view control. On pointer-down, the app records a floating joystick origin at the touch point. Once the pointer travels beyond the tap threshold, it becomes a drag: displacement from that origin is normalized and sent as movement, while the existing phone clutch is engaged so phone pose deltas control the view. Releasing resets movement to zero and disengages the clutch. The drag origin is visualized only while active with a small transient ring at the contact point; no permanent control panel occupies the surface.
 
 A touch becomes an interaction only when all conditions are true:
 
-- It starts and ends outside the joystick, settings control, settings sheet, and permission overlays.
+- It starts and ends outside the settings control, settings sheet, and permission overlays.
 - The same pointer ends within `240 ms`.
 - Travel from touch-down to touch-up is at most `10 CSS px`.
 - No second pointer joined the gesture.
 - The pointer was not canceled and the page did not lose visibility.
 
-The action fires on pointer-up, followed by a short haptic pulse when supported. Holding, dragging, joystick use, settings use, multitouch, and canceled gestures never interact. These thresholds make the interaction intentionally distinct from the controller’s press-and-drag gestures.
+The action fires on pointer-up, followed by a short haptic pulse when supported. Holding past the time threshold, dragging past the distance threshold, settings use, multitouch, and canceled gestures never interact. The pointer classifier must transition from `tap-candidate` to `dragging` on the first threshold crossing and never reclassify that gesture as a tap.
 
 The iPhone hardware Volume Down button is not a supported primary input. Mobile Safari does not reliably expose the physical button to a web page, and the browser Media Session API has no volume-button action. A future native iOS wrapper may revisit that option, but the web demo must not depend on it.
 
@@ -92,8 +94,9 @@ The player cannot retrigger, move, recenter, open settings, or activate a main-s
 
 ## Component Boundaries
 
-- `ControllerApp` owns the simplified UI, settings persistence, and tap recognizer.
+- `ControllerApp` owns the simplified UI, settings persistence, and the unified tap/drag gesture classifier.
 - `MotionDiagnostics` renders only the compact radar.
+- `VirtualJoystick` becomes a full-surface floating joystick gesture helper and owns only pointer-to-movement normalization and visual transient state.
 - `PlayerController` owns target camera angles, rendered camera smoothing, sensitivity scaling, temporary aim assist, and cinematic input locking.
 - A dedicated `ShadowQuestDirector` owns side-quest eligibility, task-point visibility, cinematic timing, silhouette motion, completion, and restoration.
 - `createScene` creates the refined corridor, observation window, opposite corridor, operating room, task-point object, and cinematic figure.
@@ -114,7 +117,7 @@ This separation keeps the accepted orientation pipeline isolated and makes the s
 
 - Orientation and motion tests remain unchanged and continue to pass.
 - Player-controller tests prove default sensitivity preserves current accumulated angles, zero smoothing is immediate, smoothing converges without losing total angle, and frame rate does not change the result materially.
-- Controller tests prove the simplified UI, settings persistence, compact radar, and every tap threshold/cancellation case.
+- Controller and gesture tests prove the simplified UI, settings persistence, compact radar, full-surface floating movement, and every tap threshold/cancellation case.
 - Shadow-quest tests prove eligibility requires distance plus flashlight aim, aim assist is bounded, interaction is one-shot, controls lock during the cinematic, and the exact saved pose is restored.
 - Main-story tests prove fuse, panel, elevator, and existing silhouette behavior still work.
 - Production build and full unit suite pass.
