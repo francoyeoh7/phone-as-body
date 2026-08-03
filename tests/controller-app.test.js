@@ -25,6 +25,7 @@ function createApp({ motionEnabled = true } = {}) {
     motion,
     cameraMotion,
     haptics: { start: vi.fn(), stop: vi.fn() },
+    foundPhoneUI: { element: { hidden: true }, setActive: vi.fn(), destroy: vi.fn() },
     hapticsActive: true,
     foreground: true,
     connectionState: "joined",
@@ -263,6 +264,40 @@ describe("controller app lifecycle", () => {
     expect(haptics.stop).toHaveBeenCalled();
   });
 
+  it("opens the found phone UI from a desktop event and stops brace haptics", () => {
+    const { app, haptics } = createApp();
+
+    app.handleDesktopEvent({ type: "found-phone-ui", active: true });
+
+    expect(app.foundPhoneUI.setActive).toHaveBeenCalledWith(true);
+    expect(haptics.stop).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["manual pause", (app) => app.setPaused(true)],
+    ["background", (app) => app.suspendForBackground()],
+  ])("closes the found phone UI during %s cleanup", async (_name, cleanup) => {
+    const { app } = createApp();
+
+    await cleanup(app);
+
+    expect(app.foundPhoneUI.setActive).toHaveBeenCalledWith(false);
+  });
+
+  it("closes the found phone UI when destroyed", () => {
+    vi.stubGlobal("document", { removeEventListener: vi.fn() });
+    vi.stubGlobal("window", { clearTimeout: vi.fn(), removeEventListener: vi.fn() });
+    const { app } = createApp();
+    app.joystick.destroy = vi.fn();
+    app.diagnostics.destroy = vi.fn();
+    app.socket.destroy = vi.fn();
+    app.destroy = ControllerApp.prototype.destroy.bind(app);
+
+    app.destroy();
+
+    expect(app.foundPhoneUI.setActive).toHaveBeenCalledWith(false);
+  });
+
   it("stops haptics when the peer disconnects", () => {
     const { app, haptics } = createApp();
 
@@ -300,6 +335,7 @@ describe("controller app lifecycle", () => {
       lifecycleGeneration: 0,
       calibrationTimer: null,
       haptics,
+      foundPhoneUI: { element: { hidden: true }, setActive: vi.fn(), destroy: vi.fn() },
       hapticsActive: true,
       foreground: true,
       connectionState: "joined",

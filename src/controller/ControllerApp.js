@@ -1,6 +1,8 @@
 import {
   createIcons,
   Crosshair,
+  ChevronLeft,
+  ChevronRight,
   RotateCcw,
   Settings,
   Wifi,
@@ -10,12 +12,13 @@ import { isRoomCode } from "../shared/protocol.js";
 import { BraceHaptics } from "./BraceHaptics.js";
 import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { ControllerSocket } from "./ControllerSocket.js";
+import { FoundPhoneUI } from "./FoundPhoneUI.js";
 import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
 import "./styles.css";
 
-const icons = { Crosshair, RotateCcw, Settings, Wifi, X };
+const icons = { ChevronLeft, ChevronRight, Crosshair, RotateCcw, Settings, Wifi, X };
 
 const defaultSettings = {
   sensitivity: 1,
@@ -129,7 +132,27 @@ export class ControllerApp {
           </label>
           <button class="secondary-button" id="recenter" type="button"><i data-lucide="crosshair"></i><span>重新校准方向</span></button>
         </div>
-      </main>`;
+      </main>
+
+      <section class="found-phone-ui" id="found-phone-ui" aria-label="拾获的手机" hidden>
+        <div class="found-phone-chassis">
+          <div class="found-phone-speaker" aria-hidden="true"></div>
+          <header class="found-phone-header">
+            <span class="found-phone-status">617</span>
+            <span data-phone-page aria-live="polite"></span>
+          </header>
+          <div class="found-phone-content" aria-live="polite">
+            <p class="found-phone-kind">已恢复资料</p>
+            <h2 data-phone-title></h2>
+            <p data-phone-body></p>
+          </div>
+          <footer class="found-phone-footer">
+            <button class="found-phone-nav" data-phone-previous type="button" aria-label="上一页"><i data-lucide="chevron-left"></i></button>
+            <span>向左或向右翻阅</span>
+            <button class="found-phone-nav" data-phone-next type="button" aria-label="下一页"><i data-lucide="chevron-right"></i></button>
+          </footer>
+        </div>
+      </section>`;
 
     createIcons({ icons, attrs: { "stroke-width": 1.8 } });
     this.cacheElements();
@@ -151,6 +174,7 @@ export class ControllerApp {
     this.enableMotion = this.root.querySelector("#enable-motion");
     this.pauseMenu = this.root.querySelector("#settings-menu");
     this.playSurface = this.root.querySelector(".play-surface");
+    this.foundPhoneUI = new FoundPhoneUI(this.root.querySelector("#found-phone-ui"));
     this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
   }
 
@@ -166,14 +190,14 @@ export class ControllerApp {
         pulse();
         this.socket?.sendAction("interact");
       },
-      onIgnoreTarget: (target) => Boolean(target?.closest?.("button, input, .pause-menu, .permission-panel")),
+      onIgnoreTarget: (target) => Boolean(target?.closest?.("button, input, .pause-menu, .permission-panel, .found-phone-ui")),
     });
     this.motion = new MotionController({
       onSample: (viewDelta) => this.handleMotionSample(viewDelta),
       onTelemetry: (telemetry) => this.diagnostics.updateSensor(telemetry),
       onState: (state) => this.handleMotionState(state),
     });
-    this.haptics = new BraceHaptics();
+    this.haptics = new BraceHaptics({ onFallbackPulse: () => this.foundPhoneUI?.pulseBraceImpact() });
     this.cameraMotion = new CameraMotionDetector({
       onPulse: () => this.handleCameraMotion(),
       onPresence: (presence) => this.handleCameraPresence(presence),
@@ -227,6 +251,7 @@ export class ControllerApp {
     } else if (state !== "joined") {
       this.hapticsActive = false;
       this.haptics?.stop();
+      this.foundPhoneUI?.setActive(false);
     }
     if (state !== "joined") this.cameraMotion?.setFocused(false);
     this.connectionLabel.textContent = labels[state] ?? "等待连接";
@@ -383,6 +408,7 @@ export class ControllerApp {
     this.motion?.suspend();
     this.cameraMotion?.suspend();
     this.haptics?.stop();
+    this.foundPhoneUI?.setActive(false);
     this.socket?.sendAction("pause");
   }
 
@@ -460,6 +486,7 @@ export class ControllerApp {
       this.motion?.suspend();
       this.cameraMotion?.suspend();
       this.haptics?.stop();
+      this.foundPhoneUI?.setActive(false);
       this.socket?.sendAction("pause");
       pulse();
       return;
@@ -508,7 +535,12 @@ export class ControllerApp {
     }
     if (event.type === "haptics") {
       if (!event.active || event.pattern !== "brace") this.haptics?.stop();
-      else if (this.hapticsActive) this.haptics?.start();
+      else if (this.hapticsActive && this.foundPhoneUI?.element?.hidden !== false) this.haptics?.start();
+      return;
+    }
+    if (event.type === "found-phone-ui") {
+      this.foundPhoneUI?.setActive(Boolean(event.active));
+      if (event.active) this.haptics?.stop();
     }
   }
 
@@ -523,6 +555,7 @@ export class ControllerApp {
     this.destroyed = true;
     this.hapticsActive = false;
     this.haptics?.stop();
+    this.foundPhoneUI?.setActive(false);
     window.clearTimeout(this.calibrationTimer);
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);
@@ -530,6 +563,7 @@ export class ControllerApp {
     this.joystick?.destroy();
     this.motion?.destroy();
     this.cameraMotion?.destroy();
+    this.foundPhoneUI?.destroy();
     this.diagnostics?.destroy();
     this.socket?.destroy();
     this.audioContext?.close();

@@ -240,6 +240,123 @@ button {
   touch-action: auto;
 }
 
+.found-phone-ui {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  background: rgba(4, 8, 7, 0.94);
+  touch-action: none;
+}
+
+.found-phone-chassis {
+  display: grid;
+  grid-template-rows: 28px 42px minmax(236px, 1fr) 64px;
+  width: min(100%, 390px);
+  height: min(100%, 680px);
+  min-height: 500px;
+  padding: 14px;
+  border: 1px solid #53645a;
+  border-radius: 8px;
+  color: #d7e2d6;
+  background: #111a15;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55), inset 0 0 0 3px #0a0e0b;
+}
+
+.found-phone-speaker {
+  align-self: center;
+  justify-self: center;
+  width: 64px;
+  height: 5px;
+  border-radius: 4px;
+  background: #060907;
+}
+
+.found-phone-header,
+.found-phone-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #8ba890;
+}
+
+.found-phone-status {
+  color: #c8d9ae;
+  letter-spacing: 1px;
+}
+
+.found-phone-content {
+  display: grid;
+  align-content: center;
+  min-height: 0;
+  padding: 24px 20px;
+  border-block: 1px solid #314237;
+  background: #142019;
+}
+
+.found-phone-kind {
+  margin: 0 0 10px;
+  color: #89aa88;
+  font-size: 12px;
+}
+
+.found-phone-content h2 {
+  min-height: 1.4em;
+  margin: 0 0 28px;
+  color: #e2ecd9;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.found-phone-content p[data-phone-body] {
+  min-height: 6.6em;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #b8cab8;
+  font-size: 16px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.found-phone-footer > span {
+  color: #759176;
+  font-size: 11px;
+}
+
+.found-phone-nav {
+  display: inline-grid;
+  flex: 0 0 44px;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid #4e6755;
+  border-radius: 50%;
+  color: #dce8d5;
+  background: #19271e;
+}
+
+.found-phone-nav:active {
+  background: #2b4831;
+  transform: scale(0.94);
+}
+
+.found-phone-nav svg {
+  width: 20px;
+  height: 20px;
+}
+
+.brace-impact .found-phone-chassis {
+  animation: brace-impact 240ms ease-out;
+}
+
+@keyframes brace-impact {
+  35% { border-color: #d0e985; box-shadow: 0 0 0 3px rgba(208, 233, 133, 0.22), 0 18px 48px rgba(0, 0, 0, 0.55); }
+}
+
 /* Keep the full-screen gesture surface clear of permanent controls. */
 .action-zone,
 .joystick-zone,
@@ -471,6 +588,16 @@ button {
   .pause-heading {
     grid-column: 1 / -1;
     margin-bottom: 8px;
+  }
+
+  .found-phone-chassis {
+    grid-template-rows: 20px 32px minmax(160px, 1fr) 52px;
+    width: min(100%, 520px);
+    min-height: 0;
+  }
+
+  .found-phone-content {
+    padding-block: 16px;
   }
 }
 
