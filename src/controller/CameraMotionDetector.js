@@ -1,12 +1,16 @@
 const CAMERA_CONSTRAINTS = Object.freeze({
   audio: false,
   video: {
-    facingMode: "user",
-    width: { ideal: 320 },
-    height: { ideal: 240 },
-    frameRate: { ideal: 15, max: 20 },
+    facingMode: { ideal: "environment" },
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 20, max: 24 },
   },
 });
+
+const FALLBACK_CAMERA_CONSTRAINTS = Object.freeze({ audio: false, video: true });
+const PULSE_COOLDOWN_MS = 500;
+const HISTORY_MS = 150;
 
 const DEFAULT_OPTIONS = Object.freeze({
   pixelThreshold: 6 / 255,
@@ -14,7 +18,7 @@ const DEFAULT_OPTIONS = Object.freeze({
   maxMeanDifference: 0.8,
   minActiveRatio: 0.02,
   minLargestActiveRatio: 0.004,
-  maxActiveRatio: 0.92,
+  maxActiveRatio: 0.96,
 });
 
 const defaultNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -116,7 +120,33 @@ export function shouldTriggerMotion(metrics, options = {}) {
     && metrics.meanDifference <= maxMeanDifference
     && metrics.activeRatio >= minActiveRatio
     && largestActiveRatio >= minLargestActiveRatio
-    && metrics.activeRatio <= maxActiveRatio;
+    && metrics.activeRatio < maxActiveRatio;
+}
+
+export function adaptiveScoringOptions(noiseMean = 0) {
+  const noise = Number.isFinite(noiseMean) ? Math.max(0, noiseMean) : 0;
+  return {
+    pixelThreshold: Math.max(4 / 255, noise * 3),
+    minMeanDifference: Math.max(0.0015, noise * 2.25),
+    minActiveRatio: 0.008,
+    minLargestActiveRatio: 0.0015,
+    broadMeanDifference: Math.max(0.006, noise * 3),
+    broadActiveRatio: 0.08,
+    maxActiveRatio: 0.96,
+  };
+}
+
+function qualifiesForPulse(metrics, options) {
+  if (!metrics || !Number.isFinite(metrics.meanDifference) || !Number.isFinite(metrics.activeRatio)) return false;
+  const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
+    ? metrics.largestActiveRatio
+    : metrics.activeRatio;
+  return metrics.activeRatio < options.maxActiveRatio
+    && metrics.meanDifference >= options.minMeanDifference
+    && ((metrics.activeRatio >= options.minActiveRatio
+      && largestActiveRatio >= options.minLargestActiveRatio)
+      || (metrics.meanDifference >= options.broadMeanDifference
+        && metrics.activeRatio >= options.broadActiveRatio));
 }
 
 function createCaptureElements(documentRef, width, height) {
@@ -145,10 +175,10 @@ export class CameraMotionDetector {
     requestFrame = defaultRequestFrame,
     cancelFrame = defaultCancelFrame,
     onMotion,
+    onPulse,
+    onPresence,
     onState,
     now = defaultNow,
-    cooldownMs = 750,
-    rearmQuietFrames = 3,
     sampleIntervalMs = 50,
     sampleWidth = 64,
     sampleHeight = 48,
@@ -159,10 +189,11 @@ export class CameraMotionDetector {
     this.requestFrame = requestFrame;
     this.cancelFrame = cancelFrame;
     this.onMotion = onMotion;
+    this.onPulse = onPulse;
+    this.onPresence = onPresence;
     this.onState = onState;
     this.now = typeof now === "function" ? now : defaultNow;
-    this.cooldownMs = finitePositive(cooldownMs, 750);
-    this.rearmQuietFrames = Math.max(1, Math.floor(finitePositive(rearmQuietFrames, 3)));
+    this.cooldownMs = PULSE_COOLDOWN_MS;
     this.sampleIntervalMs = finitePositive(sampleIntervalMs, 50);
     this.sampleWidth = Math.max(8, Math.floor(sampleWidth));
     this.sampleHeight = Math.max(8, Math.floor(sampleHeight));
@@ -170,10 +201,16 @@ export class CameraMotionDetector {
     this.stream = null;
     this.capture = null;
     this.frameHandle = null;
-    this.previousFrame = null;
+    this.frameHistory = [];
+    this.lastQuietFrame = null;
+    this.noiseMean = 0;
+    this.mode = "pulse";
+    this.context = null;
+    this.presenceReady = false;
+    this.lastPresence = null;
+    this.presenceBaseline = null;
+    this.calibrationFrames = [];
     this.focused = false;
-    this.triggered = false;
-    this.quietFrameCount = 0;
     this.cooldownUntil = 0;
     this.lastSampleAt = -Infinity;
     this.started = false;
@@ -190,7 +227,11 @@ export class CameraMotionDetector {
       return { cameraGranted: false };
     }
     try {
-      this.stream = await this.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
+      try {
+        this.stream = await this.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
+      } catch {
+        this.stream = await this.mediaDevices.getUserMedia(FALLBACK_CAMERA_CONSTRAINTS);
+      }
       this.cameraGranted = true;
       this.started = true;
       this.capture = this.createCaptureElements(this.sampleWidth, this.sampleHeight);
@@ -201,7 +242,10 @@ export class CameraMotionDetector {
       }
       this.onState?.("ready");
       this.scheduleFrame();
-      return { cameraGranted: true };
+      const facingMode = this.stream?.getTracks?.()
+        .map((track) => track.getSettings?.().facingMode)
+        .find(Boolean) ?? null;
+      return { cameraGranted: true, facingMode };
     } catch {
       this.onState?.("denied");
       this.stopStream();
@@ -217,41 +261,98 @@ export class CameraMotionDetector {
     const next = Boolean(focused);
     if (next === this.focused) return;
     this.focused = next;
-    this.previousFrame = null;
-    this.triggered = false;
-    this.quietFrameCount = 0;
+    this.frameHistory = [];
+    this.lastQuietFrame = null;
+    this.noiseMean = 0;
     this.cooldownUntil = 0;
     this.lastSampleAt = -Infinity;
     this.onState?.(next ? "focused" : "idle");
   }
 
+  setMode({ mode = "pulse", context = null, baseline = "fresh" } = {}) {
+    this.mode = mode === "presence" ? "presence" : "pulse";
+    this.context = this.mode === "presence" ? context : null;
+    this.presenceReady = false;
+    this.lastPresence = null;
+    this.presenceBaseline = baseline === "retained" ? this.lastQuietFrame?.slice() ?? null : null;
+    this.calibrationFrames = [];
+  }
+
+  recordFrame(frame, timestamp) {
+    this.frameHistory.push({ frame, timestamp });
+    const oldestTimestamp = timestamp - HISTORY_MS * 10;
+    while (this.frameHistory.length > 1 && this.frameHistory[0].timestamp < oldestTimestamp) {
+      this.frameHistory.shift();
+    }
+  }
+
+  historyReference(timestamp) {
+    const cutoff = timestamp - HISTORY_MS;
+    for (let index = this.frameHistory.length - 1; index >= 0; index -= 1) {
+      if (this.frameHistory[index].timestamp <= cutoff) return this.frameHistory[index];
+    }
+    return null;
+  }
+
+  updateNoise(metrics) {
+    this.noiseMean = this.noiseMean * 0.92 + metrics.meanDifference * 0.08;
+  }
+
+  emitPresence(active, metrics, timestamp) {
+    if (this.presenceReady && this.lastPresence === active) return;
+    this.presenceReady = true;
+    this.lastPresence = active;
+    this.onPresence?.({ ready: true, active, context: this.context, metrics, timestamp });
+  }
+
+  ingestPulse(sample, metrics, timestamp, referenceTimestamp) {
+    const options = adaptiveScoringOptions(this.noiseMean);
+    const qualifies = qualifiesForPulse(metrics, options);
+    if (!qualifies) this.lastQuietFrame = sample.slice();
+    if (timestamp < this.cooldownUntil || !qualifies) {
+      this.updateNoise(metrics);
+      return false;
+    }
+    this.cooldownUntil = timestamp + this.cooldownMs;
+    const event = { metrics, timestamp, referenceTimestamp };
+    this.onPulse?.(event);
+    this.onMotion?.(event);
+    return true;
+  }
+
+  ingestPresence(sample, width, height, metrics, timestamp) {
+    if (!this.presenceBaseline) {
+      const options = adaptiveScoringOptions(this.noiseMean);
+      const stable = metrics.meanDifference < options.minMeanDifference
+        && metrics.activeRatio < options.minActiveRatio;
+      if (stable) this.calibrationFrames.push(sample.slice());
+      else this.calibrationFrames = [];
+      if (this.calibrationFrames.length === 3) {
+        this.presenceBaseline = this.calibrationFrames.at(-1).slice();
+        this.lastQuietFrame = this.presenceBaseline.slice();
+      }
+      return false;
+    }
+
+    const options = adaptiveScoringOptions(this.noiseMean);
+    const presenceMetrics = measureFrameMotion(this.presenceBaseline, sample, width, height, options);
+    const active = qualifiesForPulse(presenceMetrics, options);
+    if (!active) this.lastQuietFrame = sample.slice();
+    this.emitPresence(active, presenceMetrics, timestamp);
+    return active;
+  }
+
   ingestFrame(frame, width, height, timestamp = this.now()) {
     if (this.destroyed || !this.cameraGranted || this.suspended || !this.focused) return false;
-    if (!this.previousFrame) {
-      this.previousFrame = frame.slice?.() ?? Uint8Array.from(frame);
-      return false;
-    }
-    const metrics = measureFrameMotion(this.previousFrame, frame, width, height, this.scoringOptions);
-    this.previousFrame = frame.slice?.() ?? Uint8Array.from(frame);
-    const qualifies = shouldTriggerMotion(metrics, this.scoringOptions);
-    if (this.triggered) {
-      if (timestamp < this.cooldownUntil || qualifies) {
-        this.quietFrameCount = 0;
-        return false;
-      }
-      this.quietFrameCount += 1;
-      if (this.quietFrameCount >= this.rearmQuietFrames) {
-        this.triggered = false;
-        this.quietFrameCount = 0;
-      }
-      return false;
-    }
-    if (timestamp < this.cooldownUntil || !qualifies) return false;
-    this.triggered = true;
-    this.quietFrameCount = 0;
-    this.cooldownUntil = timestamp + this.cooldownMs;
-    this.onMotion?.({ metrics, timestamp });
-    return true;
+    const sample = frame.slice?.() ?? Uint8Array.from(frame);
+    const reference = this.historyReference(timestamp);
+    const options = adaptiveScoringOptions(this.noiseMean);
+    const metrics = reference
+      ? measureFrameMotion(reference.frame, sample, width, height, options)
+      : { meanDifference: 0, activeRatio: 0, largestActiveRatio: 0 };
+    this.recordFrame(sample, timestamp);
+    if (this.mode === "presence") return this.ingestPresence(sample, width, height, metrics, timestamp);
+    return this.ingestPulse(sample, metrics, timestamp, reference?.timestamp ?? null);
   }
 
   captureFrame() {
@@ -282,8 +383,7 @@ export class CameraMotionDetector {
 
   suspend() {
     this.suspended = true;
-    this.previousFrame = null;
-    this.quietFrameCount = 0;
+    this.frameHistory = [];
     this.lastSampleAt = -Infinity;
     if (this.frameHandle !== null) {
       this.cancelFrame(this.frameHandle);
@@ -295,8 +395,7 @@ export class CameraMotionDetector {
   resume() {
     if (this.destroyed) return false;
     this.suspended = false;
-    this.previousFrame = null;
-    this.quietFrameCount = 0;
+    this.frameHistory = [];
     this.lastSampleAt = -Infinity;
     this.scheduleFrame();
     return this.cameraGranted;
@@ -316,9 +415,9 @@ export class CameraMotionDetector {
     this.capture?.video?.pause?.();
     this.capture?.video?.remove?.();
     this.capture = null;
-    this.previousFrame = null;
+    this.frameHistory = [];
     this.onState?.("destroyed");
   }
 }
 
-export { CAMERA_CONSTRAINTS };
+export { CAMERA_CONSTRAINTS, FALLBACK_CAMERA_CONSTRAINTS, HISTORY_MS, PULSE_COOLDOWN_MS };
