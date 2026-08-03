@@ -257,7 +257,7 @@ export class ControllerApp {
     this.connectionLabel.textContent = labels[state] ?? "等待连接";
     if (state === "joined") {
       this.permissionTitle.textContent = "启用手机控制";
-      this.permissionCopy.textContent = "需要动作与前置摄像头权限；画面仅在本机分析。";
+      this.permissionCopy.textContent = "需要动作与后置摄像头权限；画面仅在本机分析。";
       this.enableMotion.disabled = false;
     } else if (["replaced", "session-ended", "invalid-room", "room-not-found"].includes(state)) {
       this.permissionPanel.hidden = false;
@@ -299,7 +299,7 @@ export class ControllerApp {
       return;
     }
     if (!this.cameraEnabled) {
-      this.permissionCopy.textContent = "前置摄像头未启用，仍可使用短触操作。";
+      this.permissionCopy.textContent = "后置摄像头未启用，仍可使用短触操作。";
     }
     this.motionEnabled = true;
     this.calibrationTimer = window.setTimeout(() => {
@@ -373,7 +373,7 @@ export class ControllerApp {
 
   handleCameraState(state) {
     if (state === "denied" && this.motionEnabled && !this.requiresContinue) {
-      this.permissionCopy.textContent = "前置摄像头不可用，仍可使用短触操作继续探索。";
+      this.permissionCopy.textContent = "后置摄像头不可用，仍可使用短触操作继续探索。";
     }
   }
 

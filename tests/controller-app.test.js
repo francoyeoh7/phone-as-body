@@ -126,7 +126,7 @@ describe("controller app lifecycle", () => {
     expect(haptics.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("requests the front camera together with motion permission", async () => {
+  it("requests the rear camera together with motion permission", async () => {
     const { app, motion, cameraMotion } = createApp({ motionEnabled: false });
 
     await app.enableSensors();
@@ -145,6 +145,15 @@ describe("controller app lifecycle", () => {
 
     expect(app.motionEnabled).toBe(true);
     expect(app.cameraEnabled).toBe(false);
+    expect(app.permissionCopy.textContent).toContain("后置摄像头未启用");
+  });
+
+  it("describes rear-camera fallback when camera access becomes unavailable", () => {
+    const { app } = createApp();
+
+    app.handleCameraState("denied");
+
+    expect(app.permissionCopy.textContent).toContain("后置摄像头不可用");
   });
 
   it("does not continue after a background suspension interrupts visibility recovery", async () => {
