@@ -75,7 +75,7 @@ Add the following desktop events:
 
 Normal camera pulses continue to use the existing `interact` action. Context values are validated before routing so a delayed release from one activity cannot affect another.
 
-The controller sends `ready: true, active: false` as soon as a presence baseline is valid. It then sends another action whenever `active` changes. The desktop never advances a continuous interaction before receiving `ready: true` for the matching context.
+After a presence baseline is valid, the controller compares the next sampled frame and sends its first event with `ready: true` and the actual `active` result from that comparison. It then sends another action whenever `active` changes. The desktop never advances a continuous interaction before receiving `ready: true` for the matching context. Door calibration may accept a ready-but-inactive sample because bracing has not started; found-phone inspection treats that same sample as an immediate release.
 
 ## Exit Door Scene
 
