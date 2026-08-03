@@ -147,6 +147,8 @@ function qualifiesForPulse(metrics, options) {
     : metrics.activeRatio;
   return metrics.activeRatio < options.maxActiveRatio
     && metrics.meanDifference >= options.minMeanDifference
+    && (!Number.isFinite(options.maxMeanDifference)
+      || metrics.meanDifference <= options.maxMeanDifference)
     && ((metrics.activeRatio >= options.minActiveRatio
       && largestActiveRatio >= options.minLargestActiveRatio)
       || (metrics.meanDifference >= options.broadMeanDifference

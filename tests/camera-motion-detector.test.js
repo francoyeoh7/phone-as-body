@@ -196,6 +196,27 @@ describe("camera motion detector", () => {
     expect(await detect(lowContrastRectangle(96, 72, 30, 18))).toHaveBeenCalledOnce();
   });
 
+  it("honors an explicit maximum mean difference", async () => {
+    const onPulse = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPulse,
+      scoringOptions: { maxMeanDifference: 0.001 },
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.ingestFrame(quiet, 96, 72, 50);
+    detector.ingestFrame(quiet, 96, 72, 100);
+    detector.ingestFrame(quiet, 96, 72, 150);
+    detector.ingestFrame(lowContrastRectangle(96, 72, 30, 18), 96, 72, 200);
+
+    expect(onPulse).not.toHaveBeenCalled();
+  });
+
   it("calibrates a fresh presence baseline and emits only transitions", async () => {
     const onPresence = vi.fn();
     const detector = new CameraMotionDetector({
