@@ -308,11 +308,12 @@ export class CameraMotionDetector {
   ingestPulse(sample, metrics, timestamp, referenceTimestamp) {
     const options = adaptiveScoringOptions(this.noiseMean);
     const qualifies = qualifiesForPulse(metrics, options);
-    if (!qualifies) this.lastQuietFrame = sample.slice();
-    if (timestamp < this.cooldownUntil || !qualifies) {
+    if (!qualifies) {
+      this.lastQuietFrame = sample.slice();
       this.updateNoise(metrics);
       return false;
     }
+    if (timestamp < this.cooldownUntil) return false;
     this.cooldownUntil = timestamp + this.cooldownMs;
     const event = { metrics, timestamp, referenceTimestamp };
     this.onPulse?.(event);

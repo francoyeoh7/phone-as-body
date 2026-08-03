@@ -145,6 +145,27 @@ describe("camera motion detector", () => {
     expect(onPulse.mock.calls[1][0].referenceTimestamp).toBe(200);
   });
 
+  it("does not learn qualifying cooldown motion as camera noise", async () => {
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const changeA = lowContrastRectangle(96, 72, 10, 18);
+    const changeB = lowContrastRectangle(96, 72, 38, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.ingestFrame(quiet, 96, 72, 50);
+    detector.ingestFrame(quiet, 96, 72, 100);
+    detector.ingestFrame(quiet, 96, 72, 150);
+    detector.ingestFrame(changeA, 96, 72, 200);
+    detector.ingestFrame(changeB, 96, 72, 250);
+
+    expect(detector.noiseMean).toBe(0);
+  });
+
   it("calibrates a fresh presence baseline and emits only transitions", async () => {
     const onPresence = vi.fn();
     const detector = new CameraMotionDetector({
