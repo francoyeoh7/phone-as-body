@@ -539,7 +539,13 @@ export class ControllerApp {
       return;
     }
     if (event.type === "found-phone-ui") {
-      this.foundPhoneUI?.setActive(Boolean(event.active));
+      const canActivate = this.foreground
+        && !this.paused
+        && !this.requiresContinue
+        && !this.destroyed
+        && this.connectionState === "joined";
+      const active = Boolean(event.active) && canActivate;
+      this.foundPhoneUI?.setActive(active);
       if (event.active) this.haptics?.stop();
     }
   }

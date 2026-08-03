@@ -1,4 +1,5 @@
 const SWIPE_THRESHOLD = 42;
+const TAP_SLOP = 12;
 
 export const FOUND_PHONE_PAGES = Object.freeze([
   Object.freeze({
@@ -34,6 +35,9 @@ export class FoundPhoneUI {
     this.page = 0;
     this.pointerId = null;
     this.startX = 0;
+    this.startY = 0;
+    this.movement = { x: 0, y: 0 };
+    this.captureHeld = false;
     this.title = element.querySelector("[data-phone-title]");
     this.body = element.querySelector("[data-phone-body]");
     this.pageCount = element.querySelector("[data-phone-page]");
@@ -53,7 +57,10 @@ export class FoundPhoneUI {
 
   setActive(active) {
     this.element.hidden = !active;
-    if (!active) this.page = 0;
+    if (!active) {
+      this.resetPointer();
+      this.page = 0;
+    }
     this.render();
   }
 
@@ -63,17 +70,28 @@ export class FoundPhoneUI {
   }
 
   handlePointerDown(event) {
-    if (event.target?.closest?.("button")) return;
+    if (this.pointerId !== null || event.target?.closest?.("button")) return;
     this.pointerId = event.pointerId;
     this.startX = event.clientX;
-    this.element.setPointerCapture?.(event.pointerId);
+    this.startY = event.clientY;
+    this.movement = { x: 0, y: 0 };
+    if (this.element.setPointerCapture) {
+      this.element.setPointerCapture(event.pointerId);
+      this.captureHeld = true;
+    }
   }
 
   handlePointerUp(event) {
     if (event.pointerId !== this.pointerId) return;
-    const direction = phoneSwipeDirection(event.clientX, this.startX);
-    if (direction) this.next(direction);
-    else this.next(event.clientX < this.element.getBoundingClientRect().left + this.element.getBoundingClientRect().width / 2 ? -1 : 1);
+    this.movement = { x: event.clientX - this.startX, y: event.clientY - this.startY };
+    const horizontalSwipe = Math.abs(this.movement.x) >= SWIPE_THRESHOLD
+      && Math.abs(this.movement.x) > Math.abs(this.movement.y);
+    const isTap = Math.max(Math.abs(this.movement.x), Math.abs(this.movement.y)) <= TAP_SLOP;
+    if (horizontalSwipe) this.next(Math.sign(this.movement.x));
+    else if (isTap) {
+      const bounds = this.element.getBoundingClientRect();
+      this.next(event.clientX < bounds.left + bounds.width / 2 ? -1 : 1);
+    }
     this.resetPointer();
   }
 
@@ -82,8 +100,12 @@ export class FoundPhoneUI {
   }
 
   resetPointer() {
-    if (this.pointerId !== null) this.element.releasePointerCapture?.(this.pointerId);
+    if (this.captureHeld) this.element.releasePointerCapture?.(this.pointerId);
     this.pointerId = null;
+    this.startX = 0;
+    this.startY = 0;
+    this.movement = { x: 0, y: 0 };
+    this.captureHeld = false;
   }
 
   pulseBraceImpact() {
