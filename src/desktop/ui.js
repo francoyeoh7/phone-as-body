@@ -1,6 +1,15 @@
 import { createIcons, Keyboard, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
 
 const icons = { Keyboard, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
+const DOOR_DEFENSE_STATUS = Object.freeze({
+  dormant: "抵住门",
+  intro: "门锁正在松动",
+  calibrating: "正在校准",
+  awaiting: "抬起手机，抵住门",
+  bracing: "坚持抵住门",
+  failed: "没抵住，再来",
+  secured: "门已锁住",
+});
 
 export function createDesktopUI(root) {
   root.innerHTML = `
@@ -18,6 +27,12 @@ export function createDesktopUI(root) {
       <div class="reticle" id="reticle"><span></span></div>
       <div class="interaction-prompt" id="interaction-prompt" hidden><kbd>E</kbd><span></span></div>
       <div class="subtitle" id="subtitle" hidden></div>
+      <div class="door-defense" id="door-defense" hidden>
+        <span id="door-defense-status">抵住门</span>
+        <div class="door-defense-track" role="progressbar" aria-labelledby="door-defense-status" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span></span>
+        </div>
+      </div>
 
       <section class="pairing-overlay" id="pairing-overlay">
         <div class="pairing-copy">
@@ -43,9 +58,6 @@ export function createDesktopUI(root) {
       </section>
 
       <section class="pause-overlay" id="pause-overlay" hidden><p>暂停</p></section>
-      <section class="completion-overlay" id="completion-overlay" hidden>
-        <p class="desktop-eyebrow">电梯门已关闭</p><h2>你离开了 617</h2><button id="restart-button">重新开始</button>
-      </section>
     </main>`;
 
   createIcons({ icons, attrs: { "stroke-width": 1.8 } });
@@ -65,10 +77,12 @@ export function createDesktopUI(root) {
     prompt: root.querySelector("#interaction-prompt"),
     promptLabel: root.querySelector("#interaction-prompt span"),
     subtitle: root.querySelector("#subtitle"),
+    doorDefense: root.querySelector("#door-defense"),
+    doorDefenseStatus: root.querySelector("#door-defense-status"),
+    doorDefenseTrack: root.querySelector(".door-defense-track"),
+    doorDefenseFill: root.querySelector(".door-defense-track > span"),
     loading: root.querySelector("#loading-overlay"),
     pause: root.querySelector("#pause-overlay"),
-    completion: root.querySelector("#completion-overlay"),
-    restartButton: root.querySelector("#restart-button"),
   };
 
   return {
@@ -104,6 +118,15 @@ export function createDesktopUI(root) {
       elements.subtitle.textContent = text;
       elements.subtitle.hidden = !visible || !text;
     },
+    setDoorDefense({ visible = false, progress = 0, status = "dormant" } = {}) {
+      const normalizedProgress = Number.isFinite(progress)
+        ? Math.min(1, Math.max(0, progress))
+        : 0;
+      elements.doorDefense.hidden = !visible;
+      elements.doorDefenseTrack.setAttribute("aria-valuenow", String(Math.round(normalizedProgress * 100)));
+      elements.doorDefenseFill.style.transform = `scaleX(${normalizedProgress})`;
+      elements.doorDefenseStatus.textContent = DOOR_DEFENSE_STATUS[status] ?? DOOR_DEFENSE_STATUS.dormant;
+    },
     showPairing(show) {
       elements.pairing.hidden = !show;
     },
@@ -112,9 +135,6 @@ export function createDesktopUI(root) {
     },
     showPause(show) {
       elements.pause.hidden = !show;
-    },
-    showCompletion(show) {
-      elements.completion.hidden = !show;
     },
   };
 }

@@ -123,9 +123,33 @@ export function createGameAudio() {
       noiseBurst(0.34, 0.38, 1480);
       tone({ frequency: 74, endFrequency: 32, duration: 0.7, gain: 0.28, type: "sawtooth" });
     }
-    if (name === "elevator") {
-      tone({ frequency: 94, endFrequency: 47, duration: 1.6, gain: 0.2, type: "triangle" });
-      tone({ frequency: 330, endFrequency: 330, duration: 0.45, gain: 0.08, delay: 0.7 });
+    if (name === "lock-twist") {
+      tone({ frequency: 148, endFrequency: 76, duration: 0.2, gain: 0.12, type: "square" });
+      tone({ frequency: 620, endFrequency: 270, duration: 0.08, gain: 0.035, type: "triangle", delay: 0.11 });
+    }
+    if (name === "door-rattle") {
+      noiseBurst(0.34, 0.17, 360);
+      tone({ frequency: 82, endFrequency: 64, duration: 0.38, gain: 0.1, type: "sawtooth" });
+    }
+    if (name === "door-impact") {
+      noiseBurst(0.42, 0.3, 115);
+      tone({ frequency: 58, endFrequency: 28, duration: 0.46, gain: 0.24, type: "triangle" });
+    }
+    if (name === "brace-strain") {
+      noiseBurst(0.7, 0.1, 240);
+      tone({ frequency: 72, endFrequency: 48, duration: 0.72, gain: 0.13, type: "sawtooth" });
+    }
+    if (name === "door-latch") {
+      tone({ frequency: 190, endFrequency: 105, duration: 0.14, gain: 0.15, type: "square" });
+      tone({ frequency: 390, endFrequency: 470, duration: 0.18, gain: 0.075, type: "triangle", delay: 0.1 });
+    }
+    if (name === "phone-pickup") {
+      tone({ frequency: 240, endFrequency: 430, duration: 0.16, gain: 0.07, type: "triangle" });
+      tone({ frequency: 510, endFrequency: 690, duration: 0.13, gain: 0.045, delay: 0.08 });
+    }
+    if (name === "phone-release") {
+      tone({ frequency: 440, endFrequency: 210, duration: 0.18, gain: 0.065, type: "triangle" });
+      tone({ frequency: 230, endFrequency: 145, duration: 0.14, gain: 0.04, delay: 0.09 });
     }
     if (name === "thunder") noiseBurst(1.6, 0.23, 92);
     if (name === "flashlight") tone({ frequency: 690, endFrequency: 420, duration: 0.055, gain: 0.045, type: "square" });

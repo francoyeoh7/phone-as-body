@@ -1,6 +1,8 @@
 import { PhoneSession } from "./PhoneSession.js";
 import { PlayerController } from "./PlayerController.js";
 import { HorrorDirector } from "./HorrorDirector.js";
+import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
+import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
@@ -22,12 +24,25 @@ export class DesktopApp {
     this.elapsed = 0;
     this.audio = createGameAudio();
     this.director = null;
+    this.foundPhone = null;
+    this.doorDefense = null;
     this.shadowQuest = null;
+    this.fallbackHolding = false;
+    this.destroyed = false;
     this.debugFrames = 0;
     this.debugShadowAutoplay = import.meta.env.DEV && new URLSearchParams(location.search).has("playShadow");
     this.debugShadowTriggered = false;
     this.lastFeedbackSequence = -1;
     this.currentTargetId = null;
+    this.handleStartClick = () => this.startGame(false);
+    this.handleFallbackClick = () => this.startGame(true);
+    this.handleVisibilityChange = () => {
+      if (this.started && document.hidden) this.setPaused(true);
+    };
+    this.handlePageHide = () => this.destroy();
+    this.handleFallbackKeyDown = this.handleFallbackKeyDown.bind(this);
+    this.handleFallbackKeyUp = this.handleFallbackKeyUp.bind(this);
+    this.handleWindowBlur = this.handleWindowBlur.bind(this);
   }
 
   mount() {
@@ -38,24 +53,29 @@ export class DesktopApp {
     this.phone.addEventListener("action", ({ detail }) => this.handlePhoneAction(detail));
     this.phone.start();
 
-    this.ui.elements.startButton.addEventListener("click", () => this.startGame(false));
-    this.ui.elements.fallbackButton.addEventListener("click", () => this.startGame(true));
-    this.ui.elements.restartButton.addEventListener("click", () => location.reload());
-    document.addEventListener("visibilitychange", () => {
-      if (this.started && document.hidden) this.setPaused(true);
-    });
-    window.addEventListener("pagehide", () => this.destroy(), { once: true });
+    this.ui.elements.startButton.addEventListener("click", this.handleStartClick);
+    this.ui.elements.fallbackButton.addEventListener("click", this.handleFallbackClick);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("keydown", this.handleFallbackKeyDown);
+    window.addEventListener("keyup", this.handleFallbackKeyUp);
+    window.addEventListener("blur", this.handleWindowBlur);
+    window.addEventListener("pagehide", this.handlePageHide, { once: true });
   }
 
   async startGame(fallback) {
-    if (this.started) return;
+    if (this.started || this.destroyed) return;
     this.started = true;
     this.fallback = fallback;
     this.audio.start();
     this.ui.showLoading(true);
     this.ui.showPairing(false);
     try {
-      this.experience = await createScene(this.ui.elements.sceneHost);
+      const experience = await createScene(this.ui.elements.sceneHost);
+      if (this.destroyed) {
+        experience.dispose();
+        return;
+      }
+      this.experience = experience;
       this.player = new PlayerController({
         ...this.experience,
         onInteract: (id) => this.handleInteraction(id),
@@ -68,7 +88,25 @@ export class DesktopApp {
         experience: this.experience,
         ui: this.ui,
         audio: this.audio,
-        onComplete: () => this.completeGame(),
+      });
+      this.foundPhone = new FoundPhoneDirector({
+        experience: this.experience,
+        player: this.player,
+        audio: this.audio,
+        sendControllerEvent: (event) => this.phone?.send(event),
+      });
+      this.doorDefense = new DoorDefenseDirector({
+        experience: this.experience,
+        player: this.player,
+        story: this.director.story,
+        ui: this.ui,
+        audio: this.audio,
+        sendControllerEvent: (event) => this.phone?.send(event),
+        onThreatStart: () => this.director?.stopPursuit(),
+        isReducedMotion: () => Boolean(
+          this.director?.settings?.reducedMotion
+          || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+        ),
       });
       this.shadowQuest = new ShadowQuestDirector({
         experience: this.experience,
@@ -81,7 +119,9 @@ export class DesktopApp {
       this.lastFrame = performance.now();
       this.frame = requestAnimationFrame((time) => this.tick(time));
     } catch (error) {
+      if (this.destroyed) return;
       console.error(error);
+      this.disposeRuntime();
       this.started = false;
       this.ui.showLoading(false);
       this.ui.showPairing(true);
@@ -89,7 +129,13 @@ export class DesktopApp {
     }
   }
 
-  handlePhoneAction({ action, settings }) {
+  handlePhoneAction(payload = {}) {
+    const { action, settings } = payload;
+    if (action === "gesture-presence") {
+      if (payload.context === "found-phone") this.foundPhone?.handlePresence(payload);
+      if (payload.context === "door-defense") this.doorDefense?.handlePresence(payload);
+      return;
+    }
     if (action === "interact") this.player?.interact();
     if (action === "flashlight" && this.experience) {
       this.experience.objects.flashlight.visible = !this.experience.objects.flashlight.visible;
@@ -119,8 +165,14 @@ export class DesktopApp {
   }
 
   handleInteraction(id) {
-    if (this.shadowQuest?.handleInteraction(id)) return;
-    this.director?.handleInteraction(id);
+    if (
+      this.doorDefense?.isCinematic()
+      || this.foundPhone?.isInspecting()
+      || this.shadowQuest?.isCinematic()
+    ) return false;
+    if (this.foundPhone?.handleInteraction(id)) return true;
+    if (this.shadowQuest?.handleInteraction(id)) return true;
+    return this.director?.handleInteraction(id) ?? false;
   }
 
   handleTargetFocus({ id, focused }) {
@@ -131,14 +183,18 @@ export class DesktopApp {
 
   handlePeer(connected) {
     this.ui.setConnected(connected);
-    if (!this.started || this.fallback) return;
+    if (!this.started) return;
     if (!connected) {
+      this.releaseFallbackHold();
+      this.foundPhone?.release();
+      this.doorDefense?.abort();
       this.shadowQuest?.abort();
+      if (this.fallback) return;
       this.paused = true;
       this.player?.setPaused(true);
       this.ui.showPause(false);
       this.ui.showPairing(true);
-    } else {
+    } else if (!this.fallback) {
       this.ui.showPairing(false);
       this.phone?.send({ type: "target-focus", id: this.currentTargetId });
       this.setPaused(false);
@@ -147,6 +203,7 @@ export class DesktopApp {
 
   setPaused(paused, showOverlay = true) {
     this.paused = paused;
+    if (paused) this.releaseFallbackHold();
     this.player?.setPaused(paused);
     this.audio.setPaused(paused);
     this.ui.showPause(showOverlay && paused);
@@ -167,11 +224,15 @@ export class DesktopApp {
       this.experience.world.step();
       this.player.syncAfterPhysics();
       this.experience.update(delta, this.elapsed);
+      this.doorDefense?.update(delta);
       this.shadowQuest?.update(delta, this.elapsed);
       if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
         this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");
       }
-      if (!this.shadowQuest?.isCinematic()) this.director?.update(delta, this.elapsed);
+      const cinematicOwned = this.doorDefense?.isCinematic()
+        || this.foundPhone?.isInspecting()
+        || this.shadowQuest?.isCinematic();
+      if (!cinematicOwned) this.director?.update(delta, this.elapsed);
       this.audio.update(delta, Math.hypot(this.player.velocity.x, this.player.velocity.z));
       if (import.meta.env.DEV) {
         const position = this.player.body.translation();
@@ -227,19 +288,63 @@ export class DesktopApp {
     });
   }
 
-  destroy() {
-    cancelAnimationFrame(this.frame);
+  handleFallbackKeyDown(event) {
+    if (
+      event.code !== "Space"
+      || event.repeat
+      || !this.fallback
+      || this.paused
+      || this.destroyed
+      || this.fallbackHolding
+    ) return;
+    event.preventDefault?.();
+    this.fallbackHolding = this.doorDefense?.setFallbackHolding(true) === true;
+  }
+
+  handleFallbackKeyUp(event) {
+    if (event.code !== "Space" || !this.fallbackHolding) return;
+    event.preventDefault?.();
+    this.releaseFallbackHold();
+  }
+
+  handleWindowBlur() {
+    this.releaseFallbackHold();
+  }
+
+  releaseFallbackHold() {
+    if (!this.fallbackHolding) return;
+    this.fallbackHolding = false;
+    this.doorDefense?.setFallbackHolding(false);
+  }
+
+  disposeRuntime() {
+    this.foundPhone?.destroy();
+    this.doorDefense?.destroy();
     this.shadowQuest?.destroy();
     this.player?.destroy();
     this.experience?.dispose();
-    this.audio.dispose();
-    this.phone?.destroy();
+    this.foundPhone = null;
+    this.doorDefense = null;
+    this.shadowQuest = null;
+    this.director = null;
+    this.player = null;
+    this.experience = null;
   }
 
-  completeGame() {
-    this.paused = true;
-    this.player?.setPaused(true);
-    this.ui.showPause(false);
-    this.ui.showCompletion(true);
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    cancelAnimationFrame(this.frame);
+    this.releaseFallbackHold();
+    this.ui?.elements?.startButton?.removeEventListener("click", this.handleStartClick);
+    this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    window.removeEventListener("keydown", this.handleFallbackKeyDown);
+    window.removeEventListener("keyup", this.handleFallbackKeyUp);
+    window.removeEventListener("blur", this.handleWindowBlur);
+    window.removeEventListener("pagehide", this.handlePageHide);
+    this.disposeRuntime();
+    this.audio.dispose();
+    this.phone?.destroy();
   }
 }

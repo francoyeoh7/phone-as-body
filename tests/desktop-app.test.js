@@ -1,5 +1,197 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopApp } from "../src/desktop/DesktopApp.js";
+import { FoundPhoneDirector } from "../src/desktop/FoundPhoneDirector.js";
+import { createGameAudio } from "../src/desktop/audio.js";
+import { createDesktopUI } from "../src/desktop/ui.js";
+
+const { createSceneMock } = vi.hoisted(() => ({ createSceneMock: vi.fn() }));
+
+vi.mock("../src/desktop/create-scene.js", () => ({ createScene: createSceneMock }));
+
+vi.mock("lucide", () => ({
+  createIcons: vi.fn(),
+  Keyboard: {},
+  ScanLine: {},
+  Smartphone: {},
+  Volume2: {},
+  Wifi: {},
+  WifiOff: {},
+}));
+
+vi.mock("socket.io-client", () => ({
+  io: vi.fn(() => ({
+    on: vi.fn(),
+    emit: vi.fn(),
+    disconnect: vi.fn(),
+  })),
+}));
+
+function createEventTarget() {
+  const listeners = new Map();
+  return {
+    hidden: false,
+    pointerLockElement: null,
+    addEventListener: vi.fn((type, listener) => listeners.set(type, listener)),
+    removeEventListener: vi.fn((type, listener) => {
+      if (listeners.get(type) === listener) listeners.delete(type);
+    }),
+    dispatch(type, event = {}) {
+      listeners.get(type)?.(event);
+    },
+    exitPointerLock: vi.fn(),
+  };
+}
+
+function createElement() {
+  const attributes = new Map();
+  return {
+    hidden: false,
+    dataset: {},
+    style: {},
+    textContent: "",
+    innerHTML: "",
+    src: "",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    setAttribute: vi.fn((name, value) => attributes.set(name, String(value))),
+    getAttribute: vi.fn((name) => attributes.get(name) ?? null),
+  };
+}
+
+function createRoot() {
+  const elements = new Map();
+  const root = {
+    innerHTML: "",
+    querySelector: vi.fn((selector) => {
+      if (!elements.has(selector)) elements.set(selector, createElement());
+      return elements.get(selector);
+    }),
+  };
+  return { root, elements };
+}
+
+function createTickHarness({ owner = null } = {}) {
+  const doorDefense = {
+    update: vi.fn(),
+    isCinematic: vi.fn(() => owner === "door"),
+  };
+  const foundPhone = { isInspecting: vi.fn(() => owner === "phone") };
+  const shadowQuest = {
+    update: vi.fn(),
+    isCinematic: vi.fn(() => owner === "shadow"),
+    isAvailable: vi.fn(() => false),
+    complete: false,
+  };
+  const director = {
+    update: vi.fn(),
+    story: { current: vi.fn(() => "reach-door") },
+  };
+  const player = {
+    setControllerInput: vi.fn(),
+    update: vi.fn(),
+    syncAfterPhysics: vi.fn(),
+    body: { translation: vi.fn(() => ({ x: 0, y: 1, z: 0 })) },
+    velocity: { x: 0, z: 0 },
+    cameraYaw: 0,
+    cameraPitch: 0,
+    selected: null,
+  };
+  const renderer = { render: vi.fn(), domElement: { dataset: {} } };
+  const experience = {
+    world: { timestep: 0, step: vi.fn() },
+    update: vi.fn(),
+    renderer,
+    scene: {},
+    camera: {},
+  };
+  const app = Object.assign(Object.create(DesktopApp.prototype), {
+    paused: false,
+    elapsed: 0,
+    lastFrame: 0,
+    debugFrames: 0,
+    debugShadowAutoplay: false,
+    debugShadowTriggered: false,
+    lastFeedbackSequence: -1,
+    phone: {
+      connected: true,
+      currentInput: vi.fn(() => ({
+        seq: -1,
+        move: { x: 0, y: 0 },
+        viewDelta: { yaw: 0, pitch: 0 },
+        clutch: false,
+      })),
+      send: vi.fn(),
+    },
+    player,
+    experience,
+    shadowQuest,
+    foundPhone,
+    doorDefense,
+    director,
+    audio: { update: vi.fn() },
+    sampleDebugPixels: vi.fn(),
+  });
+  return { app, doorDefense, foundPhone, shadowQuest, director };
+}
+
+function createAudioContextHarness() {
+  const oscillators = [];
+  const sources = [];
+  const parameter = () => ({
+    value: 0,
+    setValueAtTime: vi.fn(),
+    exponentialRampToValueAtTime: vi.fn(),
+    setTargetAtTime: vi.fn(),
+  });
+  const node = () => ({ connect(target) { return target; } });
+  class AudioContext {
+    constructor() {
+      this.currentTime = 0;
+      this.sampleRate = 80;
+      this.destination = node();
+    }
+
+    createBuffer(_channels, length) {
+      const data = new Float32Array(length);
+      return { getChannelData: () => data };
+    }
+
+    createBufferSource() {
+      const source = { ...node(), start: vi.fn(), stop: vi.fn(), loop: false, buffer: null };
+      sources.push(source);
+      return source;
+    }
+
+    createBiquadFilter() {
+      return { ...node(), frequency: parameter(), Q: parameter(), type: "" };
+    }
+
+    createGain() {
+      return { ...node(), gain: parameter() };
+    }
+
+    createOscillator() {
+      const oscillator = {
+        ...node(),
+        frequency: parameter(),
+        start: vi.fn(),
+        stop: vi.fn(),
+        type: "",
+      };
+      oscillators.push(oscillator);
+      return oscillator;
+    }
+
+    close() {}
+  }
+  return { AudioContext, oscillators, sources };
+}
+
+afterEach(() => {
+  createSceneMock.mockReset();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("desktop control feedback", () => {
   it("reports each applied input sequence and resulting camera angles once", () => {
@@ -35,5 +227,397 @@ describe("desktop control feedback", () => {
     expect(app.phone.send).toHaveBeenNthCalledWith(2, { type: "target-focus", id: null });
     expect(app.ui.setTargetFocused).toHaveBeenNthCalledWith(1, true);
     expect(app.ui.setTargetFocused).toHaveBeenNthCalledWith(2, false);
+  });
+});
+
+describe("desktop director routing", () => {
+  it("routes the complete validated presence payload only to its matching context", () => {
+    const foundPhone = { handlePresence: vi.fn() };
+    const doorDefense = { handlePresence: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), { foundPhone, doorDefense });
+    const phonePayload = {
+      action: "gesture-presence",
+      context: "found-phone",
+      ready: true,
+      active: false,
+      sentAt: 123,
+    };
+    const doorPayload = {
+      action: "gesture-presence",
+      context: "door-defense",
+      ready: true,
+      active: true,
+      sentAt: 456,
+    };
+
+    app.handlePhoneAction(phonePayload);
+    expect(foundPhone.handlePresence).toHaveBeenCalledExactlyOnceWith(phonePayload);
+    expect(doorDefense.handlePresence).not.toHaveBeenCalled();
+
+    app.handlePhoneAction(doorPayload);
+    expect(doorDefense.handlePresence).toHaveBeenCalledExactlyOnceWith(doorPayload);
+    expect(foundPhone.handlePresence).toHaveBeenCalledOnce();
+  });
+
+  it("produces and closes the controller found-phone UI through DesktopApp routing", () => {
+    const phone = { send: vi.fn() };
+    const player = { beginCinematic: vi.fn(), endCinematic: vi.fn() };
+    const foundPhone = new FoundPhoneDirector({
+      experience: { objects: { foundPhone: { enabled: true, setHeld: vi.fn() } } },
+      player,
+      audio: { cue: vi.fn() },
+      sendControllerEvent: (event) => phone.send(event),
+    });
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      phone,
+      foundPhone,
+      doorDefense: { isCinematic: vi.fn(() => false), handlePresence: vi.fn() },
+      shadowQuest: { isCinematic: vi.fn(() => false), handleInteraction: vi.fn(() => false) },
+      director: { handleInteraction: vi.fn(() => false) },
+    });
+
+    expect(app.handleInteraction("found-phone")).toBe(true);
+    expect(phone.send).toHaveBeenCalledWith({ type: "found-phone-ui", active: true });
+
+    app.handlePhoneAction({
+      action: "gesture-presence",
+      context: "found-phone",
+      ready: true,
+      active: false,
+      sentAt: 789,
+    });
+    expect(phone.send).toHaveBeenCalledWith({ type: "found-phone-ui", active: false });
+    expect(player.endCinematic).toHaveBeenCalledOnce();
+  });
+
+  it("tries found phone, shadow quest, and normal horror interactions in priority order", () => {
+    const order = [];
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      foundPhone: {
+        isInspecting: vi.fn(() => false),
+        handleInteraction: vi.fn(() => { order.push("phone"); return false; }),
+      },
+      doorDefense: { isCinematic: vi.fn(() => false) },
+      shadowQuest: {
+        isCinematic: vi.fn(() => false),
+        handleInteraction: vi.fn(() => { order.push("shadow"); return false; }),
+      },
+      director: { handleInteraction: vi.fn(() => { order.push("horror"); return true; }) },
+    });
+
+    expect(app.handleInteraction("washbasin")).toBe(true);
+    expect(order).toEqual(["phone", "shadow", "horror"]);
+
+    order.length = 0;
+    app.foundPhone.handleInteraction.mockImplementationOnce(() => { order.push("phone"); return true; });
+    expect(app.handleInteraction("found-phone")).toBe(true);
+    expect(order).toEqual(["phone"]);
+  });
+
+  it.each(["door", "phone", "shadow"])("suppresses normal horror ticks while %s owns the cinematic", (owner) => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 9));
+    const { app, doorDefense, shadowQuest, director } = createTickHarness({ owner });
+
+    app.tick(16);
+
+    expect(doorDefense.update).toHaveBeenCalledExactlyOnceWith(0.016);
+    expect(shadowQuest.update).toHaveBeenCalledExactlyOnceWith(0.016, 0.016);
+    expect(director.update).not.toHaveBeenCalled();
+  });
+
+  it("ticks normal horror only when no cinematic director owns the camera", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 10));
+    const { app, director } = createTickHarness();
+
+    app.tick(16);
+
+    expect(director.update).toHaveBeenCalledExactlyOnceWith(0.016, 0.016);
+  });
+
+  it("aborts both new scenes and the shadow quest on peer disconnect", () => {
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      started: true,
+      fallback: false,
+      fallbackHolding: false,
+      ui: { setConnected: vi.fn(), showPause: vi.fn(), showPairing: vi.fn() },
+      foundPhone: { release: vi.fn() },
+      doorDefense: { abort: vi.fn(), setFallbackHolding: vi.fn() },
+      shadowQuest: { abort: vi.fn() },
+      player: { setPaused: vi.fn() },
+    });
+
+    app.handlePeer(false);
+
+    expect(app.foundPhone.release).toHaveBeenCalledOnce();
+    expect(app.doorDefense.abort).toHaveBeenCalledOnce();
+    expect(app.shadowQuest.abort).toHaveBeenCalledOnce();
+    expect(app.player.setPaused).toHaveBeenCalledWith(true);
+  });
+});
+
+describe("fallback Space hold", () => {
+  it("presses once, ignores repeat, and releases only in fallback mode", () => {
+    const doorDefense = { setFallbackHolding: vi.fn(() => true) };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      fallback: true,
+      fallbackHolding: false,
+      paused: false,
+      destroyed: false,
+      doorDefense,
+    });
+    const event = { code: "Space", repeat: false, preventDefault: vi.fn() };
+
+    app.handleFallbackKeyDown(event);
+    app.handleFallbackKeyDown({ ...event, repeat: true });
+    app.handleFallbackKeyDown(event);
+    app.handleFallbackKeyUp(event);
+
+    expect(doorDefense.setFallbackHolding.mock.calls).toEqual([[true], [false]]);
+
+    app.fallback = false;
+    app.handleFallbackKeyDown(event);
+    app.handleFallbackKeyUp(event);
+    expect(doorDefense.setFallbackHolding.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("does not latch a Space press rejected before the director is ready", () => {
+    const doorDefense = { setFallbackHolding: vi.fn(() => false) };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      fallback: true,
+      fallbackHolding: false,
+      paused: false,
+      destroyed: false,
+      doorDefense,
+    });
+
+    app.handleFallbackKeyDown({ code: "Space", repeat: false, preventDefault: vi.fn() });
+
+    expect(doorDefense.setFallbackHolding).toHaveBeenCalledExactlyOnceWith(true);
+    expect(app.fallbackHolding).toBe(false);
+  });
+
+  it("releases an active hold on blur and pause", () => {
+    vi.stubGlobal("document", { pointerLockElement: null });
+    const doorDefense = { setFallbackHolding: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      fallback: true,
+      fallbackHolding: true,
+      paused: false,
+      destroyed: false,
+      doorDefense,
+      player: { setPaused: vi.fn() },
+      audio: { setPaused: vi.fn() },
+      ui: { showPause: vi.fn() },
+    });
+
+    app.handleWindowBlur();
+    expect(doorDefense.setFallbackHolding).toHaveBeenLastCalledWith(false);
+
+    app.fallbackHolding = true;
+    app.setPaused(true);
+    expect(doorDefense.setFallbackHolding).toHaveBeenLastCalledWith(false);
+    expect(doorDefense.setFallbackHolding).toHaveBeenCalledTimes(2);
+  });
+
+  it("registers stored handlers and destroys directors before player and scene exactly once", () => {
+    const fakeWindow = createEventTarget();
+    fakeWindow.matchMedia = vi.fn(() => ({ matches: false }));
+    const fakeDocument = createEventTarget();
+    const { root } = createRoot();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("location", { search: "", reload: vi.fn() });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const app = new DesktopApp(root);
+    app.mount();
+    expect(fakeWindow.addEventListener).toHaveBeenCalledWith("keydown", app.handleFallbackKeyDown);
+    expect(fakeWindow.addEventListener).toHaveBeenCalledWith("keyup", app.handleFallbackKeyUp);
+    expect(fakeWindow.addEventListener).toHaveBeenCalledWith("blur", app.handleWindowBlur);
+
+    const order = [];
+    app.fallback = true;
+    app.fallbackHolding = true;
+    app.foundPhone = { destroy: vi.fn(() => order.push("phone")) };
+    app.doorDefense = {
+      setFallbackHolding: vi.fn(() => order.push("hold")),
+      destroy: vi.fn(() => order.push("door")),
+    };
+    app.shadowQuest = { destroy: vi.fn(() => order.push("shadow")) };
+    app.player = { destroy: vi.fn(() => order.push("player")) };
+    app.experience = { dispose: vi.fn(() => order.push("scene")) };
+    app.audio = { dispose: vi.fn(() => order.push("audio")) };
+    app.phone = { destroy: vi.fn(() => order.push("session")) };
+
+    app.destroy();
+    app.destroy();
+
+    expect(order).toEqual(["hold", "phone", "door", "shadow", "player", "scene", "audio", "session"]);
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("keydown", app.handleFallbackKeyDown);
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("keyup", app.handleFallbackKeyUp);
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("blur", app.handleWindowBlur);
+  });
+
+  it("disposes a scene that resolves after destroy without resuming startup", async () => {
+    const fakeWindow = createEventTarget();
+    fakeWindow.matchMedia = vi.fn(() => ({ matches: false }));
+    const fakeDocument = createEventTarget();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("location", { search: "" });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.stubGlobal("requestAnimationFrame", vi.fn());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    let resolveScene;
+    createSceneMock.mockReturnValue(new Promise((resolve) => { resolveScene = resolve; }));
+    const scene = { dispose: vi.fn() };
+    const app = new DesktopApp({});
+    app.ui = {
+      elements: {
+        sceneHost: {},
+        pairingStatus: { innerHTML: "" },
+        startButton: createElement(),
+        fallbackButton: createElement(),
+      },
+      showLoading: vi.fn(),
+      showPairing: vi.fn(),
+    };
+    app.audio = { start: vi.fn(), dispose: vi.fn() };
+    app.phone = { destroy: vi.fn() };
+
+    const starting = app.startGame(false);
+    app.destroy();
+    resolveScene(scene);
+    await starting;
+
+    expect(scene.dispose).toHaveBeenCalledOnce();
+    expect(app.player).toBeNull();
+    expect(app.director).toBeNull();
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+
+  it("rolls back an initialized player and scene when later startup fails", async () => {
+    const fakeWindow = createEventTarget();
+    const fakeDocument = createEventTarget();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("location", { search: "" });
+    vi.stubGlobal("requestAnimationFrame", vi.fn());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const characterController = {
+      enableAutostep: vi.fn(),
+      enableSnapToGround: vi.fn(),
+      setApplyImpulsesToDynamicBodies: vi.fn(),
+    };
+    const world = {
+      createRigidBody: vi.fn(() => ({})),
+      createCollider: vi.fn(() => ({})),
+      createCharacterController: vi.fn(() => characterController),
+      removeCharacterController: vi.fn(),
+      removeCollider: vi.fn(),
+      removeRigidBody: vi.fn(),
+    };
+    const chainableBody = { setTranslation: vi.fn(() => ({})) };
+    const scene = {
+      RAPIER: {
+        RigidBodyDesc: { kinematicPositionBased: vi.fn(() => chainableBody) },
+        ColliderDesc: { capsule: vi.fn(() => ({})) },
+      },
+      world,
+      camera: {},
+      renderer: { domElement: createElement() },
+      interactables: [],
+      objects: {},
+      dispose: vi.fn(),
+    };
+    createSceneMock.mockResolvedValue(scene);
+    const app = new DesktopApp({});
+    app.ui = {
+      elements: { sceneHost: {}, pairingStatus: { innerHTML: "" } },
+      showLoading: vi.fn(),
+      showPairing: vi.fn(),
+      setPrompt: vi.fn(),
+      setObjective: vi.fn(),
+    };
+    app.audio = { start: vi.fn() };
+
+    await app.startGame(false);
+
+    expect(world.removeCharacterController).toHaveBeenCalledExactlyOnceWith(characterController);
+    expect(world.removeCollider).toHaveBeenCalledOnce();
+    expect(scene.dispose).toHaveBeenCalledOnce();
+    expect(app.player).toBeNull();
+    expect(app.director).toBeNull();
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+});
+
+describe("desktop door-defense UI", () => {
+  it("clamps progress into aria percent and a stable scale transform with Chinese status", () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const band = elements.get("#door-defense");
+    const track = elements.get(".door-defense-track");
+    const fill = elements.get(".door-defense-track > span");
+    const status = elements.get("#door-defense-status");
+
+    ui.setDoorDefense({ visible: true, progress: 0.375, status: "bracing" });
+    expect(band.hidden).toBe(false);
+    expect(track.getAttribute("aria-valuenow")).toBe("38");
+    expect(fill.style.transform).toBe("scaleX(0.375)");
+    expect(status.textContent).toBe("坚持抵住门");
+
+    ui.setDoorDefense({ visible: true, progress: 2, status: "failed" });
+    expect(track.getAttribute("aria-valuenow")).toBe("100");
+    expect(fill.style.transform).toBe("scaleX(1)");
+    expect(status.textContent).toBe("没抵住，再来");
+
+    ui.setDoorDefense({ visible: false, progress: -1, status: "secured" });
+    expect(band.hidden).toBe(true);
+    expect(track.getAttribute("aria-valuenow")).toBe("0");
+    expect(fill.style.transform).toBe("scaleX(0)");
+  });
+
+  it("contains the progressbar but no completion or restart DOM", () => {
+    const { root } = createRoot();
+    const ui = createDesktopUI(root);
+
+    expect(root.innerHTML).toContain('role="progressbar"');
+    expect(root.innerHTML).toContain('aria-labelledby="door-defense-status"');
+    expect(root.innerHTML).not.toContain("completion-overlay");
+    expect(root.innerHTML).not.toContain("restart-button");
+    expect(ui.elements).not.toHaveProperty("completion");
+    expect(ui).not.toHaveProperty("showCompletion");
+    expect(DesktopApp.prototype.completeGame).toBeUndefined();
+  });
+});
+
+describe("desktop scene audio", () => {
+  it("implements all door and phone transition cues and removes elevator", () => {
+    const { AudioContext, oscillators, sources } = createAudioContextHarness();
+    vi.stubGlobal("window", { AudioContext });
+    const audio = createGameAudio();
+    audio.start();
+
+    for (const cue of [
+      "lock-twist",
+      "door-rattle",
+      "door-impact",
+      "brace-strain",
+      "door-latch",
+      "phone-pickup",
+      "phone-release",
+    ]) {
+      const before = oscillators.length + sources.length;
+      audio.cue(cue);
+      expect(oscillators.length + sources.length, cue).toBeGreaterThan(before);
+    }
+
+    const beforeElevator = oscillators.length + sources.length;
+    audio.cue("elevator");
+    expect(oscillators.length + sources.length).toBe(beforeElevator);
+    audio.dispose();
   });
 });
