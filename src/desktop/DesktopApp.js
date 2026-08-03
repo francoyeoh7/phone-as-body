@@ -124,11 +124,16 @@ export class DesktopApp {
     } catch (error) {
       if (this.destroyed) return;
       console.error(error);
-      this.disposeRuntime();
-      this.started = false;
-      this.ui.showLoading(false);
-      this.ui.showPairing(true);
-      this.ui.elements.pairingStatus.innerHTML = "<span></span>3D 场景启动失败，请刷新重试";
+      try {
+        this.disposeRuntime();
+      } catch (cleanupError) {
+        console.error("Failed to clean up scene startup:", cleanupError);
+      } finally {
+        this.started = false;
+        this.ui.showLoading(false);
+        this.ui.showPairing(true);
+        this.ui.elements.pairingStatus.innerHTML = "<span></span>3D 场景启动失败，请刷新重试";
+      }
     }
   }
 
@@ -363,37 +368,31 @@ export class DesktopApp {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
-    cancelAnimationFrame(this.frame);
-    this.releaseFallbackHold();
-    this.ui?.elements?.startButton?.removeEventListener("click", this.handleStartClick);
-    this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    window.removeEventListener("keydown", this.handleFallbackKeyDown);
-    window.removeEventListener("keyup", this.handleFallbackKeyUp);
-    window.removeEventListener("blur", this.handleWindowBlur);
-    window.removeEventListener("pagehide", this.handlePageHide);
     const phone = this.phone;
-    phone?.removeEventListener?.("room", this.handlePhoneRoom);
-    phone?.removeEventListener?.("peer", this.handlePhonePeer);
-    phone?.removeEventListener?.("action", this.handlePhoneActionEvent);
     let cleanupError = null;
-    try {
-      this.disposeRuntime();
-    } catch (error) {
-      cleanupError = error;
-    }
-    try {
-      this.audio.dispose();
-    } catch (error) {
-      cleanupError ??= error;
-    }
-    try {
-      phone?.destroy();
-    } catch (error) {
-      cleanupError ??= error;
-    } finally {
-      if (this.phone === phone) this.phone = null;
-    }
+    const runCleanup = (cleanup) => {
+      try {
+        cleanup();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+    runCleanup(() => cancelAnimationFrame(this.frame));
+    runCleanup(() => this.releaseFallbackHold());
+    runCleanup(() => this.ui?.elements?.startButton?.removeEventListener("click", this.handleStartClick));
+    runCleanup(() => this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick));
+    runCleanup(() => document.removeEventListener("visibilitychange", this.handleVisibilityChange));
+    runCleanup(() => window.removeEventListener("keydown", this.handleFallbackKeyDown));
+    runCleanup(() => window.removeEventListener("keyup", this.handleFallbackKeyUp));
+    runCleanup(() => window.removeEventListener("blur", this.handleWindowBlur));
+    runCleanup(() => window.removeEventListener("pagehide", this.handlePageHide));
+    runCleanup(() => phone?.removeEventListener?.("room", this.handlePhoneRoom));
+    runCleanup(() => phone?.removeEventListener?.("peer", this.handlePhonePeer));
+    runCleanup(() => phone?.removeEventListener?.("action", this.handlePhoneActionEvent));
+    runCleanup(() => this.disposeRuntime());
+    runCleanup(() => this.audio.dispose());
+    runCleanup(() => phone?.destroy());
+    if (this.phone === phone) this.phone = null;
     if (cleanupError) throw cleanupError;
   }
 }

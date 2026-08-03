@@ -587,6 +587,63 @@ describe("fallback Space hold", () => {
     expect(app.phone).toBeNull();
   });
 
+  it("continues teardown when releasing fallback hold throws", () => {
+    const fakeWindow = createEventTarget();
+    const fakeDocument = createEventTarget();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("location", { search: "" });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const order = [];
+    const releaseError = new Error("fallback release failed");
+    const app = new DesktopApp({});
+    const phone = {
+      removeEventListener: vi.fn(),
+      destroy: vi.fn(() => order.push("session")),
+    };
+    app.phone = phone;
+    app.ui = { elements: {} };
+    app.fallbackHolding = true;
+    app.foundPhone = { destroy: vi.fn(() => order.push("phone")) };
+    app.doorDefense = {
+      setFallbackHolding: vi.fn(() => {
+        order.push("hold");
+        throw releaseError;
+      }),
+      destroy: vi.fn(() => order.push("door")),
+    };
+    app.shadowQuest = { destroy: vi.fn(() => order.push("shadow")) };
+    app.player = { destroy: vi.fn(() => order.push("player")) };
+    app.experience = { dispose: vi.fn(() => order.push("scene")) };
+    app.audio = { dispose: vi.fn(() => order.push("audio")) };
+
+    expect(() => app.destroy()).toThrow(releaseError);
+    expect(() => app.destroy()).not.toThrow();
+
+    expect(order).toEqual(["hold", "phone", "door", "shadow", "player", "scene", "audio", "session"]);
+    expect(phone.removeEventListener).toHaveBeenCalledWith("room", app.handlePhoneRoom);
+    expect(phone.removeEventListener).toHaveBeenCalledWith("peer", app.handlePhonePeer);
+    expect(phone.removeEventListener).toHaveBeenCalledWith("action", app.handlePhoneActionEvent);
+    expect(fakeDocument.removeEventListener).toHaveBeenCalledWith(
+      "visibilitychange",
+      app.handleVisibilityChange,
+    );
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("keydown", app.handleFallbackKeyDown);
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("keyup", app.handleFallbackKeyUp);
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("blur", app.handleWindowBlur);
+    expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("pagehide", app.handlePageHide);
+    expect(app.fallbackHolding).toBe(false);
+    expect(app.foundPhone).toBeNull();
+    expect(app.doorDefense).toBeNull();
+    expect(app.shadowQuest).toBeNull();
+    expect(app.player).toBeNull();
+    expect(app.experience).toBeNull();
+    expect(app.audio.dispose).toHaveBeenCalledOnce();
+    expect(phone.destroy).toHaveBeenCalledOnce();
+    expect(app.phone).toBeNull();
+  });
+
   it("disposes a scene that resolves after destroy without resuming startup", async () => {
     const fakeWindow = createEventTarget();
     fakeWindow.matchMedia = vi.fn(() => ({ matches: false }));
@@ -633,7 +690,7 @@ describe("fallback Space hold", () => {
     vi.stubGlobal("document", fakeDocument);
     vi.stubGlobal("location", { search: "" });
     vi.stubGlobal("requestAnimationFrame", vi.fn());
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const characterController = {
       enableAutostep: vi.fn(),
@@ -661,7 +718,8 @@ describe("fallback Space hold", () => {
       objects: {},
       dispose: vi.fn(),
     };
-    createSceneMock.mockResolvedValue(scene);
+    const retryError = new Error("retry startup failed");
+    createSceneMock.mockResolvedValueOnce(scene).mockRejectedValueOnce(retryError);
     const app = new DesktopApp({});
     app.ui = {
       elements: { sceneHost: {}, pairingStatus: { innerHTML: "" } },
@@ -671,15 +729,33 @@ describe("fallback Space hold", () => {
       setObjective: vi.fn(),
     };
     app.audio = { start: vi.fn() };
+    const cleanupError = new Error("startup cleanup failed");
+    app.phone = { send: vi.fn(() => { throw cleanupError; }) };
 
-    await app.startGame(false);
+    await expect(app.startGame(false)).resolves.toBeUndefined();
 
     expect(world.removeCharacterController).toHaveBeenCalledExactlyOnceWith(characterController);
     expect(world.removeCollider).toHaveBeenCalledOnce();
     expect(scene.dispose).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0][0]).not.toBe(cleanupError);
+    expect(consoleError).toHaveBeenCalledWith("Failed to clean up scene startup:", cleanupError);
+    expect(app.started).toBe(false);
+    expect(app.ui.showLoading).toHaveBeenLastCalledWith(false);
+    expect(app.ui.showPairing).toHaveBeenLastCalledWith(true);
+    expect(app.foundPhone).toBeNull();
+    expect(app.doorDefense).toBeNull();
+    expect(app.shadowQuest).toBeNull();
     expect(app.player).toBeNull();
     expect(app.director).toBeNull();
+    expect(app.experience).toBeNull();
     expect(requestAnimationFrame).not.toHaveBeenCalled();
+
+    app.phone.send.mockImplementation(() => {});
+    await expect(app.startGame(false)).resolves.toBeUndefined();
+
+    expect(createSceneMock).toHaveBeenCalledTimes(2);
+    expect(consoleError).toHaveBeenLastCalledWith(retryError);
+    expect(app.started).toBe(false);
   });
 });
 
