@@ -43,14 +43,17 @@ export class DesktopApp {
     this.handleFallbackKeyDown = this.handleFallbackKeyDown.bind(this);
     this.handleFallbackKeyUp = this.handleFallbackKeyUp.bind(this);
     this.handleWindowBlur = this.handleWindowBlur.bind(this);
+    this.handlePhoneRoom = this.handlePhoneRoom.bind(this);
+    this.handlePhonePeer = this.handlePhonePeer.bind(this);
+    this.handlePhoneActionEvent = this.handlePhoneActionEvent.bind(this);
   }
 
   mount() {
     this.ui = createDesktopUI(this.root);
     this.phone = new PhoneSession();
-    this.phone.addEventListener("room", ({ detail }) => this.ui.setRoom(detail));
-    this.phone.addEventListener("peer", ({ detail }) => this.handlePeer(detail.connected));
-    this.phone.addEventListener("action", ({ detail }) => this.handlePhoneAction(detail));
+    this.phone.addEventListener("room", this.handlePhoneRoom);
+    this.phone.addEventListener("peer", this.handlePhonePeer);
+    this.phone.addEventListener("action", this.handlePhoneActionEvent);
     this.phone.start();
 
     this.ui.elements.startButton.addEventListener("click", this.handleStartClick);
@@ -130,6 +133,7 @@ export class DesktopApp {
   }
 
   handlePhoneAction(payload = {}) {
+    if (this.destroyed) return;
     const { action, settings } = payload;
     if (action === "gesture-presence") {
       if (payload.context === "found-phone") this.foundPhone?.handlePresence(payload);
@@ -181,7 +185,23 @@ export class DesktopApp {
     this.phone?.send({ type: "target-focus", id: this.currentTargetId });
   }
 
+  handlePhoneRoom({ detail }) {
+    if (this.destroyed) return;
+    this.ui?.setRoom(detail);
+  }
+
+  handlePhonePeer({ detail }) {
+    if (this.destroyed) return;
+    this.handlePeer(detail?.connected);
+  }
+
+  handlePhoneActionEvent({ detail }) {
+    if (this.destroyed) return;
+    this.handlePhoneAction(detail);
+  }
+
   handlePeer(connected) {
+    if (this.destroyed) return;
     this.ui.setConnected(connected);
     if (!this.started) return;
     if (!connected) {
@@ -318,17 +338,26 @@ export class DesktopApp {
   }
 
   disposeRuntime() {
-    this.foundPhone?.destroy();
-    this.doorDefense?.destroy();
-    this.shadowQuest?.destroy();
-    this.player?.destroy();
-    this.experience?.dispose();
+    let cleanupError = null;
+    const runCleanup = (cleanup) => {
+      try {
+        cleanup();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+    runCleanup(() => this.foundPhone?.destroy());
+    runCleanup(() => this.doorDefense?.destroy());
+    runCleanup(() => this.shadowQuest?.destroy());
+    runCleanup(() => this.player?.destroy());
+    runCleanup(() => this.experience?.dispose());
     this.foundPhone = null;
     this.doorDefense = null;
     this.shadowQuest = null;
     this.director = null;
     this.player = null;
     this.experience = null;
+    if (cleanupError) throw cleanupError;
   }
 
   destroy() {
@@ -343,8 +372,28 @@ export class DesktopApp {
     window.removeEventListener("keyup", this.handleFallbackKeyUp);
     window.removeEventListener("blur", this.handleWindowBlur);
     window.removeEventListener("pagehide", this.handlePageHide);
-    this.disposeRuntime();
-    this.audio.dispose();
-    this.phone?.destroy();
+    const phone = this.phone;
+    phone?.removeEventListener?.("room", this.handlePhoneRoom);
+    phone?.removeEventListener?.("peer", this.handlePhonePeer);
+    phone?.removeEventListener?.("action", this.handlePhoneActionEvent);
+    let cleanupError = null;
+    try {
+      this.disposeRuntime();
+    } catch (error) {
+      cleanupError = error;
+    }
+    try {
+      this.audio.dispose();
+    } catch (error) {
+      cleanupError ??= error;
+    }
+    try {
+      phone?.destroy();
+    } catch (error) {
+      cleanupError ??= error;
+    } finally {
+      if (this.phone === phone) this.phone = null;
+    }
+    if (cleanupError) throw cleanupError;
   }
 }

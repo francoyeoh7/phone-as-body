@@ -447,7 +447,10 @@ describe("fallback Space hold", () => {
     app.player = { destroy: vi.fn(() => order.push("player")) };
     app.experience = { dispose: vi.fn(() => order.push("scene")) };
     app.audio = { dispose: vi.fn(() => order.push("audio")) };
-    app.phone = { destroy: vi.fn(() => order.push("session")) };
+    app.phone = {
+      removeEventListener: vi.fn(),
+      destroy: vi.fn(() => order.push("session")),
+    };
 
     app.destroy();
     app.destroy();
@@ -456,6 +459,132 @@ describe("fallback Space hold", () => {
     expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("keydown", app.handleFallbackKeyDown);
     expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("keyup", app.handleFallbackKeyUp);
     expect(fakeWindow.removeEventListener).toHaveBeenCalledWith("blur", app.handleWindowBlur);
+  });
+
+  it("detaches phone events before disconnect and ignores synchronous or delayed teardown dispatches", async () => {
+    const fakeWindow = createEventTarget();
+    fakeWindow.matchMedia = vi.fn(() => ({ matches: false }));
+    const fakeDocument = createEventTarget();
+    const { root } = createRoot();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("location", { search: "" });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const app = new DesktopApp(root);
+    app.mount();
+    const phone = app.phone;
+    const removePhoneListener = vi.spyOn(phone, "removeEventListener");
+    const delayedRoom = app.handlePhoneRoom;
+    const delayedPeer = app.handlePhonePeer;
+    const delayedAction = app.handlePhoneActionEvent;
+    const dispatch = (type, detail) => {
+      const event = new Event(type);
+      Object.defineProperty(event, "detail", { value: detail });
+      phone.dispatchEvent(event);
+    };
+
+    app.started = true;
+    app.ui.setRoom = vi.fn();
+    app.ui.setConnected = vi.fn();
+    app.ui.showPause = vi.fn();
+    app.ui.showPairing = vi.fn();
+    const playerInteract = vi.fn();
+    const foundPresence = vi.fn();
+    const doorPresence = vi.fn();
+    const phoneSend = vi.spyOn(phone, "send");
+    app.player = { interact: playerInteract, setPaused: vi.fn(), destroy: vi.fn() };
+    app.foundPhone = {
+      handlePresence: foundPresence,
+      release: vi.fn(),
+      destroy: vi.fn(() => app.phone?.send({ type: "cleanup" })),
+    };
+    app.doorDefense = { handlePresence: doorPresence, abort: vi.fn(), destroy: vi.fn() };
+    app.shadowQuest = { abort: vi.fn(), destroy: vi.fn() };
+    app.audio = { dispose: vi.fn(), setPaused: vi.fn() };
+    phone.destroy = vi.fn(() => {
+      dispatch("peer", { connected: false });
+      dispatch("action", { action: "pause" });
+      dispatch("action", {
+        action: "gesture-presence",
+        context: "found-phone",
+        ready: true,
+        active: false,
+      });
+      dispatch("room", { code: "617617" });
+    });
+
+    app.destroy();
+    app.destroy();
+    dispatch("peer", { connected: false });
+    dispatch("action", { action: "interact" });
+    dispatch("action", {
+      action: "gesture-presence",
+      context: "door-defense",
+      ready: true,
+      active: true,
+    });
+    dispatch("room", { code: "late" });
+    await Promise.resolve();
+    delayedPeer({ detail: { connected: false } });
+    delayedAction({ detail: { action: "pause" } });
+    delayedRoom({ detail: { code: "microtask" } });
+
+    expect(removePhoneListener).toHaveBeenCalledWith("room", app.handlePhoneRoom);
+    expect(removePhoneListener).toHaveBeenCalledWith("peer", app.handlePhonePeer);
+    expect(removePhoneListener).toHaveBeenCalledWith("action", app.handlePhoneActionEvent);
+    expect(phone.destroy).toHaveBeenCalledOnce();
+    expect(phoneSend).toHaveBeenCalledExactlyOnceWith({ type: "cleanup" });
+    expect(removePhoneListener.mock.invocationCallOrder[0]).toBeLessThan(phoneSend.mock.invocationCallOrder[0]);
+    expect(phoneSend.mock.invocationCallOrder[0]).toBeLessThan(phone.destroy.mock.invocationCallOrder[0]);
+    expect(app.phone).toBeNull();
+    expect(app.ui.setRoom).not.toHaveBeenCalled();
+    expect(app.ui.setConnected).not.toHaveBeenCalled();
+    expect(app.ui.showPause).not.toHaveBeenCalled();
+    expect(app.ui.showPairing).not.toHaveBeenCalled();
+    expect(app.audio.setPaused).not.toHaveBeenCalled();
+    expect(playerInteract).not.toHaveBeenCalled();
+    expect(foundPresence).not.toHaveBeenCalled();
+    expect(doorPresence).not.toHaveBeenCalled();
+  });
+
+  it("still destroys and releases the phone when earlier teardown throws", () => {
+    const fakeWindow = createEventTarget();
+    const fakeDocument = createEventTarget();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("location", { search: "" });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const app = new DesktopApp({});
+    const phone = { removeEventListener: vi.fn(), destroy: vi.fn() };
+    app.phone = phone;
+    app.ui = { elements: {} };
+    app.foundPhone = { destroy: vi.fn(() => { throw new Error("runtime teardown failed"); }) };
+    const doorDefense = { destroy: vi.fn() };
+    const shadowQuest = { destroy: vi.fn() };
+    const player = { destroy: vi.fn() };
+    const experience = { dispose: vi.fn() };
+    app.doorDefense = doorDefense;
+    app.shadowQuest = shadowQuest;
+    app.player = player;
+    app.experience = experience;
+    app.audio = { dispose: vi.fn() };
+
+    expect(() => app.destroy()).toThrow("runtime teardown failed");
+    expect(() => app.destroy()).not.toThrow();
+
+    expect(app.doorDefense).toBeNull();
+    expect(app.shadowQuest).toBeNull();
+    expect(app.player).toBeNull();
+    expect(app.experience).toBeNull();
+    expect(doorDefense.destroy).toHaveBeenCalledOnce();
+    expect(shadowQuest.destroy).toHaveBeenCalledOnce();
+    expect(player.destroy).toHaveBeenCalledOnce();
+    expect(experience.dispose).toHaveBeenCalledOnce();
+    expect(app.audio.dispose).toHaveBeenCalledOnce();
+    expect(phone.destroy).toHaveBeenCalledOnce();
+    expect(app.phone).toBeNull();
   });
 
   it("disposes a scene that resolves after destroy without resuming startup", async () => {
