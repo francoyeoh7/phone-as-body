@@ -215,6 +215,21 @@ describe("door defense director", () => {
     });
   });
 
+  it("emits immutable progress snapshots across bracing updates", () => {
+    const harness = createHarness();
+    startBracing(harness);
+
+    harness.director.update(1.5);
+    const firstProgress = harness.ui.setDoorDefense.mock.calls.at(-1)[0];
+    expect(firstProgress.progress).toBe(0.375);
+
+    harness.director.update(0.5);
+    const secondProgress = harness.ui.setDoorDefense.mock.calls.at(-1)[0];
+    expect(firstProgress.progress).toBe(0.375);
+    expect(secondProgress.progress).toBe(0.5);
+    expect(secondProgress).not.toBe(firstProgress);
+  });
+
   it("starts a fresh zero-progress attempt at exactly 0.7 seconds after failure", () => {
     const harness = createHarness();
     startBracing(harness);
@@ -237,6 +252,41 @@ describe("door defense director", () => {
       context: "door-defense",
       baseline: "fresh",
     });
+  });
+
+  it("requires a new inactive sample before accepting active on a retry", () => {
+    const harness = createHarness();
+    startBracing(harness);
+    harness.director.handlePresence({ context: "door-defense", ready: true, active: false });
+    harness.director.update(0.7);
+
+    expect(harness.director.handlePresence({
+      context: "door-defense",
+      ready: true,
+      active: true,
+    })).toBe(false);
+    expect(harness.exitDoor.braceRig.visible).toBe(false);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: "calibrating",
+      progress: 0,
+    }));
+
+    expect(harness.director.handlePresence({
+      context: "door-defense",
+      ready: true,
+      active: false,
+    })).toBe(true);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: "awaiting",
+      progress: 0,
+    }));
+
+    expect(harness.director.handlePresence({
+      context: "door-defense",
+      ready: true,
+      active: true,
+    })).toBe(true);
+    expect(harness.exitDoor.braceRig.visible).toBe(true);
   });
 
   it("secures at four uninterrupted seconds and restores after the full one-second return", () => {
@@ -278,6 +328,40 @@ describe("door defense director", () => {
     expect(harness.ui.showCompletion).toBeUndefined();
   });
 
+  it("aborts without success effects when the story rejects door-defended", () => {
+    const harness = createHarness();
+    const rejectedStory = {
+      current: vi.fn(() => "reach-door"),
+      dispatch: vi.fn(() => ({ accepted: false, reason: "out-of-order" })),
+    };
+    harness.director.story = rejectedStory;
+    startBracing(harness);
+
+    harness.director.update(4);
+
+    expect(rejectedStory.dispatch).toHaveBeenCalledExactlyOnceWith("door-defended");
+    expect(harness.audio.cue).not.toHaveBeenCalledWith("door-latch");
+    expect(harness.ui.setDoorDefense).not.toHaveBeenCalledWith(expect.objectContaining({ status: "secured" }));
+    expect(harness.player.restorePose).toHaveBeenCalledExactlyOnceWith(harness.savedPose);
+    expect(harness.player.endCinematic).toHaveBeenCalledOnce();
+    expect(harness.exitDoor.braceRig.visible).toBe(false);
+    expect(harness.director.isCinematic()).toBe(false);
+  });
+
+  it("carries an oversized bracing delta through success and the full return", () => {
+    const harness = createHarness();
+    startBracing(harness);
+
+    harness.director.update(5);
+
+    expect(harness.story.current()).toBe("secured");
+    expect(harness.player.restorePose).toHaveBeenCalledExactlyOnceWith(harness.savedPose);
+    expect(harness.player.endCinematic).toHaveBeenCalledOnce();
+    expect(harness.director.isCinematic()).toBe(false);
+    expect(harness.exitDoor.lockBolt.position.x).toBeCloseTo(1.21, 8);
+    expect(harness.audio.cue.mock.calls.filter(([name]) => name === "door-latch")).toHaveLength(1);
+  });
+
   it("preserves the secured latch when an in-progress return is aborted", () => {
     const harness = createHarness();
     startBracing(harness);
@@ -313,6 +397,8 @@ describe("door defense director", () => {
       status: "failed",
     }));
     harness.director.update(0.7);
+    expect(harness.director.setFallbackHolding(true)).toBe(false);
+    expect(harness.director.setFallbackHolding(false)).toBe(true);
     expect(harness.director.setFallbackHolding(true)).toBe(true);
     harness.director.update(4);
     expect(harness.story.current()).toBe("secured");
@@ -384,6 +470,39 @@ describe("door defense director", () => {
     });
     expect(harness.story.current()).toBe("reach-door");
     expect(harness.director.isCinematic()).toBe(false);
+  });
+
+  it("requires leaving and re-entering the trigger zone after abort", () => {
+    const harness = createHarness();
+    startBracing(harness);
+    harness.director.abort();
+
+    harness.director.update(0.016);
+    expect(harness.player.snapshotPose).toHaveBeenCalledOnce();
+    expect(harness.onThreatStart).toHaveBeenCalledOnce();
+    expect(harness.director.isCinematic()).toBe(false);
+
+    harness.experience.camera.position.copy(TRIGGER).add(new THREE.Vector3(0, 0, 2.5));
+    harness.director.update(0.016);
+    expect(harness.player.snapshotPose).toHaveBeenCalledOnce();
+
+    harness.experience.camera.position.copy(TRIGGER).add(new THREE.Vector3(0, 0, 1.4));
+    harness.director.update(0.016);
+    expect(harness.player.snapshotPose).toHaveBeenCalledTimes(2);
+    expect(harness.onThreatStart).toHaveBeenCalledTimes(2);
+    expect(harness.director.isCinematic()).toBe(true);
+  });
+
+  it("does not emit a duplicate haptics-off event when aborting after failure", () => {
+    const harness = createHarness();
+    startBracing(harness);
+    harness.director.handlePresence({ context: "door-defense", ready: true, active: false });
+
+    harness.director.abort();
+
+    expect(harness.sendControllerEvent.mock.calls.filter(([event]) => (
+      event.type === "haptics" && event.active === false
+    ))).toHaveLength(1);
   });
 
   it("destroy is idempotent during an attempt and prevents reacquisition", () => {

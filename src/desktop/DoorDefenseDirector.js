@@ -82,6 +82,8 @@ export class DoorDefenseDirector {
     this.destroyed = false;
     this.cleanupIssued = false;
     this.hapticsActive = false;
+    this.acquisitionBlocked = false;
+    this.retryNeedsInactive = false;
 
     this.originalPosition = new THREE.Vector3();
     this.originalTarget = new THREE.Vector3();
@@ -93,7 +95,6 @@ export class DoorDefenseDirector {
     this.toTrigger = new THREE.Vector3();
     this.doorWorldPosition = new THREE.Vector3();
     this.fallbackPresenceEvent = { context: DOOR_CONTEXT, ready: true, active: false };
-    this.bracingUiState = { visible: true, progress: 0, status: "bracing" };
 
     this.handleStartZ = this.exitDoor?.handlePivot?.rotation?.z ?? 0;
     this.leafStartY = this.exitDoor?.leafPivot?.rotation?.y ?? 0;
@@ -114,7 +115,12 @@ export class DoorDefenseDirector {
     const seconds = Number.isFinite(delta) ? Math.max(0, delta) : 0;
 
     if (this.phase === PHASE.dormant) {
-      if (this.canAcquire()) {
+      const withinTrigger = this.isWithinTriggerRange();
+      if (this.acquisitionBlocked) {
+        if (!withinTrigger) this.acquisitionBlocked = false;
+        return;
+      }
+      if (this.canAcquire(withinTrigger)) {
         this.acquire();
         this.updateCamera(0, 0);
       }
@@ -139,12 +145,16 @@ export class DoorDefenseDirector {
     }
   }
 
-  canAcquire() {
+  isWithinTriggerRange() {
     if (!this.exitDoor?.triggerPosition || !this.experience?.camera) return false;
-    const current = typeof this.story?.current === "function" ? this.story.current() : this.story?.current;
-    if (current !== "reach-door") return false;
     this.toTrigger.copy(this.exitDoor.triggerPosition).sub(this.experience.camera.position);
     return this.toTrigger.lengthSq() <= ACQUIRE_DISTANCE * ACQUIRE_DISTANCE + DISTANCE_EPSILON;
+  }
+
+  canAcquire(withinTrigger = this.isWithinTriggerRange()) {
+    const current = typeof this.story?.current === "function" ? this.story.current() : this.story?.current;
+    if (current !== "reach-door") return false;
+    return withinTrigger;
   }
 
   acquire() {
@@ -170,6 +180,8 @@ export class DoorDefenseDirector {
     this.holdElapsed = 0;
     this.cinematic = true;
     this.cleanupIssued = false;
+    this.acquisitionBlocked = false;
+    this.retryNeedsInactive = false;
     this.resetVisuals();
     this.player.beginCinematic();
     this.ui?.setPrompt?.(null);
@@ -188,10 +200,11 @@ export class DoorDefenseDirector {
     if (this.phaseElapsed >= INTRO_SECONDS) this.startPresenceAttempt();
   }
 
-  startPresenceAttempt() {
+  startPresenceAttempt(retryNeedsInactive = false) {
     this.phase = PHASE.calibrating;
     this.phaseElapsed = 0;
     this.holdElapsed = 0;
+    this.retryNeedsInactive = retryNeedsInactive;
     this.exitDoor.braceRig.visible = false;
     this.ui?.setDoorDefense?.(UI_STATE.calibrating);
     this.sendControllerEvent(PRESENCE_MODE_EVENT);
@@ -207,6 +220,7 @@ export class DoorDefenseDirector {
 
     if (event.active === true) {
       if (this.phase === PHASE.calibrating || this.phase === PHASE.awaiting) {
+        if (this.retryNeedsInactive) return false;
         this.beginBracing();
         return true;
       }
@@ -215,12 +229,16 @@ export class DoorDefenseDirector {
 
     if (event.active !== false) return false;
     if (this.phase === PHASE.calibrating) {
+      this.retryNeedsInactive = false;
       this.phase = PHASE.awaiting;
       this.phaseElapsed = 0;
       this.ui?.setDoorDefense?.(UI_STATE.awaiting);
       return true;
     }
-    if (this.phase === PHASE.awaiting) return true;
+    if (this.phase === PHASE.awaiting) {
+      this.retryNeedsInactive = false;
+      return true;
+    }
     if (this.phase === PHASE.bracing) {
       this.fail();
       return true;
@@ -238,21 +256,30 @@ export class DoorDefenseDirector {
     this.phaseElapsed = 0;
     this.holdElapsed = 0;
     this.exitDoor.braceRig.visible = true;
-    this.bracingUiState.progress = 0;
-    this.ui?.setDoorDefense?.(this.bracingUiState);
+    this.ui?.setDoorDefense?.({ visible: true, progress: 0, status: "bracing" });
     this.setHaptics(true);
     this.audio?.cue?.("brace-strain");
     this.applyDoorAnimation();
   }
 
   updateBracing(delta) {
-    this.phaseElapsed += delta;
-    this.holdElapsed = Math.min(HOLD_SECONDS, this.holdElapsed + delta);
+    const remaining = HOLD_SECONDS - this.holdElapsed;
+    const consumed = Math.min(delta, remaining);
+    this.phaseElapsed += consumed;
+    this.holdElapsed += consumed;
     this.applyDoorAnimation();
     this.updateCamera(1, this.doorImpact());
-    this.bracingUiState.progress = this.holdElapsed / HOLD_SECONDS;
-    this.ui?.setDoorDefense?.(this.bracingUiState);
-    if (this.holdElapsed >= HOLD_SECONDS) this.succeed();
+    this.ui?.setDoorDefense?.({
+      visible: true,
+      progress: this.holdElapsed / HOLD_SECONDS,
+      status: "bracing",
+    });
+    if (this.holdElapsed < HOLD_SECONDS) return;
+    const surplus = delta - consumed;
+    if (this.succeed() && surplus > 0) {
+      this.beginReturn();
+      this.updateReturn(surplus);
+    }
   }
 
   fail() {
@@ -273,21 +300,26 @@ export class DoorDefenseDirector {
     this.updateCamera(1, this.doorImpact());
     if (this.phaseElapsed >= FAILURE_SECONDS) {
       this.resetDoorHardware();
-      this.startPresenceAttempt();
+      this.startPresenceAttempt(true);
     }
   }
 
   succeed() {
-    if (this.phase !== PHASE.bracing) return;
+    if (this.phase !== PHASE.bracing) return false;
+    const transition = this.story?.dispatch?.("door-defended");
+    if (transition?.accepted !== true) {
+      this.abort();
+      return false;
+    }
     this.phase = PHASE.secured;
     this.phaseElapsed = 0;
     this.holdElapsed = HOLD_SECONDS;
     this.exitDoor.braceRig.visible = false;
-    this.story?.dispatch?.("door-defended");
     this.audio?.cue?.("door-latch");
     this.setHaptics(false);
     this.ui?.setDoorDefense?.(UI_STATE.secured);
     this.applyDoorAnimation();
+    return true;
   }
 
   beginReturn() {
@@ -319,8 +351,8 @@ export class DoorDefenseDirector {
     this.sendPulseMode();
   }
 
-  setHaptics(active, force = false) {
-    if (!force && this.hapticsActive === active) return;
+  setHaptics(active) {
+    if (this.hapticsActive === active) return;
     this.hapticsActive = active;
     this.sendControllerEvent(active ? HAPTICS_ON_EVENT : HAPTICS_OFF_EVENT);
   }
@@ -427,11 +459,13 @@ export class DoorDefenseDirector {
     }
     this.savedPose = null;
     this.cinematic = false;
+    if (wasCinematic) this.acquisitionBlocked = true;
     this.phase = PHASE.dormant;
     this.phaseElapsed = 0;
     this.holdElapsed = 0;
+    this.retryNeedsInactive = false;
     this.ui?.setDoorDefense?.(UI_STATE.dormant);
-    this.setHaptics(false, true);
+    this.setHaptics(false);
     this.sendPulseMode();
     this.cleanupIssued = true;
     return true;
