@@ -1,5 +1,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
+import { createExitDoor } from "./ExitDoor.js";
+import { createFoundPhoneProp } from "./FoundPhoneProp.js";
 import { createWashbasinState } from "./Washbasin.js";
 
 function seededRandom(seed) {
@@ -682,17 +684,14 @@ export async function createScene(host) {
   scene.add(panelRoot);
   const panel = { id: "panel", label: "安装保险丝", root: panelRoot, mesh: panelBody, halo: null, enabled: true, lamp: panelLamp };
 
-  const elevatorDoors = new THREE.Group();
-  elevatorDoors.position.set(0, 1.25, -27.65);
-  const doorLeft = new THREE.Mesh(new THREE.BoxGeometry(1.16, 2.5, 0.12), darkMetalMaterial);
-  doorLeft.position.x = -0.58;
-  const doorRight = doorLeft.clone();
-  doorRight.position.x = 0.58;
-  elevatorDoors.add(doorLeft, doorRight);
-  scene.add(elevatorDoors);
-  const elevatorCollider = addFixedCollider(world, 0, 1.25, -27.55, 1.25, 1.25, 0.12);
-  const elevator = addInteractable(scene, "elevator", "进入电梯", [0, 1.05, -26.7], new THREE.BoxGeometry(2.1, 2.3, 0.2), new THREE.MeshStandardMaterial({ color: 0x202522, roughness: 0.44, metalness: 0.8, transparent: true, opacity: 0.16 }));
-  elevator.root.visible = false;
+  const exitDoor = createExitDoor({
+    scene,
+    camera,
+    world,
+    RAPIER,
+    materials: { door: doorMaterial, hardware: metalMaterial },
+  });
+  const foundPhone = createFoundPhoneProp({ scene, camera });
 
   const silhouette = new THREE.Group();
   silhouette.position.set(0.3, 0, -2.8);
@@ -712,7 +711,7 @@ export async function createScene(host) {
   silhouette.visible = false;
   scene.add(silhouette);
 
-  const interactables = [fuse, panel, elevator, washbasin, shadowQuest.window];
+  const interactables = [fuse, panel, foundPhone, washbasin, shadowQuest.window];
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -728,7 +727,7 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
-    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse, washbasin, shadowQuest },
+    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, silhouette, exitDoor, foundPhone, panel, fuse, washbasin, shadowQuest },
     update(delta, elapsed) {
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
       for (const light of emergencyLights) light.intensity = pulse;
