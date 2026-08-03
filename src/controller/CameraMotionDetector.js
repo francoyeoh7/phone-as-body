@@ -136,6 +136,10 @@ export function adaptiveScoringOptions(noiseMean = 0) {
   };
 }
 
+function resolvedScoringOptions(noiseMean, overrides) {
+  return { ...adaptiveScoringOptions(noiseMean), ...overrides };
+}
+
 function qualifiesForPulse(metrics, options) {
   if (!metrics || !Number.isFinite(metrics.meanDifference) || !Number.isFinite(metrics.activeRatio)) return false;
   const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
@@ -197,7 +201,7 @@ export class CameraMotionDetector {
     this.sampleIntervalMs = finitePositive(sampleIntervalMs, 50);
     this.sampleWidth = Math.max(8, Math.floor(sampleWidth));
     this.sampleHeight = Math.max(8, Math.floor(sampleHeight));
-    this.scoringOptions = { ...DEFAULT_OPTIONS, ...scoringOptions };
+    this.scoringOptions = { ...scoringOptions };
     this.stream = null;
     this.capture = null;
     this.frameHandle = null;
@@ -306,7 +310,7 @@ export class CameraMotionDetector {
   }
 
   ingestPulse(sample, metrics, timestamp, referenceTimestamp) {
-    const options = adaptiveScoringOptions(this.noiseMean);
+    const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
     const qualifies = qualifiesForPulse(metrics, options);
     if (!qualifies) {
       this.lastQuietFrame = sample.slice();
@@ -324,7 +328,7 @@ export class CameraMotionDetector {
   ingestPresence(sample, width, height, metrics, timestamp, hasHistoryReference) {
     if (!this.presenceBaseline) {
       if (!hasHistoryReference) return false;
-      const options = adaptiveScoringOptions(this.noiseMean);
+      const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
       const stable = metrics.meanDifference < options.minMeanDifference
         && metrics.activeRatio < options.minActiveRatio;
       if (stable) this.calibrationFrames.push(sample.slice());
@@ -336,7 +340,7 @@ export class CameraMotionDetector {
       return false;
     }
 
-    const options = adaptiveScoringOptions(this.noiseMean);
+    const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
     const presenceMetrics = measureFrameMotion(this.presenceBaseline, sample, width, height, options);
     const active = qualifiesForPulse(presenceMetrics, options);
     if (!active) this.lastQuietFrame = sample.slice();
@@ -348,7 +352,7 @@ export class CameraMotionDetector {
     if (this.destroyed || !this.cameraGranted || this.suspended || !this.focused) return false;
     const sample = frame.slice?.() ?? Uint8Array.from(frame);
     const reference = this.historyReference(timestamp);
-    const options = adaptiveScoringOptions(this.noiseMean);
+    const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
     const metrics = reference
       ? measureFrameMotion(reference.frame, sample, width, height, options)
       : { meanDifference: 0, activeRatio: 0, largestActiveRatio: 0 };

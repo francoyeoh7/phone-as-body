@@ -166,6 +166,36 @@ describe("camera motion detector", () => {
     expect(detector.noiseMean).toBe(0);
   });
 
+  it("applies explicit scoring overrides without replacing adaptive defaults", async () => {
+    async function detect(change) {
+      const onPulse = vi.fn();
+      const detector = new CameraMotionDetector({
+        onPulse,
+        scoringOptions: { maxActiveRatio: 0.03 },
+        mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+        createCaptureElements: () => null,
+      });
+      const quiet = new Uint8Array(96 * 72).fill(112);
+
+      await detector.start();
+      detector.setFocused(true);
+      detector.ingestFrame(quiet, 96, 72, 0);
+      detector.ingestFrame(quiet, 96, 72, 50);
+      detector.ingestFrame(quiet, 96, 72, 100);
+      detector.ingestFrame(quiet, 96, 72, 150);
+      detector.ingestFrame(change, 96, 72, 200);
+      return onPulse;
+    }
+
+    const broadChange = new Uint8Array(96 * 72).fill(112);
+    for (let y = 18; y < 34; y += 1) {
+      for (let x = 30; x < 46; x += 1) broadChange[y * 96 + x] = 132;
+    }
+
+    expect(await detect(broadChange)).not.toHaveBeenCalled();
+    expect(await detect(lowContrastRectangle(96, 72, 30, 18))).toHaveBeenCalledOnce();
+  });
+
   it("calibrates a fresh presence baseline and emits only transitions", async () => {
     const onPresence = vi.fn();
     const detector = new CameraMotionDetector({
