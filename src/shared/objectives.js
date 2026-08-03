@@ -1,15 +1,15 @@
 export const OBJECTIVE_LABELS = Object.freeze({
   "find-fuse": "寻找备用保险丝",
   "restore-power": "将保险丝装入配电箱",
-  "reach-elevator": "在它靠近前进入电梯",
-  escaped: "离开 617",
+  "reach-door": "在它靠近前守住后门",
+  secured: "后门已守住",
 });
 
 const TRANSITIONS = Object.freeze({
   "find-fuse": { "fuse-collected": "restore-power" },
-  "restore-power": { "panel-used": "reach-elevator" },
-  "reach-elevator": { "elevator-entered": "escaped" },
-  escaped: {},
+  "restore-power": { "panel-used": "reach-door" },
+  "reach-door": { "door-defended": "secured" },
+  secured: {},
 });
 
 export function createObjectiveState(initial = "find-fuse") {
@@ -30,8 +30,8 @@ export function createObjectiveState(initial = "find-fuse") {
       return {
         current,
         hasFuse: current !== "find-fuse",
-        powerRestored: current === "reach-elevator" || current === "escaped",
-        escaped: current === "escaped",
+        powerRestored: current === "reach-door" || current === "secured",
+        secured: current === "secured",
       };
     },
   };

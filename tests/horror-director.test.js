@@ -5,22 +5,14 @@ import { HorrorDirector } from "../src/desktop/HorrorDirector.js";
 function createHarness({ washbasin } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, -8);
-  const elevatorDoors = new THREE.Group();
-  const leftDoor = new THREE.Object3D();
-  const rightDoor = new THREE.Object3D();
-  leftDoor.position.x = -0.58;
-  rightDoor.position.x = 0.58;
-  elevatorDoors.add(leftDoor, rightDoor);
   const ui = {
     setObjective: vi.fn(),
     setPrompt: vi.fn(),
     setSubtitle: vi.fn(),
   };
   const audio = { cue: vi.fn() };
-  const onComplete = vi.fn();
   const experience = {
     camera,
-    world: { removeCollider: vi.fn() },
     objects: {
       fuse: { enabled: true, root: new THREE.Group() },
       panel: {
@@ -28,9 +20,6 @@ function createHarness({ washbasin } = {}) {
           material: new THREE.MeshStandardMaterial({ color: 0x9f3329, emissive: 0x8d2a20 }),
         },
       },
-      elevator: { enabled: true, root: new THREE.Group() },
-      elevatorCollider: { handle: 42 },
-      elevatorDoors,
       silhouette: new THREE.Group(),
       flashlight: { visible: true },
       ceilingLights: Array.from({ length: 6 }, () => new THREE.PointLight()),
@@ -38,9 +27,8 @@ function createHarness({ washbasin } = {}) {
       washbasin,
     },
   };
-  experience.objects.elevator.root.visible = false;
-  const director = new HorrorDirector({ experience, ui, audio, onComplete });
-  return { director, experience, ui, audio, onComplete };
+  const director = new HorrorDirector({ experience, ui, audio });
+  return { director, experience, ui, audio };
 }
 
 describe("horror director", () => {
@@ -52,21 +40,34 @@ describe("horror director", () => {
     expect(ui.setSubtitle).toHaveBeenCalled();
   });
 
-  it("drives power restoration and the escape ending without phone messages", () => {
-    const { director, experience, onComplete } = createHarness();
+  it("drives power restoration to the exit door without elevator mutations", () => {
+    const { director, experience } = createHarness();
 
     expect(director.handleInteraction("fuse")).toBe(true);
     expect(experience.objects.fuse.root.visible).toBe(false);
     expect(director.handleInteraction("panel")).toBe(true);
-    expect(experience.objects.elevator.root.visible).toBe(true);
-    expect(experience.world.removeCollider).toHaveBeenCalledOnce();
-    expect(experience.objects.elevatorCollider).toBeNull();
-    expect(director.story.current()).toBe("reach-elevator");
+    expect(director.story.current()).toBe("reach-door");
 
-    expect(director.handleInteraction("elevator")).toBe(true);
-    director.update(0.016, 3.7);
-    expect(onComplete).toHaveBeenCalledOnce();
-    expect(director.story.current()).toBe("escaped");
+    expect(director.handleInteraction("elevator")).toBe(false);
+  });
+
+  it("stops an active pursuit and is safe before pursuit starts", () => {
+    const { director, experience } = createHarness();
+
+    expect(() => director.stopPursuit()).not.toThrow();
+    expect(director.pursuitActive).toBe(false);
+    expect(director.pursuitAt).toBe(Infinity);
+    expect(experience.objects.silhouette.visible).toBe(false);
+
+    director.pursuitAt = 0;
+    director.update(0.016, 1);
+    expect(director.pursuitActive).toBe(true);
+    expect(experience.objects.silhouette.visible).toBe(true);
+    director.stopPursuit();
+
+    expect(director.pursuitActive).toBe(false);
+    expect(director.pursuitAt).toBe(Infinity);
+    expect(experience.objects.silhouette.visible).toBe(false);
   });
 
   it("routes repeated washbasin interactions without changing the story objective", () => {

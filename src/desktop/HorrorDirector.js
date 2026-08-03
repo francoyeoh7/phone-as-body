@@ -2,11 +2,10 @@ import * as THREE from "three";
 import { createObjectiveState } from "../shared/objectives.js";
 
 export class HorrorDirector {
-  constructor({ experience, ui, audio, onComplete }) {
+  constructor({ experience, ui, audio }) {
     this.experience = experience;
     this.ui = ui;
     this.audio = audio;
-    this.onComplete = onComplete;
     this.story = createObjectiveState();
     this.elapsed = 0;
     this.silhouetteArmed = false;
@@ -16,7 +15,6 @@ export class HorrorDirector {
     this.poweredLightCount = 0;
     this.pursuitAt = Infinity;
     this.pursuitActive = false;
-    this.completionAt = Infinity;
     this.lightningAt = 3.5;
     this.subtitleUntil = 0;
     this.settings = { subtitles: true, reducedMotion: false };
@@ -38,7 +36,6 @@ export class HorrorDirector {
     if (id === "washbasin") return this.toggleWashbasin();
     if (id === "fuse") return this.collectFuse();
     if (id === "panel") return this.restorePower();
-    if (id === "elevator") return this.enterElevator();
     return false;
   }
 
@@ -79,14 +76,9 @@ export class HorrorDirector {
       this.showSubtitle(this.story.current() === "find-fuse" ? "配电箱里少了一个保险丝。" : "电源已经恢复。", 2.1);
       return false;
     }
-    const { panel, elevator, ceilingLights } = this.experience.objects;
+    const { panel, ceilingLights } = this.experience.objects;
     panel.lamp.material.color.setHex(0x7da468);
     panel.lamp.material.emissive.setHex(0x577e46);
-    elevator.root.visible = true;
-    if (this.experience.objects.elevatorCollider) {
-      this.experience.world.removeCollider(this.experience.objects.elevatorCollider, true);
-      this.experience.objects.elevatorCollider = null;
-    }
     for (const light of ceilingLights) light.intensity = 0;
     this.powerSequenceAt = this.elapsed + 0.2;
     this.pursuitAt = this.elapsed + 4.2;
@@ -96,18 +88,10 @@ export class HorrorDirector {
     return true;
   }
 
-  enterElevator() {
-    const transition = this.story.dispatch("elevator-entered");
-    if (!transition.accepted) return false;
-    this.experience.objects.elevator.enabled = false;
+  stopPursuit() {
+    this.pursuitAt = Infinity;
     this.pursuitActive = false;
     this.experience.objects.silhouette.visible = false;
-    this.ui.setPrompt(null);
-    this.ui.setObjective(this.story.label());
-    this.showSubtitle("门正在关闭。", 2.2);
-    this.audio.cue("elevator");
-    this.completionAt = this.elapsed + 2.35;
-    return true;
   }
 
   showSubtitle(text, seconds) {
@@ -122,12 +106,7 @@ export class HorrorDirector {
     this.updateSilhouette(delta);
     this.updatePowerSequence();
     this.updatePursuit(delta);
-    this.updateElevator(delta);
     this.updateStorm(delta);
-    if (elapsed >= this.completionAt) {
-      this.completionAt = Infinity;
-      this.onComplete?.();
-    }
   }
 
   updateSilhouette() {
@@ -182,17 +161,6 @@ export class HorrorDirector {
     const direction = target.sub(silhouette.position);
     const distance = direction.length();
     if (distance > 1.9) silhouette.position.addScaledVector(direction.normalize(), delta * 0.72);
-  }
-
-  updateElevator(delta) {
-    const doors = this.experience.objects.elevatorDoors.children;
-    if (doors.length < 2) return;
-    const escaped = this.story.current() === "escaped";
-    const leftTarget = escaped ? -0.58 : this.story.current() === "reach-elevator" ? -1.18 : -0.58;
-    const rightTarget = -leftTarget;
-    const alpha = 1 - Math.exp(-delta * (escaped ? 2.5 : 3.8));
-    doors[0].position.x += (leftTarget - doors[0].position.x) * alpha;
-    doors[1].position.x += (rightTarget - doors[1].position.x) * alpha;
   }
 
   updateStorm(delta) {

@@ -15,12 +15,19 @@ describe("objective progression", () => {
     expect(story.current()).toBe("find-fuse");
   });
 
-  it("advances through the complete escape sequence", () => {
+  it("advances through the secured exit-door sequence", () => {
     const story = createObjectiveState();
     expect(story.dispatch("fuse-collected")).toMatchObject({ accepted: true, next: "restore-power" });
-    expect(story.dispatch("panel-used")).toMatchObject({ accepted: true, next: "reach-elevator" });
-    expect(story.dispatch("elevator-entered")).toMatchObject({ accepted: true, next: "escaped" });
-    expect(story.current()).toBe("escaped");
+    expect(story.dispatch("panel-used")).toMatchObject({ accepted: true, next: "reach-door" });
+    expect(story.dispatch("door-defended")).toMatchObject({ accepted: true, next: "secured" });
+    expect(story.current()).toBe("secured");
+  });
+
+  it("rejects elevator entry and does not expose elevator objective labels", () => {
+    const story = createObjectiveState();
+    expect(story.dispatch("elevator-entered")).toMatchObject({ accepted: false, current: "find-fuse" });
+    expect(OBJECTIVE_LABELS).not.toHaveProperty("reach-elevator");
+    expect(OBJECTIVE_LABELS).not.toHaveProperty("escaped");
   });
 
   it("is idempotent after an event has already advanced the story", () => {
@@ -29,14 +36,16 @@ describe("objective progression", () => {
     expect(story.dispatch("fuse-collected")).toMatchObject({ accepted: false, reason: "out-of-order" });
   });
 
-  it("serializes only deterministic story data", () => {
+  it("serializes only deterministic secured story data", () => {
     const story = createObjectiveState();
     story.dispatch("fuse-collected");
+    story.dispatch("panel-used");
+    story.dispatch("door-defended");
     expect(story.serialize()).toEqual({
-      current: "restore-power",
+      current: "secured",
       hasFuse: true,
-      powerRestored: false,
-      escaped: false,
+      powerRestored: true,
+      secured: true,
     });
   });
 });
