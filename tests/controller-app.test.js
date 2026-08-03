@@ -16,6 +16,7 @@ function createApp({ motionEnabled = true } = {}) {
   const cameraMotion = {
     start: vi.fn(async () => ({ cameraGranted: true })),
     setFocused: vi.fn(),
+    setMode: vi.fn(),
     suspend: vi.fn(),
     resume: vi.fn(() => true),
     destroy: vi.fn(),
@@ -23,6 +24,7 @@ function createApp({ motionEnabled = true } = {}) {
   const app = Object.assign(Object.create(ControllerApp.prototype), {
     motion,
     cameraMotion,
+    haptics: { start: vi.fn(), stop: vi.fn() },
     cameraEnabled: false,
     motionEnabled,
     move: { x: 0.5, y: -0.5 },
@@ -39,6 +41,8 @@ function createApp({ motionEnabled = true } = {}) {
     lifecycleGeneration: 0,
     viewEngaged: false,
     playSurface: { dataset: {} },
+    status: { dataset: {} },
+    connectionLabel: { textContent: "" },
     joystick: { reset: vi.fn() },
     socket: {
       sendAction: actions,
@@ -56,7 +60,7 @@ function createApp({ motionEnabled = true } = {}) {
     ensureAudioContext: vi.fn(),
     destroy: vi.fn(),
   });
-  return { app, motion, cameraMotion, actions };
+  return { app, motion, cameraMotion, haptics: app.haptics, actions };
 }
 
 function deferred() {
@@ -106,7 +110,7 @@ describe("controller app lifecycle", () => {
   });
 
   it("pauses immediately when backgrounded during an active session", async () => {
-    const { app, motion, cameraMotion, actions } = createApp();
+    const { app, motion, cameraMotion, haptics, actions } = createApp();
 
     app.suspendForBackground();
 
@@ -114,6 +118,7 @@ describe("controller app lifecycle", () => {
     expect(actions).toHaveBeenCalledWith("pause");
     expect(motion.suspend).toHaveBeenCalledTimes(1);
     expect(cameraMotion.suspend).toHaveBeenCalledTimes(1);
+    expect(haptics.stop).toHaveBeenCalledTimes(1);
   });
 
   it("requests the front camera together with motion permission", async () => {
@@ -230,6 +235,58 @@ describe("controller app lifecycle", () => {
     app.handleCameraMotion();
 
     expect(actions).toHaveBeenCalledWith("interact");
+  });
+
+  it("routes desktop gesture modes and sustained camera presence", () => {
+    const { app, cameraMotion, actions } = createApp();
+
+    app.handleDesktopEvent({ type: "gesture-mode", mode: "presence", context: "door-defense", baseline: "fresh" });
+    app.handleCameraPresence({ ready: true, active: true, context: "door-defense" });
+
+    expect(cameraMotion.setMode).toHaveBeenCalledWith({ mode: "presence", context: "door-defense", baseline: "fresh" });
+    expect(actions).toHaveBeenCalledWith("gesture-presence", { ready: true, active: true, context: "door-defense" });
+  });
+
+  it("starts brace haptics from desktop events and stops them when paused", async () => {
+    const { app, haptics } = createApp();
+
+    app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
+    await app.setPaused(true);
+
+    expect(haptics.start).toHaveBeenCalledOnce();
+    expect(haptics.stop).toHaveBeenCalled();
+  });
+
+  it("stops haptics when the peer disconnects", () => {
+    const { app, haptics } = createApp();
+
+    app.updateConnection("disconnected");
+
+    expect(haptics.stop).toHaveBeenCalledOnce();
+  });
+
+  it("stops haptics when the controller is destroyed", () => {
+    vi.stubGlobal("document", { removeEventListener: vi.fn() });
+    vi.stubGlobal("window", { clearTimeout: vi.fn(), removeEventListener: vi.fn() });
+    const haptics = { stop: vi.fn() };
+    const app = Object.assign(Object.create(ControllerApp.prototype), {
+      lifecycleGeneration: 0,
+      calibrationTimer: null,
+      haptics,
+      joystick: { destroy: vi.fn() },
+      motion: { destroy: vi.fn() },
+      cameraMotion: { destroy: vi.fn() },
+      diagnostics: { destroy: vi.fn() },
+      socket: { destroy: vi.fn() },
+      audioContext: { close: vi.fn() },
+      handleVisibility: vi.fn(),
+      handlePageHide: vi.fn(),
+      handlePageShow: vi.fn(),
+    });
+
+    app.destroy();
+
+    expect(haptics.stop).toHaveBeenCalledOnce();
   });
 
   it("shows each motion sample and sends its output immediately", () => {

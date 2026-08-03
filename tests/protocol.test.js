@@ -34,6 +34,35 @@ describe("view delta protocol", () => {
   });
 });
 
+describe("sustained gesture actions", () => {
+  it("accepts a complete gesture-presence action", () => {
+    expect(protocol.isControllerAction({
+      action: "gesture-presence",
+      ready: true,
+      active: false,
+      context: "door-defense",
+    })).toBe(true);
+  });
+
+  it("rejects gesture-presence actions with an unknown context", () => {
+    expect(protocol.isControllerAction({
+      action: "gesture-presence",
+      ready: true,
+      active: true,
+      context: "wrong",
+    })).toBe(false);
+  });
+
+  it("requires boolean presence fields", () => {
+    expect(protocol.isControllerAction({
+      action: "gesture-presence",
+      ready: "yes",
+      active: true,
+      context: "found-phone",
+    })).toBe(false);
+  });
+});
+
 describe("controller snapshot flush", () => {
   it("accumulates orientation deltas until the next network flush", () => {
     const socket = new ControllerSocket({ room: "617042" });

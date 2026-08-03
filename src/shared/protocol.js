@@ -14,6 +14,7 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "interact",
   "flashlight",
   "recenter",
+  "gesture-presence",
   "pause",
   "resume",
   "settings",
@@ -73,6 +74,11 @@ export function isControllerInput(value) {
 }
 
 export function isControllerAction(value) {
+  if (value?.action === "gesture-presence") {
+    return typeof value.ready === "boolean"
+      && typeof value.active === "boolean"
+      && ["door-defense", "found-phone"].includes(value.context);
+  }
   return (
     value !== null &&
     typeof value === "object" &&

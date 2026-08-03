@@ -7,6 +7,7 @@ import {
   X,
 } from "lucide";
 import { isRoomCode } from "../shared/protocol.js";
+import { BraceHaptics } from "./BraceHaptics.js";
 import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { ControllerSocket } from "./ControllerSocket.js";
 import { MotionController } from "./MotionController.js";
@@ -168,8 +169,10 @@ export class ControllerApp {
       onTelemetry: (telemetry) => this.diagnostics.updateSensor(telemetry),
       onState: (state) => this.handleMotionState(state),
     });
+    this.haptics = new BraceHaptics();
     this.cameraMotion = new CameraMotionDetector({
-      onMotion: () => this.handleCameraMotion(),
+      onPulse: () => this.handleCameraMotion(),
+      onPresence: (presence) => this.handleCameraPresence(presence),
       onState: (state) => this.handleCameraState(state),
     });
 
@@ -214,6 +217,7 @@ export class ControllerApp {
       "invalid-room": "房间码无效",
     };
     this.status.dataset.status = state;
+    if (state !== "joined") this.haptics?.stop();
     if (state !== "joined") this.cameraMotion?.setFocused(false);
     this.connectionLabel.textContent = labels[state] ?? "等待连接";
     if (state === "joined") {
@@ -341,6 +345,10 @@ export class ControllerApp {
     this.socket?.sendAction("interact");
   }
 
+  handleCameraPresence({ ready, active, context }) {
+    this.socket?.sendAction("gesture-presence", { ready, active, context });
+  }
+
   handleVisibility() {
     if (document.hidden) {
       this.suspendForBackground();
@@ -360,6 +368,7 @@ export class ControllerApp {
     this.sendInput({ includeViewDelta: true, immediate: true });
     this.motion?.suspend();
     this.cameraMotion?.suspend();
+    this.haptics?.stop();
     this.socket?.sendAction("pause");
   }
 
@@ -435,6 +444,7 @@ export class ControllerApp {
       this.sendInput();
       this.motion?.suspend();
       this.cameraMotion?.suspend();
+      this.haptics?.stop();
       this.socket?.sendAction("pause");
       pulse();
       return;
@@ -474,6 +484,15 @@ export class ControllerApp {
     }
     if (event.type === "control-feedback") {
       this.socket?.markApplied(event);
+      return;
+    }
+    if (event.type === "gesture-mode") {
+      this.cameraMotion?.setMode({ mode: event.mode, context: event.context, baseline: event.baseline });
+      return;
+    }
+    if (event.type === "haptics") {
+      if (event.active && event.pattern === "brace") this.haptics?.start();
+      else this.haptics?.stop();
     }
   }
 
@@ -485,6 +504,7 @@ export class ControllerApp {
 
   destroy() {
     this.lifecycleGeneration += 1;
+    this.haptics?.stop();
     window.clearTimeout(this.calibrationTimer);
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);
