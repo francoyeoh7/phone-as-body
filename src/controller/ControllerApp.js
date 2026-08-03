@@ -546,7 +546,7 @@ export class ControllerApp {
         && this.connectionState === "joined";
       const active = Boolean(event.active) && canActivate;
       this.foundPhoneUI?.setActive(active);
-      if (event.active) this.haptics?.stop();
+      this.haptics?.stop();
     }
   }
 

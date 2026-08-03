@@ -273,12 +273,13 @@ describe("controller app lifecycle", () => {
     expect(haptics.stop).toHaveBeenCalledOnce();
   });
 
-  it("forwards found phone UI deactivation so the overlay hides and resets", () => {
-    const { app } = createApp();
+  it("forwards found phone UI deactivation so the overlay hides, resets, and stops haptics", () => {
+    const { app, haptics } = createApp();
 
     app.handleDesktopEvent({ type: "found-phone-ui", active: false });
 
     expect(app.foundPhoneUI.setActive).toHaveBeenCalledWith(false);
+    expect(haptics.stop).toHaveBeenCalledOnce();
   });
 
   it.each([
