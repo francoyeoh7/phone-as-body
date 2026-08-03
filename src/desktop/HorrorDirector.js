@@ -83,7 +83,7 @@ export class HorrorDirector {
     this.powerSequenceAt = this.elapsed + 0.2;
     this.pursuitAt = this.elapsed + 4.2;
     this.ui.setObjective(this.story.label());
-    this.showSubtitle("电梯恢复供电。远处有什么东西动了。", 3.2);
+    this.showSubtitle("出口门的应急锁已通电。", 3.2);
     this.audio.cue("power");
     return true;
   }

@@ -41,12 +41,13 @@ describe("horror director", () => {
   });
 
   it("drives power restoration to the exit door without elevator mutations", () => {
-    const { director, experience } = createHarness();
+    const { director, experience, ui } = createHarness();
 
     expect(director.handleInteraction("fuse")).toBe(true);
     expect(experience.objects.fuse.root.visible).toBe(false);
     expect(director.handleInteraction("panel")).toBe(true);
     expect(director.story.current()).toBe("reach-door");
+    expect(ui.setSubtitle).toHaveBeenLastCalledWith("出口门的应急锁已通电。", true);
 
     expect(director.handleInteraction("elevator")).toBe(false);
   });
