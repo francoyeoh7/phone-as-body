@@ -15,6 +15,8 @@ export function createGameAudio() {
   let master = null;
   let ambience = null;
   let hum = null;
+  let waterSource = null;
+  let waterGain = null;
   let footstepClock = 0;
 
   function start() {
@@ -80,6 +82,32 @@ export function createGameAudio() {
     source.stop(now + duration);
   }
 
+  function startWater() {
+    if (!context || waterSource) return;
+    const source = context.createBufferSource();
+    const filter = context.createBiquadFilter();
+    waterGain = context.createGain();
+    source.buffer = createNoiseBuffer(context, 2.6);
+    source.loop = true;
+    filter.type = "bandpass";
+    filter.frequency.value = 1500;
+    filter.Q.value = 0.55;
+    waterGain.gain.value = 0.0001;
+    source.connect(filter).connect(waterGain).connect(master);
+    source.start();
+    waterGain.gain.exponentialRampToValueAtTime(0.11, context.currentTime + 0.18);
+    waterSource = source;
+  }
+
+  function stopWater() {
+    if (!context || !waterSource || !waterGain) return;
+    const source = waterSource;
+    waterGain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.16);
+    source.stop(context.currentTime + 0.18);
+    waterSource = null;
+    waterGain = null;
+  }
+
   function cue(name) {
     if (!context) return;
     if (name === "pickup") {
@@ -101,6 +129,8 @@ export function createGameAudio() {
     }
     if (name === "thunder") noiseBurst(1.6, 0.23, 92);
     if (name === "flashlight") tone({ frequency: 690, endFrequency: 420, duration: 0.055, gain: 0.045, type: "square" });
+    if (name === "water-on") startWater();
+    if (name === "water-off") stopWater();
   }
 
   function update(delta, movementSpeed) {
@@ -125,6 +155,7 @@ export function createGameAudio() {
       master.gain.setTargetAtTime(paused ? 0.08 : 0.62, context.currentTime, 0.08);
     },
     dispose() {
+      stopWater();
       ambience?.stop();
       hum?.stop();
       context?.close();

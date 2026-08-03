@@ -97,6 +97,9 @@ export function createDesktopUI(root) {
       elements.prompt.hidden = !text;
       elements.promptLabel.textContent = text ?? "";
     },
+    setTargetFocused(focused) {
+      elements.reticle.dataset.focused = String(Boolean(focused));
+    },
     setSubtitle(text, visible = true) {
       elements.subtitle.textContent = text;
       elements.subtitle.hidden = !visible || !text;

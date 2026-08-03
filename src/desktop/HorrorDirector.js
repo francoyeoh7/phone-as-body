@@ -35,10 +35,21 @@ export class HorrorDirector {
   }
 
   handleInteraction(id) {
+    if (id === "washbasin") return this.toggleWashbasin();
     if (id === "fuse") return this.collectFuse();
     if (id === "panel") return this.restorePower();
     if (id === "elevator") return this.enterElevator();
     return false;
+  }
+
+  toggleWashbasin() {
+    const washbasin = this.experience.objects.washbasin;
+    if (!washbasin?.toggle) return false;
+    const running = washbasin.toggle();
+    this.ui.setPrompt(washbasin.label);
+    this.audio.cue(running ? "water-on" : "water-off");
+    this.showSubtitle(running ? "水流起来了。" : "水龙头关上了。", 1.5);
+    return true;
   }
 
   collectFuse() {

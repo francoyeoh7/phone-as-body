@@ -7,6 +7,7 @@ import {
   X,
 } from "lucide";
 import { isRoomCode } from "../shared/protocol.js";
+import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { ControllerSocket } from "./ControllerSocket.js";
 import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
@@ -58,6 +59,8 @@ export class ControllerApp {
     this.audioContext = null;
     this.paused = false;
     this.motionEnabled = false;
+    this.cameraEnabled = false;
+    this.cameraMotion = null;
     this.touchFallback = false;
     this.requiresContinue = false;
     this.bfcacheSuspended = false;
@@ -105,7 +108,7 @@ export class ControllerApp {
           <p class="eyebrow">CORRIDOR 617</p>
           <h1 id="permission-title">连接电脑</h1>
           <p id="permission-copy">请从电脑屏幕扫描二维码进入。</p>
-          <button class="primary-button" id="enable-motion" disabled>启用体感</button>
+          <button class="primary-button" id="enable-motion" disabled>允许并开始</button>
         </div>
 
         <div class="pause-menu" id="settings-menu" hidden>
@@ -165,6 +168,10 @@ export class ControllerApp {
       onTelemetry: (telemetry) => this.diagnostics.updateSensor(telemetry),
       onState: (state) => this.handleMotionState(state),
     });
+    this.cameraMotion = new CameraMotionDetector({
+      onMotion: () => this.handleCameraMotion(),
+      onState: (state) => this.handleCameraState(state),
+    });
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
     this.root.querySelector("#recenter").addEventListener("click", () => {
@@ -207,10 +214,11 @@ export class ControllerApp {
       "invalid-room": "房间码无效",
     };
     this.status.dataset.status = state;
+    if (state !== "joined") this.cameraMotion?.setFocused(false);
     this.connectionLabel.textContent = labels[state] ?? "等待连接";
     if (state === "joined") {
-      this.permissionTitle.textContent = "握稳手机";
-      this.permissionCopy.textContent = "保持自然姿势，再启用体感。";
+      this.permissionTitle.textContent = "启用手机控制";
+      this.permissionCopy.textContent = "需要动作与前置摄像头权限；画面仅在本机分析。";
       this.enableMotion.disabled = false;
     } else if (["replaced", "session-ended", "invalid-room", "room-not-found"].includes(state)) {
       this.permissionPanel.hidden = false;
@@ -233,18 +241,26 @@ export class ControllerApp {
       this.permissionPanel.hidden = true;
       this.socket?.sendAction("recenter");
       this.socket?.sendAction("resume");
-      this.enableMotion.textContent = "启用体感";
+      this.enableMotion.textContent = "允许并开始";
       pulse([15, 35, 15]);
       return;
     }
     this.enableMotion.disabled = true;
     this.permissionTitle.textContent = "正在校准";
-    this.permissionCopy.textContent = "请保持当前姿势片刻。";
+    this.permissionCopy.textContent = "请保持当前姿势片刻；相机画面仅在本机分析。";
     this.ensureAudioContext();
-    const { motionGranted } = await this.motion.requestPermission();
+    const [motionResult, cameraResult] = await Promise.all([
+      Promise.resolve(this.motion.requestPermission()).catch(() => ({ motionGranted: false })),
+      Promise.resolve(this.cameraMotion?.start?.()).catch(() => ({ cameraGranted: false })),
+    ]);
+    const { motionGranted } = motionResult ?? {};
+    this.cameraEnabled = Boolean(cameraResult?.cameraGranted);
     if (!motionGranted) {
       this.enableMotion.disabled = false;
       return;
+    }
+    if (!this.cameraEnabled) {
+      this.permissionCopy.textContent = "前置摄像头未启用，仍可使用短触操作。";
     }
     this.motionEnabled = true;
     this.calibrationTimer = window.setTimeout(() => {
@@ -260,7 +276,7 @@ export class ControllerApp {
   continueWithTouchControls() {
     this.touchFallback = false;
     this.permissionPanel.hidden = true;
-    this.enableMotion.textContent = "启用体感";
+    this.enableMotion.textContent = "允许并开始";
     this.motion.reset();
     this.socket?.sendAction("recenter");
     this.socket?.sendAction("resume");
@@ -274,6 +290,7 @@ export class ControllerApp {
     this.permissionCopy.textContent = "请保持当前姿势片刻。";
     await this.motion.resume();
     if (!this.isLifecycleCurrent(generation)) return;
+    this.cameraMotion?.resume?.();
     this.motion.reset();
     this.viewDelta = zeroViewDelta();
     this.sendInput();
@@ -281,7 +298,7 @@ export class ControllerApp {
     this.socket?.sendAction("recenter");
     this.requiresContinue = false;
     this.touchFallback = false;
-    this.enableMotion.textContent = "启用体感";
+    this.enableMotion.textContent = "允许并开始";
     this.permissionPanel.hidden = true;
   }
 
@@ -313,6 +330,17 @@ export class ControllerApp {
     this.enableMotion.disabled = state === "reorienting";
   }
 
+  handleCameraState(state) {
+    if (state === "denied" && this.motionEnabled && !this.requiresContinue) {
+      this.permissionCopy.textContent = "前置摄像头不可用，仍可使用短触操作继续探索。";
+    }
+  }
+
+  handleCameraMotion() {
+    pulse([10, 24, 10]);
+    this.socket?.sendAction("interact");
+  }
+
   handleVisibility() {
     if (document.hidden) {
       this.suspendForBackground();
@@ -331,6 +359,7 @@ export class ControllerApp {
     this.joystick?.reset();
     this.sendInput({ includeViewDelta: true, immediate: true });
     this.motion?.suspend();
+    this.cameraMotion?.suspend();
     this.socket?.sendAction("pause");
   }
 
@@ -405,6 +434,7 @@ export class ControllerApp {
       this.joystick?.reset();
       this.sendInput();
       this.motion?.suspend();
+      this.cameraMotion?.suspend();
       this.socket?.sendAction("pause");
       pulse();
       return;
@@ -415,6 +445,7 @@ export class ControllerApp {
       this.motion.resumeSensors();
       if (!this.isLifecycleCurrent(generation)) return;
       this.motion.reset();
+      this.cameraMotion?.resume?.();
       this.viewDelta = zeroViewDelta();
       this.socket?.clearPendingViewDelta?.();
       this.sendInput();
@@ -437,6 +468,10 @@ export class ControllerApp {
   }
 
   handleDesktopEvent(event) {
+    if (event.type === "target-focus") {
+      this.cameraMotion?.setFocused(Boolean(event.id));
+      return;
+    }
     if (event.type === "control-feedback") {
       this.socket?.markApplied(event);
     }
@@ -456,6 +491,7 @@ export class ControllerApp {
     window.removeEventListener("pageshow", this.handlePageShow);
     this.joystick?.destroy();
     this.motion?.destroy();
+    this.cameraMotion?.destroy();
     this.diagnostics?.destroy();
     this.socket?.destroy();
     this.audioContext?.close();

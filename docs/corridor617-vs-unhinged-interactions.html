@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Corridor 617 与 Unhinged 交互对比</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17191c;
+      --muted: #626971;
+      --line: #d9dde2;
+      --paper: #ffffff;
+      --canvas: #eef0f2;
+      --header: #202428;
+      --amber: #e9a826;
+      --green-bg: #e4f4ea;
+      --green: #17643a;
+      --blue-bg: #e5eff8;
+      --blue: #24567d;
+      --gray-bg: #eceff2;
+      --gray: #555e67;
+      --red-bg: #f8e6e3;
+      --red: #8b342a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(1440px, calc(100% - 48px));
+      margin: 24px auto 64px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+    }
+
+    header {
+      padding: 36px 40px 32px;
+      color: #ffffff;
+      background: var(--header);
+      border-bottom: 5px solid var(--amber);
+    }
+
+    header p {
+      margin: 0 0 8px;
+      color: #c8cdd2;
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { letter-spacing: 0; }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.25;
+    }
+
+    header .lead {
+      max-width: 980px;
+      margin: 14px 0 0;
+      color: #eef0f2;
+      font-size: 15px;
+    }
+
+    section {
+      padding: 32px 40px 8px;
+    }
+
+    section:last-child { padding-bottom: 40px; }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.3;
+    }
+
+    .section-note {
+      margin: 0 0 20px;
+      color: var(--muted);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      background: #ffffff;
+    }
+
+    th, td {
+      padding: 14px 16px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    th:last-child, td:last-child { border-right: 0; }
+    tbody tr:last-child td { border-bottom: 0; }
+
+    th {
+      background: #f4f5f6;
+      color: #30353a;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    td strong { display: block; margin-bottom: 3px; }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .yes { color: var(--green); background: var(--green-bg); }
+    .partial { color: var(--blue); background: var(--blue-bg); }
+    .no { color: var(--gray); background: var(--gray-bg); }
+    .gap { color: var(--red); background: var(--red-bg); }
+
+    .advantage-row td { background: #f4faf6; }
+    .gap-row td { background: #fff8f6; }
+
+    .logic {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin: 20px 0 0;
+    }
+
+    .logic div {
+      min-height: 94px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--amber);
+      background: #fafafa;
+    }
+
+    .logic span {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .footnotes {
+      margin: 20px 0 0;
+      padding: 16px 18px;
+      background: #f4f5f6;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .footnotes a { color: #24567d; }
+
+    @media (max-width: 900px) {
+      main { width: 100%; margin: 0; border: 0; }
+      header, section { padding-left: 20px; padding-right: 20px; }
+      .logic { grid-template-columns: 1fr; }
+      table { min-width: 980px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p>Interaction benchmark / 2026-08-03</p>
+      <h1>Corridor 617 与 Netflix《Unhinged》交互对比</h1>
+      <p class="lead">重点比较手机作为体感控制器时的输入方式、叙事反馈和游戏自由度。Corridor 617 一栏只统计当前 GitHub 主分支已经接线并可运行的能力，不把设计文档中的实验方案算作现状。</p>
+    </header>
+
+    <section>
+      <h2>01. 《Unhinged》完整交互分析</h2>
+      <p class="section-note">核心定位：手机不是传统手柄，而是空中指针、手电筒和剧情中的通信终端。</p>
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width: 15%">
+            <col style="width: 22%">
+            <col style="width: 28%">
+            <col style="width: 35%">
+          </colgroup>
+          <thead>
+            <tr><th>交互模块</th><th>玩家动作</th><th>系统反馈</th><th>设计目的</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>二维码配对</strong></td><td>扫描电视或电脑上的二维码</td><td>手机连接 Netflix Game Controller</td><td>零学习成本地把第二块屏幕接入游戏</td></tr>
+            <tr><td><strong>体感校准</strong></td><td>把手机自然指向屏幕</td><td>陀螺仪方向映射为屏幕指针</td><td>建立稳定的中性朝向；随时可以重新归中</td></tr>
+            <tr><td><strong>空中指向</strong></td><td>转动手机指向屏幕不同位置</td><td>准星移动，角色手部与手电筒方向同步</td><td>把手机变成类似 Wii Remote 的空间指针</td></tr>
+            <tr><td><strong>手电筒搜索</strong></td><td>用手机扫过黑暗场景</td><td>光束揭示环境、线索和交互热点</td><td>让观察本身成为主要玩法</td></tr>
+            <tr><td><strong>节点式移动</strong></td><td>指向白色菱形或方向箭头</td><td>提示放大，点击后角色自动转向或前往目标</td><td>用有限移动节点控制镜头、节奏和惊吓时机</td></tr>
+            <tr><td><strong>点击确认</strong></td><td>点击手机屏幕中央</td><td>选择当前悬停目标</td><td>统一移动、调查、拾取和剧情选择的确认动作</td></tr>
+            <tr><td><strong>环境调查</strong></td><td>指向门、物品、线索或行动点并点击</td><td>角色执行预设动作并推进场景状态</td><td>形成轻量的点击式冒险循环</td></tr>
+            <tr><td><strong>限时 QTE</strong></td><td>倒计时内扫描并选择正确物体</td><td>成功则逃跑、躲藏或防御；失败则死亡</td><td>把寻找交互点变成压力事件</td></tr>
+            <tr><td><strong>检查点重试</strong></td><td>QTE 失败</td><td>从最近检查点重新开始</td><td>保留紧张感，同时避免传统 Game Over 的挫败</td></tr>
+            <tr><td><strong>电话</strong></td><td>在手机上接收角色来电</td><td>手机响铃、震动并通过自身扬声器播放语音</td><td>让剧情通信进入玩家手里的真实设备</td></tr>
+            <tr><td><strong>短信与剧情更新</strong></td><td>查看手机上的消息和对话</td><td>手机显示角色通信和剧情信息</td><td>在电视画面之外建立私密叙事层</td></tr>
+            <tr><td><strong>双屏音频</strong></td><td>同时关注手机和电视</td><td>电话声来自手机，环境与威胁声来自电视</td><td>利用声源分离制造空间感与注意力切换</td></tr>
+            <tr><td><strong>剧情选择</strong></td><td>指向并选择行动或回应</td><td>改变即时路线、信息或局部对话</td><td>提供有限能动性；整体仍以线性叙事为主</td></tr>
+            <tr><td><strong>拟真手机损伤</strong></td><td>随剧情受伤后继续点击手机</td><td>手机 UI 出现裂纹或血指纹等视觉变化</td><td>让现实设备表现角色状态，强化代入感</td></tr>
+            <tr><td><strong>Story Mode</strong></td><td>开始游戏、设置或死亡后开启</td><td>关闭死亡与额外时间压力</td><td>让非核心玩家也能完整体验故事</td></tr>
+            <tr><td><strong>提示、字幕与暂停</strong></td><td>打开手机右上角菜单</td><td>暂停、开启提示/字幕及相关辅助设置</td><td>把二级操作保留在手机侧，维持电视 HUD 简洁</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="logic" aria-label="Unhinged interaction loop">
+        <div><span>01 / 观看</span>剧情播放并建立当前威胁</div>
+        <div><span>02 / 扫描</span>移动手机和手电筒搜索场景</div>
+        <div><span>03 / 聚焦</span>找到菱形、箭头或物体热点</div>
+        <div><span>04 / 确认</span>点击手机执行选择或动作</div>
+        <div><span>05 / 推进</span>进入下一剧情节点、电话或 QTE</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>02. 当前交互能力对比</h2>
+      <p class="section-note">绿色行表示 Corridor 617 相比《Unhinged》已经具备的额外手势或更高自由度；红色行是目前缺口。</p>
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width: 18%">
+            <col style="width: 25%">
+            <col style="width: 25%">
+            <col style="width: 14%">
+            <col style="width: 18%">
+          </colgroup>
+          <thead>
+            <tr><th>能力</th><th>Corridor 617 当前实现</th><th>Unhinged</th><th>对比结论</th><th>价值</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>扫码配对</strong></td><td>六位房间码 + 二维码；手机打开免安装网页控制器</td><td>二维码连接 Netflix Game Controller</td><td><span class="badge partial">基本同类</span></td><td>我们的控制器不要求 Netflix App，但真机体感仍需要 HTTPS</td></tr>
+            <tr><td><strong>陀螺仪控制</strong></td><td>手机姿态产生连续 yaw/pitch 视角增量，支持校准、平滑和灵敏度</td><td>手机姿态控制屏幕指针和手电筒</td><td><span class="badge partial">用途不同</span></td><td>我们控制真实第一人称相机，而不是只控制二维指针</td></tr>
+            <tr class="advantage-row"><td><strong>全屏短按手势</strong></td><td>控制面任意位置短按均触发环境交互；无需瞄准手机上的按钮</td><td>点击手机中央确认当前屏幕热点</td><td><span class="badge yes">我们的额外能力</span></td><td>整个手机表面都是统一交互区，盲操作成本低</td></tr>
+            <tr class="advantage-row"><td><strong>任意位置长按/拖动</strong></td><td>按下超过 180ms 或移动超过 10px 后，在触点生成浮动摇杆</td><td>没有连续摇杆手势</td><td><span class="badge yes">我们的额外能力</span></td><td>用户无需寻找固定摇杆区域，横竖屏均能快速起步</td></tr>
+            <tr class="advantage-row"><td><strong>连续自由移动</strong></td><td>支持前进、后退、左右平移及连续速度输入</td><td>指向预设箭头/菱形后自动进入下一节点</td><td><span class="badge yes">核心优势</span></td><td>玩家可以真正探索三维空间，而不是只在导演设定的镜头节点间跳转</td></tr>
+            <tr class="advantage-row"><td><strong>移动与视角并行</strong></td><td>长按拖动时同时启用体感离合：拇指控制位移，手机姿态控制视角</td><td>同一个体感指针依次承担扫描和选择</td><td><span class="badge yes">核心优势</span></td><td>形成接近双摇杆手柄的双通道连续输入</td></tr>
+            <tr class="advantage-row"><td><strong>体感离合</strong></td><td>只有手指长按参与移动时才接收视角变化；松手立即冻结视角增量</td><td>体感指针持续工作，依靠归中修正</td><td><span class="badge yes">我们的额外能力</span></td><td>允许玩家自然调整握姿，减少陀螺仪漂移和误转</td></tr>
+            <tr class="advantage-row"><td><strong>手势自动消歧</strong></td><td>短按、长按、拖动、取消、多指、页面失焦分别处理，不会把移动误判为互动</td><td>指向 + 点击的二段式确认</td><td><span class="badge yes">我们的额外能力</span></td><td>同一块触控面同时承载移动和交互，界面更克制</td></tr>
+            <tr><td><strong>震动反馈</strong></td><td>短按交互、校准和设置操作使用浏览器振动能力</td><td>来电、消息和事件使用震动</td><td><span class="badge partial">双方具备</span></td><td>我们偏操作确认；对方偏拟真叙事</td></tr>
+            <tr><td><strong>重新校准</strong></td><td>设置内主动重置方向；旋转屏幕、后台恢复时自动清零并要求继续</td><td>手机端提供指针归中按钮</td><td><span class="badge partial">我们更完整</span></td><td>我们的生命周期恢复逻辑更适合长时间自由移动</td></tr>
+            <tr><td><strong>断线安全</strong></td><td>断线、触摸取消、页面隐藏时发送更新序号的零输入；重新扫码可替换旧控制器</td><td>官方资料只说明需要稳定网络</td><td><span class="badge partial">工程优势</span></td><td>避免断线后角色继续走动或继承陈旧输入</td></tr>
+            <tr><td><strong>操作参数</strong></td><td>手机端提供体感灵敏度与视角平滑度并本地保存</td><td>提供归中、提示、字幕和游戏模式等设置</td><td><span class="badge partial">侧重点不同</span></td><td>我们更关注传感器手感；对方更关注叙事可达性</td></tr>
+            <tr class="gap-row"><td><strong>手机拟真通信</strong></td><td>当前控制器未实现完整电话、短信、角色语音与来电 UI</td><td>手机响铃、震动、播放电话语音并显示消息</td><td><span class="badge gap">当前缺口</span></td><td>这是《Unhinged》最鲜明的叙事优势</td></tr>
+            <tr class="gap-row"><td><strong>双屏音频导演</strong></td><td>尚未形成手机语音与电脑环境音的稳定分轨系统</td><td>电话来自手机，环境声来自电视</td><td><span class="badge gap">当前缺口</span></td><td>需要独立的手机音频事件与同步策略</td></tr>
+            <tr class="gap-row"><td><strong>限时扫描 QTE</strong></td><td>已有任务和事件状态机，但当前不是以手机扫描热点 + 倒计时为主循环</td><td>高压场景要求限时寻找正确物体</td><td><span class="badge gap">当前缺口</span></td><td>可作为自由探索之外的节奏强化层</td></tr>
+            <tr class="gap-row"><td><strong>手电筒手机入口</strong></td><td>协议保留 flashlight 动作，但当前手机界面没有可用的开关手势或按钮</td><td>手电筒是核心体感表现</td><td><span class="badge gap">需要补齐</span></td><td>接入 UE 前必须明确开关方式和断线默认状态</td></tr>
+            <tr class="gap-row"><td><strong>机身轻拍/双扭手腕</strong></td><td>未完成：通用冲击检测没有接入实际操作，左右轻拍和双扭仅见于实验设计</td><td>官方核心控制也不包含这些手势</td><td><span class="badge no">双方当前都无</span></td><td>未来可成为真正区别于《Unhinged》的实体手势层</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>03. Corridor 617 的核心优势</h2>
+      <p class="section-note">一句话定位：不是“手机当遥控鼠标”，而是“手机表面 + 手机姿态共同组成一个无固定按键的双通道第一人称控制器”。</p>
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width: 7%">
+            <col style="width: 21%">
+            <col style="width: 38%">
+            <col style="width: 34%">
+          </colgroup>
+          <thead>
+            <tr><th>序号</th><th>核心优势</th><th>能力说明</th><th>相对《Unhinged》的差异</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>01</td><td><strong>真正的自由探索</strong></td><td>玩家能连续前后移动、横移和转向，拥有传统第一人称游戏的空间自由。</td><td>《Unhinged》主要在预设节点和热点之间推进。</td></tr>
+            <tr><td>02</td><td><strong>单面多手势复用</strong></td><td>同一个全屏区域通过时长和位移自动区分短按互动与长按拖动。</td><td>不需要永久显示摇杆、互动键和一排虚拟按钮。</td></tr>
+            <tr><td>03</td><td><strong>双通道并行控制</strong></td><td>手指位移控制角色身体，手机姿态控制相机和光束，两者可以同时连续输入。</td><td>表达能力高于只负责指向和点击的单一空中指针。</td></tr>
+            <tr><td>04</td><td><strong>体感离合降低漂移</strong></td><td>松手暂停姿态映射，允许玩家调整握姿；重新接触时以当前姿势重新校准。</td><td>比始终工作的陀螺仪指针更适合长时间自由游玩。</td></tr>
+            <tr><td>05</td><td><strong>安装门槛低</strong></td><td>手机端是 HTTPS 网页，不要求下载专属 App；扫码即可进入房间。</td><td>脱离 Netflix 生态，并支持控制器替换和断线恢复。</td></tr>
+            <tr><td>06</td><td><strong>可扩展到完整游戏</strong></td><td>输入协议与 Three.js/UE 游戏状态解耦，可继续增加手电筒、剧情电话、QTE 和实体手势。</td><td>可以吸收《Unhinged》的叙事交互，同时保留自由移动。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="footnotes">
+        <strong>事实口径：</strong>《Unhinged》交互依据
+        <a href="https://www.netflix.com/tudum/articles/unhinged-game-news">Netflix Tudum 官方介绍</a>、
+        <a href="https://games-netflix.helpshift.com/hc/en/45-unhinged/faq/2003-how-do-i-use-motion-controls-with-my-netflix-game-controller/">体感控制说明</a>、
+        <a href="https://games-netflix.helpshift.com/hc/en/45-unhinged/faq/2019-how-do-i-move-my-character-1781289608/">移动说明</a>和
+        <a href="https://games-netflix.helpshift.com/hc/en/45-unhinged/faq/2008-what-is-story-mode/">Story Mode 说明</a>。
+        Corridor 617 交互依据当前 GitHub 主分支源码与自动化测试；旧设计文档中未落地的摄像头位移、双扭手腕和机身左右轻拍没有计入现状。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -3,7 +3,7 @@ import { cameraRelativeMovement, dampVector } from "../shared/movement.js";
 import { chooseAssistedTarget } from "../shared/interaction.js";
 
 export class PlayerController {
-  constructor({ RAPIER, world, camera, renderer, interactables, onInteract, onAction, onPrompt }) {
+  constructor({ RAPIER, world, camera, renderer, interactables, onInteract, onAction, onPrompt, onTarget }) {
     this.world = world;
     this.camera = camera;
     this.renderer = renderer;
@@ -11,6 +11,7 @@ export class PlayerController {
     this.onInteract = onInteract;
     this.onAction = onAction;
     this.onPrompt = onPrompt;
+    this.onTarget = onTarget;
     this.keys = new Set();
     this.phoneInput = {
       seq: -1,
@@ -224,6 +225,7 @@ export class PlayerController {
     if (this.selected?.halo) this.selected.halo.visible = false;
     this.selected = null;
     this.onPrompt?.(null);
+    this.onTarget?.({ id: null, focused: false });
   }
 
   setCinematicCamera(position, target) {
@@ -283,11 +285,18 @@ export class PlayerController {
       );
       selected = assisted ? this.interactables.find((entry) => entry.id === assisted.id) : null;
     }
+    if (selected) {
+      const targetPosition = selected.root.getWorldPosition(this.targetPosition.clone());
+      this.setAimAssist(targetPosition, 0.28);
+    } else {
+      this.clearAimAssist();
+    }
     if (selected !== this.selected) {
       if (this.selected?.halo) this.selected.halo.visible = false;
       if (selected?.halo) selected.halo.visible = true;
       this.selected = selected;
       this.onPrompt?.(selected?.label ?? null);
+      this.onTarget?.({ id: selected?.id ?? null, focused: Boolean(selected) });
     }
   }
 

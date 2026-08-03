@@ -1,5 +1,6 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
+import { createWashbasinState } from "./Washbasin.js";
 
 function seededRandom(seed) {
   let value = seed;
@@ -131,6 +132,189 @@ function addInteractable(scene, id, label, position, geometry, surface) {
   root.add(halo);
   scene.add(root);
   return { id, label, root, mesh, halo, enabled: true };
+}
+
+function createWashbasin(scene, position, darkMetalMaterial) {
+  const root = new THREE.Group();
+  root.name = "washbasin";
+  root.position.set(...position);
+  root.userData.interactableId = "washbasin";
+
+  const ceramicMaterial = new THREE.MeshStandardMaterial({ color: 0xd8d6ca, roughness: 0.2, metalness: 0.02 });
+  const ceramicEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0xb9b8ad, roughness: 0.32, metalness: 0.02 });
+  const counterMaterial = new THREE.MeshStandardMaterial({ color: 0x3f4541, roughness: 0.58, metalness: 0.12 });
+  const chromeMaterial = new THREE.MeshStandardMaterial({ color: 0xa8b0aa, roughness: 0.18, metalness: 0.92 });
+  const rubberMaterial = new THREE.MeshStandardMaterial({ color: 0x1c211f, roughness: 0.72, metalness: 0.08 });
+  const waterMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x83d4df,
+    emissive: 0x16454a,
+    emissiveIntensity: 0.16,
+    roughness: 0.08,
+    metalness: 0.04,
+    transmission: 0.24,
+    transparent: true,
+    opacity: 0.76,
+    depthWrite: false,
+  });
+  const waterSurfaceMaterial = waterMaterial.clone();
+  waterSurfaceMaterial.opacity = 0.58;
+  const rippleMaterial = new THREE.MeshBasicMaterial({
+    color: 0xa8f5f4,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  const countertop = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.18, 1.12), counterMaterial);
+  countertop.position.set(-0.45, 0.12, 0);
+  countertop.castShadow = true;
+  countertop.receiveShadow = true;
+  root.add(countertop);
+
+  const backsplash = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.92, 1.18), ceramicEdgeMaterial);
+  backsplash.position.set(0.03, 0.46, 0);
+  backsplash.castShadow = true;
+  root.add(backsplash);
+
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.44, 0.24, 32, 1, true), ceramicMaterial);
+  bowl.position.set(-0.52, 0.3, 0);
+  bowl.castShadow = true;
+  bowl.receiveShadow = true;
+  root.add(bowl);
+  const bowlRim = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.055, 10, 32), ceramicMaterial);
+  bowlRim.rotation.x = Math.PI / 2;
+  bowlRim.position.set(-0.52, 0.43, 0);
+  root.add(bowlRim);
+  const basinWater = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.018, 32), waterSurfaceMaterial);
+  basinWater.position.set(-0.52, 0.405, 0);
+  root.add(basinWater);
+  const drain = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.018, 8, 20), darkMetalMaterial);
+  drain.rotation.x = Math.PI / 2;
+  drain.position.set(-0.52, 0.42, 0);
+  root.add(drain);
+
+  const faucetCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.1, 0.42, 0),
+    new THREE.Vector3(-0.1, 0.94, 0),
+    new THREE.Vector3(-0.22, 1.08, 0),
+    new THREE.Vector3(-0.46, 1.08, 0),
+    new THREE.Vector3(-0.52, 0.93, 0),
+  ]);
+  const faucet = new THREE.Mesh(new THREE.TubeGeometry(faucetCurve, 20, 0.055, 10, false), chromeMaterial);
+  faucet.castShadow = true;
+  root.add(faucet);
+  const faucetBase = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.08, 18), chromeMaterial);
+  faucetBase.position.set(-0.1, 0.44, 0);
+  root.add(faucetBase);
+
+  for (const side of [-1, 1]) {
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.12, 16), chromeMaterial);
+    handle.position.set(-0.12, 0.46, side * 0.26);
+    handle.rotation.x = Math.PI / 2;
+    root.add(handle);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), new THREE.MeshStandardMaterial({
+      color: side < 0 ? 0x9c3935 : 0x4b7288,
+      roughness: 0.38,
+      metalness: 0.3,
+    }));
+    cap.position.set(-0.19, 0.52, side * 0.26);
+    root.add(cap);
+  }
+
+  const supplyPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.64, 10), rubberMaterial);
+  supplyPipe.position.set(0.11, 0.22, 0);
+  root.add(supplyPipe);
+  const wallClamp = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.018, 8, 16), chromeMaterial);
+  wallClamp.rotation.x = Math.PI / 2;
+  wallClamp.position.set(0.09, 0.5, 0);
+  root.add(wallClamp);
+
+  const waterGroup = new THREE.Group();
+  const stream = new THREE.Mesh(new THREE.CylinderGeometry(0.043, 0.055, 0.54, 14), waterMaterial);
+  stream.position.set(-0.52, 0.67, 0);
+  waterGroup.add(stream);
+  const ripples = [0.14, 0.25].map((radius, index) => {
+    const ripple = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.009, 8, 28), rippleMaterial.clone());
+    ripple.rotation.x = Math.PI / 2;
+    ripple.position.set(-0.52, 0.425 + index * 0.004, 0);
+    ripple.userData.phase = index * 0.45;
+    waterGroup.add(ripple);
+    return ripple;
+  });
+  const droplets = Array.from({ length: 8 }, (_, index) => {
+    const droplet = new THREE.Mesh(new THREE.SphereGeometry(0.026 + (index % 3) * 0.006, 10, 8), waterMaterial);
+    droplet.userData.phase = index / 8;
+    droplet.userData.speed = 0.72 + (index % 4) * 0.09;
+    waterGroup.add(droplet);
+    return droplet;
+  });
+  root.add(waterGroup);
+
+  const splashLight = new THREE.PointLight(0x76d9df, 0, 1.8, 2.2);
+  splashLight.position.set(-0.52, 0.52, 0);
+  root.add(splashLight);
+
+  const halo = new THREE.Mesh(
+    new THREE.RingGeometry(0.2, 0.27, 24),
+    new THREE.MeshBasicMaterial({ color: 0xd3b15e, transparent: true, opacity: 0.82, side: THREE.DoubleSide }),
+  );
+  halo.rotation.x = -Math.PI / 2;
+  halo.position.y = -1.02;
+  halo.visible = false;
+  root.add(halo);
+  const visualGroup = new THREE.Group();
+  visualGroup.position.set(0.5, -0.2, 0);
+  for (const child of [...root.children]) {
+    if (child !== halo) {
+      root.remove(child);
+      visualGroup.add(child);
+    }
+  }
+  root.add(visualGroup);
+  scene.add(root);
+
+  const washbasin = {
+    id: "washbasin",
+    label: "打开水龙头",
+    root,
+    mesh: bowl,
+    halo,
+    enabled: true,
+    running: false,
+    setRunning: null,
+    toggle: null,
+    update(delta, elapsed) {
+      if (!washbasin.running) return;
+      stream.scale.y = 0.94 + Math.sin(elapsed * 16) * 0.04;
+      stream.position.x = -0.52 + Math.sin(elapsed * 12) * 0.008;
+      for (const droplet of droplets) {
+        const progress = (droplet.userData.phase + elapsed * droplet.userData.speed) % 1;
+        droplet.position.set(
+          -0.52 + Math.sin(elapsed * 8 + droplet.userData.phase * 12) * 0.018,
+          0.91 - progress * 0.48,
+          Math.cos(elapsed * 9 + droplet.userData.phase * 10) * 0.018,
+        );
+      }
+      for (const ripple of ripples) {
+        const pulse = 0.94 + (Math.sin(elapsed * 5.4 + ripple.userData.phase) + 1) * 0.12;
+        ripple.scale.setScalar(pulse);
+        ripple.material.opacity = 0.46 + pulse * 0.14;
+      }
+      splashLight.intensity = 0.18 + Math.sin(elapsed * 7) * 0.035;
+    },
+  };
+  const updateVisual = (running) => {
+    washbasin.running = running;
+    washbasin.label = running ? "关闭水龙头" : "打开水龙头";
+    waterGroup.visible = running;
+    splashLight.intensity = running ? 0.18 : 0;
+  };
+  const state = createWashbasinState({ onChange: ({ running }) => updateVisual(running) });
+  washbasin.setRunning = (running) => state.setRunning(running);
+  washbasin.toggle = () => state.toggle();
+  updateVisual(false);
+  return washbasin;
 }
 
 function makeShadowTexture() {
@@ -427,6 +611,8 @@ export async function createScene(host) {
   }
 
   const shadowQuest = createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial });
+  const washbasin = createWashbasin(scene, [1.75, 1.1, -5.2], darkMetalMaterial);
+  addFixedCollider(world, 2.1, 0.62, -5.2, 0.55, 0.62, 0.72);
 
   for (const side of [-1, 1]) {
     box(scene, new THREE.BoxGeometry(0.08, 0.09, 30.8), darkMetalMaterial, [side * 2.46, 0.92, -13]);
@@ -526,7 +712,7 @@ export async function createScene(host) {
   silhouette.visible = false;
   scene.add(silhouette);
 
-  const interactables = [fuse, panel, elevator, shadowQuest.window];
+  const interactables = [fuse, panel, elevator, washbasin, shadowQuest.window];
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -542,10 +728,11 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
-    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse, shadowQuest },
+    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, silhouette, elevatorDoors, elevatorCollider, elevator, panel, fuse, washbasin, shadowQuest },
     update(delta, elapsed) {
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
       for (const light of emergencyLights) light.intensity = pulse;
+      washbasin.update(delta, elapsed);
     },
     dispose() {
       window.removeEventListener("resize", resize);

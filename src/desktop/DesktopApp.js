@@ -27,6 +27,7 @@ export class DesktopApp {
     this.debugShadowAutoplay = import.meta.env.DEV && new URLSearchParams(location.search).has("playShadow");
     this.debugShadowTriggered = false;
     this.lastFeedbackSequence = -1;
+    this.currentTargetId = null;
   }
 
   mount() {
@@ -60,6 +61,7 @@ export class DesktopApp {
         onInteract: (id) => this.handleInteraction(id),
         onAction: (action) => this.handlePhoneAction({ action }),
         onPrompt: (label) => this.ui.setPrompt(label),
+        onTarget: (target) => this.handleTargetFocus(target),
       });
       this.player.setFallback(fallback);
       this.director = new HorrorDirector({
@@ -121,6 +123,12 @@ export class DesktopApp {
     this.director?.handleInteraction(id);
   }
 
+  handleTargetFocus({ id, focused }) {
+    this.currentTargetId = focused ? id : null;
+    this.ui?.setTargetFocused(Boolean(this.currentTargetId));
+    this.phone?.send({ type: "target-focus", id: this.currentTargetId });
+  }
+
   handlePeer(connected) {
     this.ui.setConnected(connected);
     if (!this.started || this.fallback) return;
@@ -132,6 +140,7 @@ export class DesktopApp {
       this.ui.showPairing(true);
     } else {
       this.ui.showPairing(false);
+      this.phone?.send({ type: "target-focus", id: this.currentTargetId });
       this.setPaused(false);
     }
   }

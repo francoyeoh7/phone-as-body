@@ -16,6 +16,38 @@ function createPlayer() {
 }
 
 describe("player phone view deltas", () => {
+  it("softly attracts the camera and reports a newly focused assisted target", () => {
+    const focused = [];
+    const targetRoot = {
+      visible: true,
+      getWorldPosition: (target) => target.set(0, 0, -1),
+    };
+    const player = Object.assign(Object.create(PlayerController.prototype), {
+      camera: {
+        position: new THREE.Vector3(0, 0, 0),
+        getWorldDirection: (target) => target.set(0, 0, -1),
+      },
+      raycaster: {
+        setFromCamera: () => {},
+        intersectObjects: () => [],
+      },
+      interactables: [{ id: "fuse", label: "拿取保险丝", enabled: true, root: targetRoot, halo: { visible: false } }],
+      targetPosition: new THREE.Vector3(),
+      forward: new THREE.Vector3(),
+      selected: null,
+      aimAssist: null,
+      onPrompt: () => {},
+      onTarget: (event) => focused.push(event),
+    });
+
+    player.updateInteraction();
+
+    expect(player.selected.id).toBe("fuse");
+    expect(player.aimAssist.target).toEqual(new THREE.Vector3(0, 0, -1));
+    expect(player.aimAssist.strength).toBe(0.28);
+    expect(focused).toEqual([{ id: "fuse", focused: true }]);
+  });
+
   it("switches to keyboard fallback without applying a stale phone delta", () => {
     const player = createPlayer();
     player.phoneInput = { seq: 7, viewDelta: { yaw: 40, pitch: 10 }, move: { x: 0, y: 0 }, clutch: false };

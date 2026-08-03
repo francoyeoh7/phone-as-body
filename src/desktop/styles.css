@@ -134,7 +134,13 @@ button {
   width: 18px;
   height: 18px;
   transform: translate(-50%, -50%);
+  transition: transform 120ms ease, filter 120ms ease;
   pointer-events: none;
+}
+
+.reticle[data-focused="true"] {
+  filter: drop-shadow(0 0 5px rgba(232, 156, 72, 0.65));
+  transform: translate(-50%, -50%) scale(0.78);
 }
 
 .reticle::before,
@@ -159,6 +165,13 @@ button {
 .reticle span::after { left: 8px; width: 1px; height: 5px; }
 .reticle span::before { top: 0; }
 .reticle span::after { bottom: 0; }
+
+.reticle[data-focused="true"]::before,
+.reticle[data-focused="true"]::after,
+.reticle[data-focused="true"] span::before,
+.reticle[data-focused="true"] span::after {
+  background: rgba(244, 177, 90, 0.95);
+}
 
 .interaction-prompt {
   position: fixed;

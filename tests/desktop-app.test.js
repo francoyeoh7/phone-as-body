@@ -20,4 +20,20 @@ describe("desktop control feedback", () => {
       cameraPitch: -15,
     });
   });
+
+  it("forwards focused interaction targets to the phone and reticle", () => {
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      currentTargetId: null,
+      phone: { send: vi.fn() },
+      ui: { setTargetFocused: vi.fn() },
+    });
+
+    app.handleTargetFocus({ id: "fuse", focused: true });
+    app.handleTargetFocus({ id: null, focused: false });
+
+    expect(app.phone.send).toHaveBeenNthCalledWith(1, { type: "target-focus", id: "fuse" });
+    expect(app.phone.send).toHaveBeenNthCalledWith(2, { type: "target-focus", id: null });
+    expect(app.ui.setTargetFocused).toHaveBeenNthCalledWith(1, true);
+    expect(app.ui.setTargetFocused).toHaveBeenNthCalledWith(2, false);
+  });
 });

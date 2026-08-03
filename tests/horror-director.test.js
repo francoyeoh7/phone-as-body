@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { HorrorDirector } from "../src/desktop/HorrorDirector.js";
 
-function createHarness() {
+function createHarness({ washbasin } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, -8);
   const elevatorDoors = new THREE.Group();
@@ -35,6 +35,7 @@ function createHarness() {
       flashlight: { visible: true },
       ceilingLights: Array.from({ length: 6 }, () => new THREE.PointLight()),
       stormLight: new THREE.DirectionalLight(),
+      washbasin,
     },
   };
   experience.objects.elevator.root.visible = false;
@@ -66,5 +67,22 @@ describe("horror director", () => {
     director.update(0.016, 3.7);
     expect(onComplete).toHaveBeenCalledOnce();
     expect(director.story.current()).toBe("escaped");
+  });
+
+  it("routes repeated washbasin interactions without changing the story objective", () => {
+    const washbasin = {
+      label: "打开水龙头",
+      toggle: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+    };
+    const { director, audio, ui } = createHarness({ washbasin });
+
+    expect(director.handleInteraction("washbasin")).toBe(true);
+    expect(director.handleInteraction("washbasin")).toBe(true);
+
+    expect(washbasin.toggle).toHaveBeenCalledTimes(2);
+    expect(director.story.current()).toBe("find-fuse");
+    expect(audio.cue).toHaveBeenNthCalledWith(1, "water-on");
+    expect(audio.cue).toHaveBeenNthCalledWith(2, "water-off");
+    expect(ui.setPrompt).toHaveBeenLastCalledWith("打开水龙头");
   });
 });

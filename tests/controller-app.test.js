@@ -4,6 +4,7 @@ import { ControllerApp } from "../src/controller/ControllerApp.js";
 function createApp({ motionEnabled = true } = {}) {
   const actions = vi.fn();
   const motion = {
+    requestPermission: vi.fn(async () => ({ motionGranted: true })),
     engage: vi.fn(() => true),
     disengage: vi.fn(),
     suspend: vi.fn(),
@@ -12,8 +13,17 @@ function createApp({ motionEnabled = true } = {}) {
     reset: vi.fn(),
     destroy: vi.fn(),
   };
+  const cameraMotion = {
+    start: vi.fn(async () => ({ cameraGranted: true })),
+    setFocused: vi.fn(),
+    suspend: vi.fn(),
+    resume: vi.fn(() => true),
+    destroy: vi.fn(),
+  };
   const app = Object.assign(Object.create(ControllerApp.prototype), {
     motion,
+    cameraMotion,
+    cameraEnabled: false,
     motionEnabled,
     move: { x: 0.5, y: -0.5 },
     viewDelta: { yaw: 42, pitch: -18 },
@@ -43,9 +53,10 @@ function createApp({ motionEnabled = true } = {}) {
       updateEngagement: vi.fn(),
     },
     sendInput: vi.fn(),
+    ensureAudioContext: vi.fn(),
     destroy: vi.fn(),
   });
-  return { app, motion, actions };
+  return { app, motion, cameraMotion, actions };
 }
 
 function deferred() {
@@ -57,15 +68,19 @@ function deferred() {
 }
 
 describe("controller app lifecycle", () => {
-  beforeEach(() => vi.stubGlobal("navigator", { vibrate: vi.fn() }));
+  beforeEach(() => {
+    vi.stubGlobal("navigator", { vibrate: vi.fn() });
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("suspends motion on manual pause and recalibrates sensors on resume", async () => {
-    const { app, motion, actions } = createApp();
+    const { app, motion, cameraMotion, actions } = createApp();
 
     await app.setPaused(true);
 
     expect(motion.suspend).toHaveBeenCalledTimes(1);
+    expect(cameraMotion.suspend).toHaveBeenCalledTimes(1);
     expect(app.move).toEqual({ x: 0, y: 0 });
     expect(app.viewDelta).toEqual({ yaw: 0, pitch: 0 });
     expect(app.sendInput).toHaveBeenCalledTimes(1);
@@ -74,6 +89,7 @@ describe("controller app lifecycle", () => {
     await app.setPaused(false);
 
     expect(motion.resumeSensors).toHaveBeenCalledTimes(1);
+    expect(cameraMotion.resume).toHaveBeenCalledTimes(1);
     expect(motion.reset).toHaveBeenCalledTimes(1);
     expect(actions).toHaveBeenNthCalledWith(2, "resume");
   });
@@ -90,17 +106,39 @@ describe("controller app lifecycle", () => {
   });
 
   it("pauses immediately when backgrounded during an active session", async () => {
-    const { app, motion, actions } = createApp();
+    const { app, motion, cameraMotion, actions } = createApp();
 
     app.suspendForBackground();
 
     expect(actions).not.toHaveBeenCalledWith("resume");
     expect(actions).toHaveBeenCalledWith("pause");
     expect(motion.suspend).toHaveBeenCalledTimes(1);
+    expect(cameraMotion.suspend).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests the front camera together with motion permission", async () => {
+    const { app, motion, cameraMotion } = createApp({ motionEnabled: false });
+
+    await app.enableSensors();
+
+    expect(motion.requestPermission).toHaveBeenCalledTimes(1);
+    expect(cameraMotion.start).toHaveBeenCalledTimes(1);
+    expect(app.motionEnabled).toBe(true);
+    expect(app.cameraEnabled).toBe(true);
+  });
+
+  it("keeps motion controls available when camera permission is denied", async () => {
+    const { app, cameraMotion } = createApp({ motionEnabled: false });
+    cameraMotion.start.mockResolvedValue({ cameraGranted: false });
+
+    await app.enableSensors();
+
+    expect(app.motionEnabled).toBe(true);
+    expect(app.cameraEnabled).toBe(false);
   });
 
   it("does not continue after a background suspension interrupts visibility recovery", async () => {
-    const { app, motion, actions } = createApp();
+    const { app, motion, cameraMotion, actions } = createApp();
     const pendingRecovery = deferred();
     motion.resume.mockReturnValueOnce(pendingRecovery.promise);
 
@@ -111,6 +149,7 @@ describe("controller app lifecycle", () => {
     await resume;
 
     expect(motion.reset).not.toHaveBeenCalled();
+    expect(cameraMotion.resume).not.toHaveBeenCalled();
     expect(actions).not.toHaveBeenCalledWith("resume");
     expect(app.requiresContinue).toBe(false);
   });
@@ -173,6 +212,24 @@ describe("controller app lifecycle", () => {
     app.handleDesktopEvent(feedback);
 
     expect(app.socket.markApplied).toHaveBeenCalledWith(feedback);
+  });
+
+  it("focuses camera motion analysis only while a desktop target is selected", () => {
+    const { app, cameraMotion } = createApp();
+
+    app.handleDesktopEvent({ type: "target-focus", id: "fuse" });
+    app.handleDesktopEvent({ type: "target-focus", id: null });
+
+    expect(cameraMotion.setFocused).toHaveBeenNthCalledWith(1, true);
+    expect(cameraMotion.setFocused).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it("turns a qualified camera change into the existing interact action", () => {
+    const { app, actions } = createApp();
+
+    app.handleCameraMotion();
+
+    expect(actions).toHaveBeenCalledWith("interact");
   });
 
   it("shows each motion sample and sends its output immediately", () => {
