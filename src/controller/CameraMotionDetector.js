@@ -321,8 +321,9 @@ export class CameraMotionDetector {
     return true;
   }
 
-  ingestPresence(sample, width, height, metrics, timestamp) {
+  ingestPresence(sample, width, height, metrics, timestamp, hasHistoryReference) {
     if (!this.presenceBaseline) {
+      if (!hasHistoryReference) return false;
       const options = adaptiveScoringOptions(this.noiseMean);
       const stable = metrics.meanDifference < options.minMeanDifference
         && metrics.activeRatio < options.minActiveRatio;
@@ -352,7 +353,9 @@ export class CameraMotionDetector {
       ? measureFrameMotion(reference.frame, sample, width, height, options)
       : { meanDifference: 0, activeRatio: 0, largestActiveRatio: 0 };
     this.recordFrame(sample, timestamp);
-    if (this.mode === "presence") return this.ingestPresence(sample, width, height, metrics, timestamp);
+    if (this.mode === "presence") {
+      return this.ingestPresence(sample, width, height, metrics, timestamp, Boolean(reference));
+    }
     return this.ingestPulse(sample, metrics, timestamp, reference?.timestamp ?? null);
   }
 

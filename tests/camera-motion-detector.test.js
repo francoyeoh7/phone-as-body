@@ -182,12 +182,59 @@ describe("camera motion detector", () => {
     detector.ingestFrame(quiet, 96, 72, 0);
     detector.ingestFrame(quiet, 96, 72, 50);
     detector.ingestFrame(quiet, 96, 72, 100);
-    detector.ingestFrame(hand, 96, 72, 150);
-    detector.ingestFrame(hand, 96, 72, 200);
+    detector.ingestFrame(quiet, 96, 72, 150);
+    detector.ingestFrame(quiet, 96, 72, 200);
     detector.ingestFrame(quiet, 96, 72, 250);
+    detector.ingestFrame(hand, 96, 72, 300);
+    detector.ingestFrame(hand, 96, 72, 350);
+    detector.ingestFrame(quiet, 96, 72, 400);
 
+    expect(onPresence).toHaveBeenCalledTimes(2);
     expect(onPresence).toHaveBeenNthCalledWith(1, expect.objectContaining({ ready: true, active: true, context: "door-defense" }));
     expect(onPresence).toHaveBeenNthCalledWith(2, expect.objectContaining({ ready: true, active: false, context: "door-defense" }));
+  });
+
+  it("waits for three stable history comparisons before freezing a fresh baseline", async () => {
+    const onPresence = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPresence,
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const movingFrames = [
+      lowContrastRectangle(96, 72, 4, 18),
+      lowContrastRectangle(96, 72, 20, 18),
+      lowContrastRectangle(96, 72, 36, 18),
+      lowContrastRectangle(96, 72, 52, 18),
+      lowContrastRectangle(96, 72, 68, 18),
+      lowContrastRectangle(96, 72, 80, 18),
+    ];
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.setMode({ mode: "presence", context: "door-defense", baseline: "fresh" });
+    movingFrames.forEach((movingFrame, index) => {
+      detector.ingestFrame(movingFrame, 96, 72, index * 50);
+    });
+    detector.ingestFrame(quiet, 96, 72, 300);
+    detector.ingestFrame(quiet, 96, 72, 350);
+    detector.ingestFrame(quiet, 96, 72, 400);
+    detector.ingestFrame(quiet, 96, 72, 450);
+    detector.ingestFrame(quiet, 96, 72, 500);
+    detector.ingestFrame(quiet, 96, 72, 550);
+
+    expect(onPresence).not.toHaveBeenCalled();
+
+    detector.ingestFrame(hand, 96, 72, 600);
+
+    expect(onPresence).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      ready: true,
+      active: true,
+      context: "door-defense",
+      timestamp: 600,
+    }));
   });
 
   it("uses a retained baseline for the first presence sample after a pulse", async () => {
