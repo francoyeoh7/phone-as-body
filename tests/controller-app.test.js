@@ -26,6 +26,7 @@ function createApp({ motionEnabled = true } = {}) {
     cameraMotion,
     haptics: { start: vi.fn(), stop: vi.fn() },
     hapticsActive: true,
+    foreground: true,
     connectionState: "joined",
     destroyed: false,
     cameraEnabled: false,
@@ -281,6 +282,16 @@ describe("controller app lifecycle", () => {
     expect(haptics.start).not.toHaveBeenCalled();
   });
 
+  it("does not restart haptics when the connection rejoins in the background", () => {
+    const { app, haptics } = createApp();
+
+    app.suspendForBackground();
+    app.updateConnection("joined");
+    app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
+
+    expect(haptics.start).not.toHaveBeenCalled();
+  });
+
   it("stops haptics when the controller is destroyed", () => {
     vi.stubGlobal("document", { removeEventListener: vi.fn() });
     vi.stubGlobal("window", { clearTimeout: vi.fn(), removeEventListener: vi.fn() });
@@ -290,6 +301,7 @@ describe("controller app lifecycle", () => {
       calibrationTimer: null,
       haptics,
       hapticsActive: true,
+      foreground: true,
       connectionState: "joined",
       destroyed: false,
       joystick: { destroy: vi.fn() },

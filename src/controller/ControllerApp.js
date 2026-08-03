@@ -64,6 +64,7 @@ export class ControllerApp {
     this.cameraMotion = null;
     this.connectionState = "connecting";
     this.hapticsActive = false;
+    this.foreground = true;
     this.destroyed = false;
     this.touchFallback = false;
     this.requiresContinue = false;
@@ -221,7 +222,7 @@ export class ControllerApp {
     };
     this.connectionState = state;
     this.status.dataset.status = state;
-    if (state === "joined" && !this.paused && !this.requiresContinue && !this.destroyed) {
+    if (state === "joined" && this.foreground && !this.paused && !this.requiresContinue && !this.destroyed) {
       this.hapticsActive = true;
     } else if (state !== "joined") {
       this.hapticsActive = false;
@@ -310,6 +311,7 @@ export class ControllerApp {
     this.socket?.sendAction("resume");
     this.socket?.sendAction("recenter");
     this.requiresContinue = false;
+    this.foreground = true;
     this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
     this.touchFallback = false;
     this.enableMotion.textContent = "允许并开始";
@@ -370,6 +372,7 @@ export class ControllerApp {
 
   suspendForBackground() {
     this.lifecycleGeneration += 1;
+    this.foreground = false;
     this.hapticsActive = false;
     this.move = { x: 0, y: 0 };
     this.viewDelta = zeroViewDelta();
@@ -462,7 +465,7 @@ export class ControllerApp {
       return;
     }
 
-    this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
+    this.hapticsActive = this.foreground && this.connectionState === "joined" && !this.destroyed;
     const generation = this.lifecycleGeneration;
     if (this.motionEnabled) {
       this.motion.resumeSensors();
