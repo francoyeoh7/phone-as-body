@@ -62,6 +62,9 @@ export class ControllerApp {
     this.motionEnabled = false;
     this.cameraEnabled = false;
     this.cameraMotion = null;
+    this.connectionState = "connecting";
+    this.hapticsActive = false;
+    this.destroyed = false;
     this.touchFallback = false;
     this.requiresContinue = false;
     this.bfcacheSuspended = false;
@@ -216,8 +219,14 @@ export class ControllerApp {
       "session-ended": "电脑端已关闭",
       "invalid-room": "房间码无效",
     };
+    this.connectionState = state;
     this.status.dataset.status = state;
-    if (state !== "joined") this.haptics?.stop();
+    if (state === "joined" && !this.paused && !this.requiresContinue && !this.destroyed) {
+      this.hapticsActive = true;
+    } else if (state !== "joined") {
+      this.hapticsActive = false;
+      this.haptics?.stop();
+    }
     if (state !== "joined") this.cameraMotion?.setFocused(false);
     this.connectionLabel.textContent = labels[state] ?? "等待连接";
     if (state === "joined") {
@@ -301,6 +310,7 @@ export class ControllerApp {
     this.socket?.sendAction("resume");
     this.socket?.sendAction("recenter");
     this.requiresContinue = false;
+    this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
     this.touchFallback = false;
     this.enableMotion.textContent = "允许并开始";
     this.permissionPanel.hidden = true;
@@ -360,6 +370,7 @@ export class ControllerApp {
 
   suspendForBackground() {
     this.lifecycleGeneration += 1;
+    this.hapticsActive = false;
     this.move = { x: 0, y: 0 };
     this.viewDelta = zeroViewDelta();
     this.viewEngaged = false;
@@ -436,6 +447,7 @@ export class ControllerApp {
     this.pauseMenu.hidden = !paused;
     if (paused) {
       this.lifecycleGeneration += 1;
+      this.hapticsActive = false;
       this.move = { x: 0, y: 0 };
       this.viewDelta = zeroViewDelta();
       this.viewEngaged = false;
@@ -450,6 +462,7 @@ export class ControllerApp {
       return;
     }
 
+    this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
     const generation = this.lifecycleGeneration;
     if (this.motionEnabled) {
       this.motion.resumeSensors();
@@ -491,8 +504,8 @@ export class ControllerApp {
       return;
     }
     if (event.type === "haptics") {
-      if (event.active && event.pattern === "brace") this.haptics?.start();
-      else this.haptics?.stop();
+      if (!event.active || event.pattern !== "brace") this.haptics?.stop();
+      else if (this.hapticsActive) this.haptics?.start();
     }
   }
 
@@ -504,6 +517,8 @@ export class ControllerApp {
 
   destroy() {
     this.lifecycleGeneration += 1;
+    this.destroyed = true;
+    this.hapticsActive = false;
     this.haptics?.stop();
     window.clearTimeout(this.calibrationTimer);
     document.removeEventListener("visibilitychange", this.handleVisibility);

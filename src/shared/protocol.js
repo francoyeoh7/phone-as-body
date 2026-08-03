@@ -74,16 +74,16 @@ export function isControllerInput(value) {
 }
 
 export function isControllerAction(value) {
-  if (value?.action === "gesture-presence") {
-    return typeof value.ready === "boolean"
-      && typeof value.active === "boolean"
-      && ["door-defense", "found-phone"].includes(value.context);
-  }
   return (
     value !== null &&
     typeof value === "object" &&
     CONTROLLER_ACTIONS.includes(value.action) &&
-    (value.sentAt === undefined || isFiniteNumber(value.sentAt))
+    (value.sentAt === undefined || isFiniteNumber(value.sentAt)) &&
+    (value.action !== "gesture-presence" || (
+      typeof value.ready === "boolean" &&
+      typeof value.active === "boolean" &&
+      ["door-defense", "found-phone"].includes(value.context)
+    ))
   );
 }
 

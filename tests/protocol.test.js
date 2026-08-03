@@ -61,6 +61,27 @@ describe("sustained gesture actions", () => {
       context: "found-phone",
     })).toBe(false);
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY])("rejects non-finite sentAt values", (sentAt) => {
+    expect(protocol.isControllerAction({
+      action: "gesture-presence",
+      ready: true,
+      active: true,
+      context: "door-defense",
+      sentAt,
+    })).toBe(false);
+  });
+
+  it("rejects a function even when it has a valid-looking gesture payload", () => {
+    const malformedEnvelope = Object.assign(() => {}, {
+      action: "gesture-presence",
+      ready: true,
+      active: true,
+      context: "door-defense",
+    });
+
+    expect(protocol.isControllerAction(malformedEnvelope)).toBe(false);
+  });
 });
 
 describe("controller snapshot flush", () => {

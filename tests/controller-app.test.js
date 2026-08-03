@@ -25,6 +25,9 @@ function createApp({ motionEnabled = true } = {}) {
     motion,
     cameraMotion,
     haptics: { start: vi.fn(), stop: vi.fn() },
+    hapticsActive: true,
+    connectionState: "joined",
+    destroyed: false,
     cameraEnabled: false,
     motionEnabled,
     move: { x: 0.5, y: -0.5 },
@@ -252,6 +255,8 @@ describe("controller app lifecycle", () => {
 
     app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
     await app.setPaused(true);
+    app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
+    app.handleDesktopEvent({ type: "haptics", active: false, pattern: "brace" });
 
     expect(haptics.start).toHaveBeenCalledOnce();
     expect(haptics.stop).toHaveBeenCalled();
@@ -261,18 +266,32 @@ describe("controller app lifecycle", () => {
     const { app, haptics } = createApp();
 
     app.updateConnection("disconnected");
+    app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
 
     expect(haptics.stop).toHaveBeenCalledOnce();
+    expect(haptics.start).not.toHaveBeenCalled();
+  });
+
+  it("does not restart haptics after background cleanup", () => {
+    const { app, haptics } = createApp();
+
+    app.suspendForBackground();
+    app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
+
+    expect(haptics.start).not.toHaveBeenCalled();
   });
 
   it("stops haptics when the controller is destroyed", () => {
     vi.stubGlobal("document", { removeEventListener: vi.fn() });
     vi.stubGlobal("window", { clearTimeout: vi.fn(), removeEventListener: vi.fn() });
-    const haptics = { stop: vi.fn() };
+    const haptics = { start: vi.fn(), stop: vi.fn() };
     const app = Object.assign(Object.create(ControllerApp.prototype), {
       lifecycleGeneration: 0,
       calibrationTimer: null,
       haptics,
+      hapticsActive: true,
+      connectionState: "joined",
+      destroyed: false,
       joystick: { destroy: vi.fn() },
       motion: { destroy: vi.fn() },
       cameraMotion: { destroy: vi.fn() },
@@ -285,8 +304,10 @@ describe("controller app lifecycle", () => {
     });
 
     app.destroy();
+    app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
 
     expect(haptics.stop).toHaveBeenCalledOnce();
+    expect(haptics.start).not.toHaveBeenCalled();
   });
 
   it("shows each motion sample and sends its output immediately", () => {
