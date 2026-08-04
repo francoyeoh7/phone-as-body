@@ -31,6 +31,10 @@ const defaultCancelFrame = (handle) => {
   else clearTimeout(handle);
 };
 
+function stopMediaStream(stream) {
+  stream?.getTracks?.().forEach((track) => track.stop?.());
+}
+
 function finitePositive(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -186,8 +190,8 @@ export class CameraMotionDetector {
     onState,
     now = defaultNow,
     sampleIntervalMs = 50,
-    sampleWidth = 64,
-    sampleHeight = 48,
+    sampleWidth = 96,
+    sampleHeight = 72,
     scoringOptions = {},
   } = {}) {
     this.mediaDevices = mediaDevices;
@@ -205,6 +209,8 @@ export class CameraMotionDetector {
     this.sampleHeight = Math.max(8, Math.floor(sampleHeight));
     this.scoringOptions = { ...scoringOptions };
     this.stream = null;
+    this.startPromise = null;
+    this.trackEndBindings = [];
     this.capture = null;
     this.frameHandle = null;
     this.frameHistory = [];
@@ -228,37 +234,62 @@ export class CameraMotionDetector {
   async start() {
     if (this.destroyed) return { cameraGranted: false };
     if (this.started) return { cameraGranted: this.cameraGranted };
+    if (this.startPromise) return this.startPromise;
     if (!this.mediaDevices?.getUserMedia) {
       this.onState?.("unsupported");
       return { cameraGranted: false };
     }
+    this.suspended = false;
+    const pending = this.acquireCamera();
+    this.startPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.startPromise === pending) this.startPromise = null;
+    }
+  }
+
+  async acquireCamera() {
+    let acquiredStream = null;
     try {
       try {
-        this.stream = await this.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
+        acquiredStream = await this.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
       } catch {
-        this.stream = await this.mediaDevices.getUserMedia(FALLBACK_CAMERA_CONSTRAINTS);
+        if (this.destroyed) return { cameraGranted: false };
+        acquiredStream = await this.mediaDevices.getUserMedia(FALLBACK_CAMERA_CONSTRAINTS);
       }
-      this.cameraGranted = true;
-      this.started = true;
+      if (this.destroyed) {
+        stopMediaStream(acquiredStream);
+        return { cameraGranted: false };
+      }
+      this.stream = acquiredStream;
+      this.bindTrackEndListeners();
       this.capture = this.createCaptureElements(this.sampleWidth, this.sampleHeight);
       if (this.capture?.video) {
         this.capture.video.srcObject = this.stream;
-        const playResult = this.capture.video.play?.();
-        await playResult?.catch?.(() => {});
+        await this.capture.video.play?.();
       }
-      this.onState?.("ready");
-      this.scheduleFrame();
+      if (this.destroyed || this.stream !== acquiredStream) return { cameraGranted: false };
+      this.frameHistory = [];
+      this.lastSampleAt = -Infinity;
+      this.cameraGranted = true;
+      this.started = true;
+      if (!this.suspended) {
+        this.onState?.("ready");
+        this.scheduleFrame();
+      }
       const facingMode = this.stream?.getTracks?.()
         .map((track) => track.getSettings?.().facingMode)
         .find(Boolean) ?? null;
       return { cameraGranted: true, facingMode };
     } catch {
-      this.onState?.("denied");
+      if (acquiredStream && acquiredStream !== this.stream) stopMediaStream(acquiredStream);
       this.stopStream();
       this.cameraGranted = false;
       this.started = false;
-      this.capture?.video?.remove?.();
-      this.capture = null;
+      this.disposeCapture();
+      if (this.destroyed) return { cameraGranted: false };
+      this.onState?.("denied");
       return { cameraGranted: false };
     }
   }
@@ -268,9 +299,7 @@ export class CameraMotionDetector {
     if (next === this.focused) return;
     this.focused = next;
     this.frameHistory = [];
-    this.lastQuietFrame = null;
     this.noiseMean = 0;
-    this.cooldownUntil = 0;
     this.lastSampleAt = -Infinity;
     this.onState?.(next ? "focused" : "idle");
   }
@@ -309,6 +338,12 @@ export class CameraMotionDetector {
     this.presenceReady = true;
     this.lastPresence = active;
     this.onPresence?.({ ready: true, active, context: this.context, metrics, timestamp });
+  }
+
+  forcePresenceInactive(reason) {
+    if (this.mode !== "presence" || !this.presenceReady || this.lastPresence !== true) return false;
+    this.emitPresence(false, { reason }, this.now());
+    return true;
   }
 
   ingestPulse(sample, metrics, timestamp, referenceTimestamp) {
@@ -351,7 +386,7 @@ export class CameraMotionDetector {
   }
 
   ingestFrame(frame, width, height, timestamp = this.now()) {
-    if (this.destroyed || !this.cameraGranted || this.suspended || !this.focused) return false;
+    if (this.destroyed || !this.cameraGranted || this.suspended || (this.mode === "pulse" && !this.focused)) return false;
     const sample = frame.slice?.() ?? Uint8Array.from(frame);
     const reference = this.historyReference(timestamp);
     const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
@@ -373,8 +408,14 @@ export class CameraMotionDetector {
     if (timestamp - this.lastSampleAt < this.sampleIntervalMs) return;
     this.lastSampleAt = timestamp;
     const { context } = this.capture;
-    context.drawImage(video, 0, 0, this.sampleWidth, this.sampleHeight);
-    const pixels = context.getImageData(0, 0, this.sampleWidth, this.sampleHeight).data;
+    let pixels;
+    try {
+      context.drawImage(video, 0, 0, this.sampleWidth, this.sampleHeight);
+      pixels = context.getImageData(0, 0, this.sampleWidth, this.sampleHeight).data;
+    } catch {
+      this.handleCameraFailure("capture-error");
+      return;
+    }
     const grayscale = new Uint8Array(this.sampleWidth * this.sampleHeight);
     for (let source = 0, target = 0; target < grayscale.length; source += 4, target += 1) {
       grayscale[target] = Math.round(pixels[source] * 0.299 + pixels[source + 1] * 0.587 + pixels[source + 2] * 0.114);
@@ -391,15 +432,28 @@ export class CameraMotionDetector {
     });
   }
 
-  suspend() {
+  haltSampling(state) {
     this.suspended = true;
     this.frameHistory = [];
     this.lastSampleAt = -Infinity;
+    this.forcePresenceInactive(state);
     if (this.frameHandle !== null) {
       this.cancelFrame(this.frameHandle);
       this.frameHandle = null;
     }
-    this.onState?.("suspended");
+    this.onState?.(state);
+  }
+
+  handleCameraFailure(state) {
+    this.haltSampling(state);
+    this.stopStream();
+    this.cameraGranted = false;
+    this.started = false;
+    this.disposeCapture();
+  }
+
+  suspend() {
+    this.haltSampling("suspended");
   }
 
   resume() {
@@ -412,8 +466,47 @@ export class CameraMotionDetector {
   }
 
   stopStream() {
-    this.stream?.getTracks?.().forEach((track) => track.stop?.());
+    this.unbindTrackEndListeners();
+    stopMediaStream(this.stream);
     this.stream = null;
+  }
+
+  bindTrackEndListeners() {
+    this.unbindTrackEndListeners();
+    this.stream?.getTracks?.().forEach((track) => {
+      if (!track?.addEventListener) return;
+      const listener = () => {
+        if (this.destroyed) return;
+        this.forcePresenceInactive("track-ended");
+        this.suspended = true;
+        if (this.frameHandle !== null) this.cancelFrame(this.frameHandle);
+        this.frameHandle = null;
+        this.cameraGranted = false;
+        this.started = false;
+        this.stopStream();
+        this.disposeCapture();
+        this.onState?.("ended");
+      };
+      track.addEventListener("ended", listener);
+      this.trackEndBindings.push({ track, listener });
+    });
+  }
+
+  unbindTrackEndListeners() {
+    this.trackEndBindings.forEach(({ track, listener }) => {
+      track.removeEventListener?.("ended", listener);
+    });
+    this.trackEndBindings = [];
+  }
+
+  disposeCapture() {
+    try {
+      this.capture?.video?.pause?.();
+    } catch {
+      // The stream is stopped independently below.
+    }
+    this.capture?.video?.remove?.();
+    this.capture = null;
   }
 
   destroy() {
@@ -422,9 +515,9 @@ export class CameraMotionDetector {
     if (this.frameHandle !== null) this.cancelFrame(this.frameHandle);
     this.frameHandle = null;
     this.stopStream();
-    this.capture?.video?.pause?.();
-    this.capture?.video?.remove?.();
-    this.capture = null;
+    this.cameraGranted = false;
+    this.started = false;
+    this.disposeCapture();
     this.frameHistory = [];
     this.onState?.("destroyed");
   }

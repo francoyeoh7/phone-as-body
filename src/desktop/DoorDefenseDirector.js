@@ -318,6 +318,7 @@ export class DoorDefenseDirector {
     this.audio?.cue?.("door-latch");
     this.setHaptics(false);
     this.ui?.setDoorDefense?.(UI_STATE.secured);
+    this.ui?.setObjective?.(this.story?.label?.());
     this.applyDoorAnimation();
     return true;
   }

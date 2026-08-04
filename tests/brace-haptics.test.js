@@ -34,4 +34,19 @@ describe("brace haptics", () => {
 
     expect(fallback).toHaveBeenCalledOnce();
   });
+
+  it("falls back and still stops when the vibration implementation throws", () => {
+    const fallback = vi.fn();
+    const vibrate = vi.fn(() => { throw new Error("vibration blocked"); });
+    const haptics = new BraceHaptics({
+      vibrate,
+      onFallbackPulse: fallback,
+      setTimer: vi.fn(() => 7),
+      clearTimer: vi.fn(),
+    });
+
+    expect(() => haptics.start()).not.toThrow();
+    expect(() => haptics.stop()).not.toThrow();
+    expect(fallback).toHaveBeenCalledOnce();
+  });
 });

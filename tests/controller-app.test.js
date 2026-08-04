@@ -127,7 +127,7 @@ describe("controller app lifecycle", () => {
   });
 
   it("requests the rear camera together with motion permission", async () => {
-    const { app, motion, cameraMotion } = createApp({ motionEnabled: false });
+    const { app, motion, cameraMotion, actions } = createApp({ motionEnabled: false });
 
     await app.enableSensors();
 
@@ -171,6 +171,57 @@ describe("controller app lifecycle", () => {
     expect(cameraMotion.resume).not.toHaveBeenCalled();
     expect(actions).not.toHaveBeenCalledWith("resume");
     expect(app.requiresContinue).toBe(false);
+  });
+
+  it("ignores sensor permission results that arrive after controller destruction", async () => {
+    const { app, motion, cameraMotion, actions } = createApp({ motionEnabled: false });
+    const motionPermission = deferred();
+    const cameraPermission = deferred();
+    motion.requestPermission.mockReturnValueOnce(motionPermission.promise);
+    cameraMotion.start.mockReturnValueOnce(cameraPermission.promise);
+    const timer = vi.spyOn(window, "setTimeout");
+
+    const enabling = app.enableSensors();
+    app.destroyed = true;
+    app.lifecycleGeneration += 1;
+    motionPermission.resolve({ motionGranted: true });
+    cameraPermission.resolve({ cameraGranted: true });
+    await enabling;
+
+    expect(app.motionEnabled).toBe(false);
+    expect(app.cameraEnabled).toBe(false);
+    expect(timer).not.toHaveBeenCalled();
+  });
+
+  it("allows sensor permission retry when initial permissions finish after backgrounding", async () => {
+    const { app, motion, cameraMotion, actions } = createApp({ motionEnabled: false });
+    const motionPermission = deferred();
+    const cameraPermission = deferred();
+    motion.requestPermission.mockReturnValueOnce(motionPermission.promise);
+    cameraMotion.start.mockReturnValueOnce(cameraPermission.promise);
+
+    const enabling = app.enableSensors();
+    app.suspendForBackground();
+    motionPermission.resolve({ motionGranted: true });
+    cameraPermission.resolve({ cameraGranted: true });
+    await enabling;
+
+    expect(app.motionEnabled).toBe(false);
+    expect(app.cameraEnabled).toBe(false);
+    expect(app.permissionPanel.hidden).toBe(false);
+    expect(app.enableMotion.disabled).toBe(false);
+    expect(actions).not.toHaveBeenCalledWith("resume");
+
+    await app.enableSensors();
+
+    expect(motion.requestPermission).toHaveBeenCalledTimes(2);
+    expect(cameraMotion.start).toHaveBeenCalledTimes(2);
+    expect(cameraMotion.resume).toHaveBeenCalledTimes(1);
+    expect(app.motionEnabled).toBe(true);
+    expect(app.cameraEnabled).toBe(true);
+    expect(app.foreground).toBe(true);
+    expect(app.hapticsActive).toBe(true);
+    expect(actions).toHaveBeenCalledWith("resume");
   });
 
   it("keeps persisted pages alive and offers explicit continuation on pageshow", () => {
@@ -342,13 +393,52 @@ describe("controller app lifecycle", () => {
   });
 
   it("stops haptics when the peer disconnects", () => {
-    const { app, haptics } = createApp();
+    const { app, haptics, cameraMotion } = createApp();
 
     app.updateConnection("disconnected");
     app.handleDesktopEvent({ type: "haptics", active: true, pattern: "brace" });
 
     expect(haptics.stop).toHaveBeenCalledOnce();
     expect(haptics.start).not.toHaveBeenCalled();
+    expect(cameraMotion.setMode).toHaveBeenCalledWith({
+      mode: "pulse",
+      context: null,
+      baseline: "fresh",
+    });
+  });
+
+  it("provides visible and audio feedback when physical vibration is unavailable", () => {
+    const { app } = createApp();
+    const classes = new Set();
+    app.playSurface = {
+      classList: {
+        add: vi.fn((name) => classes.add(name)),
+        remove: vi.fn((name) => classes.delete(name)),
+      },
+    };
+    const oscillator = {
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      frequency: { setValueAtTime: vi.fn() },
+      type: "",
+    };
+    const gain = {
+      connect: vi.fn(),
+      gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+    };
+    app.audioContext = {
+      currentTime: 1,
+      destination: {},
+      createOscillator: vi.fn(() => oscillator),
+      createGain: vi.fn(() => gain),
+    };
+
+    app.pulseBraceFallback();
+
+    expect(app.playSurface.classList.add).toHaveBeenCalledWith("brace-impact");
+    expect(oscillator.start).toHaveBeenCalledWith(1);
+    expect(oscillator.stop).toHaveBeenCalledWith(1.08);
   });
 
   it("does not restart haptics after background cleanup", () => {

@@ -16,7 +16,13 @@ export class BraceHaptics {
   }
 
   pulse() {
-    if (this.vibrate?.(BRACE_PATTERN) !== true) this.onFallbackPulse?.();
+    let vibrated = false;
+    try {
+      vibrated = this.vibrate?.(BRACE_PATTERN) === true;
+    } catch {
+      vibrated = false;
+    }
+    if (!vibrated) this.onFallbackPulse?.();
   }
 
   start() {
@@ -30,6 +36,10 @@ export class BraceHaptics {
       this.clearTimer(this.timer);
       this.timer = null;
     }
-    this.vibrate?.(0);
+    try {
+      this.vibrate?.(0);
+    } catch {
+      // The visual/audio fallback has already replaced unsupported vibration.
+    }
   }
 }

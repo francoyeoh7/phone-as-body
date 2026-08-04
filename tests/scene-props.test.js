@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { createExitDoor } from "../src/desktop/ExitDoor.js";
 import { createFoundPhoneProp } from "../src/desktop/FoundPhoneProp.js";
+import * as sceneModule from "../src/desktop/create-scene.js";
 
 function createPhysicsHarness() {
   const bodyDescriptor = {
@@ -91,5 +92,34 @@ describe("found phone prop", () => {
     foundPhone.setHeld(false);
     expect(foundPhone.root.visible).toBe(true);
     expect(foundPhone.heldRig.visible).toBe(false);
+  });
+});
+
+describe("scene resource state", () => {
+  it("hides the basin water surface while the faucet is off", () => {
+    expect(sceneModule.createWashbasin).toBeTypeOf("function");
+    if (typeof sceneModule.createWashbasin !== "function") return;
+    const scene = new THREE.Scene();
+    const basin = sceneModule.createWashbasin(
+      scene,
+      [0, 1, 0],
+      new THREE.MeshStandardMaterial({ color: 0x555555 }),
+    );
+
+    expect(basin.waterSurface.visible).toBe(false);
+    basin.toggle();
+    expect(basin.waterSurface.visible).toBe(true);
+    basin.toggle();
+    expect(basin.waterSurface.visible).toBe(false);
+  });
+
+  it("releases the Rapier world through the scene disposal helper", () => {
+    expect(sceneModule.disposePhysicsWorld).toBeTypeOf("function");
+    if (typeof sceneModule.disposePhysicsWorld !== "function") return;
+    const world = { free: vi.fn() };
+
+    sceneModule.disposePhysicsWorld(world);
+
+    expect(world.free).toHaveBeenCalledOnce();
   });
 });

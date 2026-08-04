@@ -53,7 +53,7 @@ function createHarness({
     triggerPosition: TRIGGER.clone(),
   };
   const story = createObjectiveState(storyState);
-  const ui = { setDoorDefense: vi.fn(), setPrompt: vi.fn() };
+  const ui = { setDoorDefense: vi.fn(), setPrompt: vi.fn(), setObjective: vi.fn() };
   const audio = { cue: vi.fn() };
   const sendControllerEvent = vi.fn();
   const onThreatStart = vi.fn();
@@ -299,6 +299,7 @@ describe("door defense director", () => {
 
     harness.director.update(0.001);
     expect(harness.story.current()).toBe("secured");
+    expect(harness.ui.setObjective).toHaveBeenCalledWith(harness.story.label());
     expect(harness.audio.cue).toHaveBeenCalledWith("door-latch");
     expect(harness.audio.cue.mock.calls.filter(([name]) => name === "door-latch")).toHaveLength(1);
     expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith({

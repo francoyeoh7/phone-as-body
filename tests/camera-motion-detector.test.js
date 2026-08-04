@@ -30,6 +30,26 @@ function lowContrastRectangle(width, height, offsetX, offsetY) {
   return pixels;
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function streamWithTrack(track = {}) {
+  return {
+    getTracks: () => [{
+      getSettings: () => ({ facingMode: "environment" }),
+      stop: vi.fn(),
+      ...track,
+    }],
+  };
+}
+
 describe("camera motion scoring", () => {
   it("accepts a localized change that can represent an object entering the camera", () => {
     const metrics = measureFrameMotion(
@@ -98,6 +118,20 @@ describe("camera motion scoring", () => {
 });
 
 describe("camera motion detector", () => {
+  it("uses a 96 by 72 production sample by default", async () => {
+    const createCaptureElements = vi.fn(() => null);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack()) },
+      createCaptureElements,
+    });
+
+    await detector.start();
+
+    expect(createCaptureElements).toHaveBeenCalledExactlyOnceWith(96, 72);
+    expect(detector.sampleWidth).toBe(96);
+    expect(detector.sampleHeight).toBe(72);
+  });
+
   it("prefers the rear camera and falls back to any camera", async () => {
     const stream = { getTracks: () => [{ getSettings: () => ({ facingMode: "user" }) }] };
     const getUserMedia = vi.fn()
@@ -316,5 +350,369 @@ describe("camera motion detector", () => {
       active: true,
       context: "found-phone",
     }));
+  });
+
+  it("keeps sampling retained presence after pulse focus is released", async () => {
+    const onPulse = vi.fn();
+    const onPresence = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPulse,
+      onPresence,
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack()) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.ingestFrame(quiet, 96, 72, 50);
+    detector.ingestFrame(quiet, 96, 72, 100);
+    detector.ingestFrame(quiet, 96, 72, 150);
+    detector.ingestFrame(hand, 96, 72, 200);
+    detector.setFocused(false);
+    detector.setMode({ mode: "presence", context: "found-phone", baseline: "retained" });
+    detector.ingestFrame(hand, 96, 72, 250);
+    detector.ingestFrame(quiet, 96, 72, 300);
+
+    expect(onPulse).toHaveBeenCalledOnce();
+    expect(onPresence.mock.calls.map(([event]) => ({ active: event.active, context: event.context }))).toEqual([
+      { active: true, context: "found-phone" },
+      { active: false, context: "found-phone" },
+    ]);
+  });
+
+  it("preserves the exact 500 ms pulse cooldown across focus changes", async () => {
+    const onPulse = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPulse,
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack()) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const changeA = lowContrastRectangle(96, 72, 10, 18);
+    const changeB = lowContrastRectangle(96, 72, 38, 18);
+    const changeC = lowContrastRectangle(96, 72, 66, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.ingestFrame(quiet, 96, 72, 50);
+    detector.ingestFrame(quiet, 96, 72, 100);
+    detector.ingestFrame(quiet, 96, 72, 150);
+    detector.ingestFrame(changeA, 96, 72, 200);
+    detector.setFocused(false);
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 250);
+    detector.ingestFrame(quiet, 96, 72, 300);
+    detector.ingestFrame(quiet, 96, 72, 350);
+    detector.ingestFrame(quiet, 96, 72, 400);
+    detector.ingestFrame(quiet, 96, 72, 450);
+    detector.ingestFrame(quiet, 96, 72, 500);
+    detector.ingestFrame(quiet, 96, 72, 550);
+    detector.ingestFrame(changeB, 96, 72, 699);
+    detector.ingestFrame(changeC, 96, 72, 700);
+
+    expect(onPulse.mock.calls.map(([event]) => event.timestamp)).toEqual([200, 700]);
+  });
+
+  it.each([
+    ["preferred camera request", false],
+    ["fallback camera request", true],
+  ])("disposes a stream that resolves after destroy during the %s", async (_label, useFallback) => {
+    const pending = deferred();
+    const track = { stop: vi.fn() };
+    const stream = streamWithTrack(track);
+    const getUserMedia = useFallback
+      ? vi.fn().mockRejectedValueOnce(new Error("rear unavailable")).mockReturnValueOnce(pending.promise)
+      : vi.fn().mockReturnValueOnce(pending.promise);
+    const createCaptureElements = vi.fn(() => null);
+    const requestFrame = vi.fn(() => 1);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia },
+      createCaptureElements,
+      requestFrame,
+    });
+
+    const startResult = detector.start();
+    if (useFallback) await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    detector.destroy();
+    pending.resolve(stream);
+
+    await expect(startResult).resolves.toEqual({ cameraGranted: false });
+    expect(stream.getTracks()[0].stop).toHaveBeenCalledOnce();
+    expect(createCaptureElements).not.toHaveBeenCalled();
+    expect(requestFrame).not.toHaveBeenCalled();
+    expect(detector.stream).toBeNull();
+    expect(detector.capture).toBeNull();
+    expect(detector.started).toBe(false);
+    expect(detector.cameraGranted).toBe(false);
+  });
+
+  it("forces active presence false exactly once when suspended", async () => {
+    const onPresence = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPresence,
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack()) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.setMode({ mode: "presence", context: "door-defense", baseline: "retained" });
+    detector.ingestFrame(hand, 96, 72, 200);
+    detector.suspend();
+    detector.suspend();
+
+    expect(onPresence.mock.calls.map(([event]) => ({ active: event.active, context: event.context }))).toEqual([
+      { active: true, context: "door-defense" },
+      { active: false, context: "door-defense" },
+    ]);
+  });
+
+  it("forces active presence false when the camera track ends", async () => {
+    const onPresence = vi.fn();
+    let endedListener = null;
+    const removeEventListener = vi.fn();
+    const track = {
+      addEventListener: vi.fn((name, listener) => {
+        if (name === "ended") endedListener = listener;
+      }),
+      removeEventListener,
+    };
+    const detector = new CameraMotionDetector({
+      onPresence,
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack(track)) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.setMode({ mode: "presence", context: "door-defense", baseline: "retained" });
+    detector.ingestFrame(hand, 96, 72, 200);
+    expect(endedListener).toBeTypeOf("function");
+    endedListener();
+
+    expect(onPresence).toHaveBeenLastCalledWith(expect.objectContaining({
+      active: false,
+      context: "door-defense",
+    }));
+    expect(removeEventListener).toHaveBeenCalledWith("ended", endedListener);
+  });
+
+  it.each(["draw", "read"])("forces active presence false after a capture %s exception", async (failurePoint) => {
+    const onPresence = vi.fn();
+    const context = {
+      drawImage: vi.fn(() => {
+        if (failurePoint === "draw") throw new Error("draw failed");
+      }),
+      getImageData: vi.fn(() => {
+        if (failurePoint === "read") throw new Error("read failed");
+        return { data: rgbaFrame(new Uint8Array(96 * 72).fill(112)) };
+      }),
+    };
+    const capture = {
+      video: { readyState: 2, play: vi.fn(), pause: vi.fn(), remove: vi.fn() },
+      context,
+    };
+    const detector = new CameraMotionDetector({
+      onPresence,
+      now: () => 250,
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack()) },
+      createCaptureElements: () => capture,
+      requestFrame: vi.fn(() => 1),
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.setMode({ mode: "presence", context: "door-defense", baseline: "retained" });
+    detector.ingestFrame(hand, 96, 72, 200);
+
+    expect(() => detector.captureFrame()).not.toThrow();
+    detector.captureFrame();
+
+    expect(onPresence.mock.calls.map(([event]) => event.active)).toEqual([true, false]);
+  });
+
+  it("shares one in-flight camera startup across concurrent callers", async () => {
+    const pending = deferred();
+    const stream = streamWithTrack();
+    const getUserMedia = vi.fn(() => pending.promise);
+    const createCaptureElements = vi.fn(() => null);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia },
+      createCaptureElements,
+    });
+
+    const first = detector.start();
+    const second = detector.start();
+    pending.resolve(stream);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { cameraGranted: true, facingMode: "environment" },
+      { cameraGranted: true, facingMode: "environment" },
+    ]);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(createCaptureElements).toHaveBeenCalledOnce();
+  });
+
+  it("fully releases the camera after capture failure", async () => {
+    const track = { stop: vi.fn() };
+    const stream = streamWithTrack(track);
+    const capture = {
+      video: { readyState: 2, play: vi.fn(), pause: vi.fn(), remove: vi.fn() },
+      context: {
+        drawImage: vi.fn(() => { throw new Error("capture failed"); }),
+        getImageData: vi.fn(),
+      },
+    };
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn(async () => stream) },
+      createCaptureElements: () => capture,
+      requestFrame: vi.fn(() => 4),
+    });
+
+    await detector.start();
+    detector.captureFrame();
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(capture.video.pause).toHaveBeenCalledOnce();
+    expect(capture.video.remove).toHaveBeenCalledOnce();
+    expect(detector.stream).toBeNull();
+    expect(detector.capture).toBeNull();
+    expect(detector.started).toBe(false);
+    expect(detector.cameraGranted).toBe(false);
+  });
+
+  it("rejects startup and releases the stream when video playback cannot start", async () => {
+    const track = { stop: vi.fn() };
+    const stream = streamWithTrack(track);
+    const capture = {
+      video: {
+        play: vi.fn(async () => { throw new Error("playback blocked"); }),
+        pause: vi.fn(),
+        remove: vi.fn(),
+      },
+      context: {},
+    };
+    const requestFrame = vi.fn(() => 3);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn(async () => stream) },
+      createCaptureElements: () => capture,
+      requestFrame,
+    });
+
+    await expect(detector.start()).resolves.toEqual({ cameraGranted: false });
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(capture.video.remove).toHaveBeenCalledOnce();
+    expect(requestFrame).not.toHaveBeenCalled();
+    expect(detector.stream).toBeNull();
+    expect(detector.capture).toBeNull();
+  });
+
+  it("resumes sampling with a fresh capture after a camera track ends", async () => {
+    let endedListener = null;
+    const firstTrack = {
+      addEventListener: vi.fn((_type, listener) => { endedListener = listener; }),
+      removeEventListener: vi.fn(),
+      stop: vi.fn(),
+    };
+    const secondTrack = { stop: vi.fn() };
+    const streams = [streamWithTrack(firstTrack), streamWithTrack(secondTrack)];
+    const captures = [
+      { video: { play: vi.fn(), pause: vi.fn(), remove: vi.fn() }, context: {} },
+      { video: { play: vi.fn(), pause: vi.fn(), remove: vi.fn() }, context: {} },
+    ];
+    const requestFrame = vi.fn()
+      .mockReturnValueOnce(1)
+      .mockReturnValueOnce(2);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn().mockResolvedValueOnce(streams[0]).mockResolvedValueOnce(streams[1]) },
+      createCaptureElements: vi.fn().mockReturnValueOnce(captures[0]).mockReturnValueOnce(captures[1]),
+      requestFrame,
+      cancelFrame: vi.fn(),
+    });
+
+    await detector.start();
+    endedListener();
+    await detector.start();
+
+    expect(captures[0].video.remove).toHaveBeenCalledOnce();
+    expect(detector.capture).toBe(captures[1]);
+    expect(detector.suspended).toBe(false);
+    expect(detector.started).toBe(true);
+    expect(detector.cameraGranted).toBe(true);
+    expect(requestFrame).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not resurrect ready state when a track ends during pending playback", async () => {
+    const playback = deferred();
+    let endedListener = null;
+    const track = {
+      addEventListener: vi.fn((_type, listener) => { endedListener = listener; }),
+      removeEventListener: vi.fn(),
+      stop: vi.fn(),
+    };
+    const stream = streamWithTrack(track);
+    const capture = {
+      video: { play: vi.fn(() => playback.promise), pause: vi.fn(), remove: vi.fn() },
+      context: {},
+    };
+    const onState = vi.fn();
+    const requestFrame = vi.fn(() => 1);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn(async () => stream) },
+      createCaptureElements: () => capture,
+      onState,
+      requestFrame,
+    });
+
+    const starting = detector.start();
+    await vi.waitFor(() => expect(endedListener).toBeTypeOf("function"));
+    endedListener();
+    playback.resolve();
+
+    await expect(starting).resolves.toEqual({ cameraGranted: false });
+    expect(onState.mock.calls.map(([state]) => state)).toEqual(["ended"]);
+    expect(detector.stream).toBeNull();
+    expect(detector.capture).toBeNull();
+    expect(detector.started).toBe(false);
+    expect(detector.cameraGranted).toBe(false);
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
+
+  it("keeps a late camera acquisition suspended until explicitly resumed", async () => {
+    const pending = deferred();
+    const stream = streamWithTrack();
+    const capture = { video: { play: vi.fn(), pause: vi.fn(), remove: vi.fn() }, context: {} };
+    const requestFrame = vi.fn(() => 7);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia: vi.fn(() => pending.promise) },
+      createCaptureElements: () => capture,
+      requestFrame,
+    });
+
+    const starting = detector.start();
+    detector.suspend();
+    pending.resolve(stream);
+    await expect(starting).resolves.toEqual({ cameraGranted: true, facingMode: "environment" });
+
+    expect(detector.suspended).toBe(true);
+    expect(requestFrame).not.toHaveBeenCalled();
+
+    expect(detector.resume()).toBe(true);
+    expect(detector.suspended).toBe(false);
+    expect(requestFrame).toHaveBeenCalledOnce();
   });
 });

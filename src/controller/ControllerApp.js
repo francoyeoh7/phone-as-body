@@ -74,6 +74,7 @@ export class ControllerApp {
     this.bfcacheSuspended = false;
     this.lifecycleGeneration = 0;
     this.calibrationTimer = null;
+    this.braceFallbackTimer = null;
     this.diagnostics = null;
     this.handleVisibility = this.handleVisibility.bind(this);
     this.handlePageHide = this.handlePageHide.bind(this);
@@ -197,7 +198,7 @@ export class ControllerApp {
       onTelemetry: (telemetry) => this.diagnostics.updateSensor(telemetry),
       onState: (state) => this.handleMotionState(state),
     });
-    this.haptics = new BraceHaptics({ onFallbackPulse: () => this.foundPhoneUI?.pulseBraceImpact() });
+    this.haptics = new BraceHaptics({ onFallbackPulse: () => this.pulseBraceFallback() });
     this.cameraMotion = new CameraMotionDetector({
       onPulse: () => this.handleCameraMotion(),
       onPresence: (presence) => this.handleCameraPresence(presence),
@@ -253,7 +254,10 @@ export class ControllerApp {
       this.haptics?.stop();
       this.foundPhoneUI?.setActive(false);
     }
-    if (state !== "joined") this.cameraMotion?.setFocused(false);
+    if (state !== "joined") {
+      this.cameraMotion?.setMode({ mode: "pulse", context: null, baseline: "fresh" });
+      this.cameraMotion?.setFocused(false);
+    }
     this.connectionLabel.textContent = labels[state] ?? "等待连接";
     if (state === "joined") {
       this.permissionTitle.textContent = "启用手机控制";
@@ -285,6 +289,7 @@ export class ControllerApp {
       return;
     }
     this.enableMotion.disabled = true;
+    const generation = this.lifecycleGeneration;
     this.permissionTitle.textContent = "正在校准";
     this.permissionCopy.textContent = "请保持当前姿势片刻；相机画面仅在本机分析。";
     this.ensureAudioContext();
@@ -293,8 +298,19 @@ export class ControllerApp {
       Promise.resolve(this.cameraMotion?.start?.()).catch(() => ({ cameraGranted: false })),
     ]);
     const { motionGranted } = motionResult ?? {};
+    if (this.destroyed) return;
+    if (generation !== this.lifecycleGeneration) {
+      this.cameraMotion?.suspend?.();
+      this.permissionPanel.hidden = false;
+      this.permissionTitle.textContent = "控制已暂停";
+      this.permissionCopy.textContent = "返回页面后，请重新确认动作与后置摄像头权限。";
+      this.enableMotion.textContent = "重新启用";
+      this.enableMotion.disabled = false;
+      return;
+    }
     this.cameraEnabled = Boolean(cameraResult?.cameraGranted);
     if (!motionGranted) {
+      this.cameraMotion?.suspend?.();
       this.enableMotion.disabled = false;
       return;
     }
@@ -302,6 +318,10 @@ export class ControllerApp {
       this.permissionCopy.textContent = "后置摄像头未启用，仍可使用短触操作。";
     }
     this.motionEnabled = true;
+    this.foreground = true;
+    this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
+    this.socket?.sendAction("resume");
+    if (this.cameraEnabled) this.cameraMotion?.resume?.();
     this.calibrationTimer = window.setTimeout(() => {
       this.calibrationTimer = null;
       this.motion.reset();
@@ -556,6 +576,36 @@ export class ControllerApp {
     this.audioContext?.resume();
   }
 
+  pulseBraceFallback() {
+    const surface = this.playSurface;
+    surface?.classList?.remove("brace-impact");
+    void surface?.offsetWidth;
+    surface?.classList?.add("brace-impact");
+    window.clearTimeout(this.braceFallbackTimer);
+    this.braceFallbackTimer = window.setTimeout(() => {
+      this.braceFallbackTimer = null;
+      surface?.classList?.remove("brace-impact");
+    }, 180);
+
+    const context = this.audioContext;
+    if (!context?.createOscillator || !context?.createGain) return;
+    try {
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "triangle";
+      oscillator.frequency.setValueAtTime(72, now);
+      gain.gain.setValueAtTime(0.045, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.08);
+    } catch {
+      // Visual impact remains available when Web Audio cannot start.
+    }
+  }
+
   destroy() {
     this.lifecycleGeneration += 1;
     this.destroyed = true;
@@ -563,6 +613,8 @@ export class ControllerApp {
     this.haptics?.stop();
     this.foundPhoneUI?.setActive(false);
     window.clearTimeout(this.calibrationTimer);
+    window.clearTimeout(this.braceFallbackTimer);
+    this.playSurface?.classList?.remove("brace-impact");
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);
     window.removeEventListener("pageshow", this.handlePageShow);

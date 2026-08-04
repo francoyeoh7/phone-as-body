@@ -136,7 +136,7 @@ function addInteractable(scene, id, label, position, geometry, surface) {
   return { id, label, root, mesh, halo, enabled: true };
 }
 
-function createWashbasin(scene, position, darkMetalMaterial) {
+export function createWashbasin(scene, position, darkMetalMaterial) {
   const root = new THREE.Group();
   root.name = "washbasin";
   root.position.set(...position);
@@ -284,6 +284,7 @@ function createWashbasin(scene, position, darkMetalMaterial) {
     halo,
     enabled: true,
     running: false,
+    waterSurface: basinWater,
     setRunning: null,
     toggle: null,
     update(delta, elapsed) {
@@ -310,6 +311,7 @@ function createWashbasin(scene, position, darkMetalMaterial) {
     washbasin.running = running;
     washbasin.label = running ? "关闭水龙头" : "打开水龙头";
     waterGroup.visible = running;
+    basinWater.visible = running;
     splashLight.intensity = running ? 0.18 : 0;
   };
   const state = createWashbasinState({ onChange: ({ running }) => updateVisual(running) });
@@ -534,6 +536,10 @@ function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMater
   return { window, taskPoint, oppositeCorridor, operatingRoom, operatingDoor, shadowFigure };
 }
 
+export function disposePhysicsWorld(world) {
+  world?.free?.();
+}
+
 export async function createScene(host) {
   await RAPIER.init();
   const scene = new THREE.Scene();
@@ -712,6 +718,7 @@ export async function createScene(host) {
   scene.add(silhouette);
 
   const interactables = [fuse, panel, foundPhone, washbasin, shadowQuest.window];
+  let disposed = false;
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -734,18 +741,24 @@ export async function createScene(host) {
       washbasin.update(delta, elapsed);
     },
     dispose() {
+      if (disposed) return;
+      disposed = true;
       window.removeEventListener("resize", resize);
-      renderer.dispose();
-      scene.traverse((object) => {
-        if (object.geometry) object.geometry.dispose();
-        if (object.material) {
-          const materials = Array.isArray(object.material) ? object.material : [object.material];
-          materials.forEach((entry) => {
-            entry.map?.dispose();
-            entry.dispose();
-          });
-        }
-      });
+      try {
+        renderer.dispose();
+        scene.traverse((object) => {
+          if (object.geometry) object.geometry.dispose();
+          if (object.material) {
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            materials.forEach((entry) => {
+              entry.map?.dispose();
+              entry.dispose();
+            });
+          }
+        });
+      } finally {
+        disposePhysicsWorld(world);
+      }
     },
   };
 }

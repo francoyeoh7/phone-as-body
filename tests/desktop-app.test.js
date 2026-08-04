@@ -353,6 +353,30 @@ describe("desktop director routing", () => {
     expect(app.shadowQuest.abort).toHaveBeenCalledOnce();
     expect(app.player.setPaused).toHaveBeenCalledWith(true);
   });
+
+  it("finishes disconnect cleanup when an earlier release throws", () => {
+    const firstError = new Error("fallback release failed");
+    const order = [];
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      started: true,
+      fallback: false,
+      ui: {
+        setConnected: vi.fn(() => order.push("connection")),
+        showPause: vi.fn(() => order.push("pause-ui")),
+        showPairing: vi.fn(() => order.push("pairing")),
+      },
+      releaseFallbackHold: vi.fn(() => { order.push("hold"); throw firstError; }),
+      foundPhone: { release: vi.fn(() => order.push("phone")) },
+      doorDefense: { abort: vi.fn(() => order.push("door")) },
+      shadowQuest: { abort: vi.fn(() => order.push("shadow")) },
+      player: { setPaused: vi.fn(() => order.push("player")) },
+    });
+
+    expect(() => app.handlePeer(false)).toThrow(firstError);
+
+    expect(app.paused).toBe(true);
+    expect(order).toEqual(["connection", "hold", "phone", "door", "shadow", "player", "pause-ui", "pairing"]);
+  });
 });
 
 describe("fallback Space hold", () => {
@@ -417,6 +441,66 @@ describe("fallback Space hold", () => {
     app.setPaused(true);
     expect(doorDefense.setFallbackHolding).toHaveBeenLastCalledWith(false);
     expect(doorDefense.setFallbackHolding).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts every cinematic interaction before pausing the player", () => {
+    vi.stubGlobal("document", { pointerLockElement: null });
+    const order = [];
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      paused: false,
+      fallbackHolding: false,
+      fallbackKeyDown: false,
+      foundPhone: { release: vi.fn(() => order.push("phone")) },
+      doorDefense: { abort: vi.fn(() => order.push("door")) },
+      shadowQuest: { abort: vi.fn(() => order.push("shadow")) },
+      player: { setPaused: vi.fn(() => order.push("player")) },
+      audio: { setPaused: vi.fn(() => order.push("audio")) },
+      ui: { showPause: vi.fn(() => order.push("ui")) },
+    });
+
+    app.setPaused(true);
+
+    expect(order).toEqual(["phone", "door", "shadow", "player", "audio", "ui"]);
+  });
+
+  it("still pauses every subsystem when an earlier pause cleanup throws", () => {
+    vi.stubGlobal("document", { pointerLockElement: null });
+    const firstError = new Error("hold release failed");
+    const order = [];
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      paused: false,
+      releaseFallbackHold: vi.fn(() => { order.push("hold"); throw firstError; }),
+      foundPhone: { release: vi.fn(() => order.push("phone")) },
+      doorDefense: { abort: vi.fn(() => order.push("door")) },
+      shadowQuest: { abort: vi.fn(() => order.push("shadow")) },
+      player: { setPaused: vi.fn(() => order.push("player")) },
+      audio: { setPaused: vi.fn(() => order.push("audio")) },
+      ui: { showPause: vi.fn(() => order.push("ui")) },
+    });
+
+    expect(() => app.setPaused(true)).toThrow(firstError);
+
+    expect(app.paused).toBe(true);
+    expect(order).toEqual(["hold", "phone", "door", "shadow", "player", "audio", "ui"]);
+  });
+
+  it("forwards keyup after a rejected retry hold so the director can rearm", () => {
+    const doorDefense = { setFallbackHolding: vi.fn(() => false) };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      fallback: true,
+      fallbackHolding: false,
+      fallbackKeyDown: false,
+      paused: false,
+      destroyed: false,
+      doorDefense,
+    });
+    const event = { code: "Space", repeat: false, preventDefault: vi.fn() };
+
+    app.handleFallbackKeyDown(event);
+    app.handleFallbackKeyUp(event);
+
+    expect(doorDefense.setFallbackHolding.mock.calls).toEqual([[true], [false]]);
+    expect(app.fallbackKeyDown).toBe(false);
   });
 
   it("registers stored handlers and destroys directors before player and scene exactly once", () => {

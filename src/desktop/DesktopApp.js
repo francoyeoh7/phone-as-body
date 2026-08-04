@@ -28,6 +28,7 @@ export class DesktopApp {
     this.doorDefense = null;
     this.shadowQuest = null;
     this.fallbackHolding = false;
+    this.fallbackKeyDown = false;
     this.destroyed = false;
     this.debugFrames = 0;
     this.debugShadowAutoplay = import.meta.env.DEV && new URLSearchParams(location.search).has("playShadow");
@@ -207,32 +208,60 @@ export class DesktopApp {
 
   handlePeer(connected) {
     if (this.destroyed) return;
-    this.ui.setConnected(connected);
-    if (!this.started) return;
-    if (!connected) {
-      this.releaseFallbackHold();
-      this.foundPhone?.release();
-      this.doorDefense?.abort();
-      this.shadowQuest?.abort();
-      if (this.fallback) return;
-      this.paused = true;
-      this.player?.setPaused(true);
-      this.ui.showPause(false);
-      this.ui.showPairing(true);
-    } else if (!this.fallback) {
+    if (connected) {
+      this.ui.setConnected(true);
+      if (!this.started || this.fallback) return;
       this.ui.showPairing(false);
       this.phone?.send({ type: "target-focus", id: this.currentTargetId });
       this.setPaused(false);
+      return;
     }
+
+    let disconnectError = null;
+    const runDisconnectStep = (step) => {
+      try {
+        step();
+      } catch (error) {
+        disconnectError ??= error;
+      }
+    };
+    runDisconnectStep(() => this.ui.setConnected(false));
+    if (this.started) {
+      runDisconnectStep(() => this.releaseFallbackHold());
+      runDisconnectStep(() => this.foundPhone?.release?.());
+      runDisconnectStep(() => this.doorDefense?.abort?.());
+      runDisconnectStep(() => this.shadowQuest?.abort?.());
+      if (!this.fallback) {
+        this.paused = true;
+        runDisconnectStep(() => this.player?.setPaused(true));
+        runDisconnectStep(() => this.ui.showPause(false));
+        runDisconnectStep(() => this.ui.showPairing(true));
+      }
+    }
+    if (disconnectError) throw disconnectError;
   }
 
   setPaused(paused, showOverlay = true) {
     this.paused = paused;
-    if (paused) this.releaseFallbackHold();
-    this.player?.setPaused(paused);
-    this.audio.setPaused(paused);
-    this.ui.showPause(showOverlay && paused);
-    if (paused && document.pointerLockElement) document.exitPointerLock?.();
+    let pauseError = null;
+    const runPauseStep = (step) => {
+      try {
+        step();
+      } catch (error) {
+        pauseError ??= error;
+      }
+    };
+    if (paused) {
+      runPauseStep(() => this.releaseFallbackHold());
+      runPauseStep(() => this.foundPhone?.release?.());
+      runPauseStep(() => this.doorDefense?.abort?.());
+      runPauseStep(() => this.shadowQuest?.abort?.());
+    }
+    runPauseStep(() => this.player?.setPaused(paused));
+    runPauseStep(() => this.audio.setPaused(paused));
+    runPauseStep(() => this.ui.showPause(showOverlay && paused));
+    if (paused && document.pointerLockElement) runPauseStep(() => document.exitPointerLock?.());
+    if (pauseError) throw pauseError;
   }
 
   tick(time) {
@@ -320,14 +349,15 @@ export class DesktopApp {
       || !this.fallback
       || this.paused
       || this.destroyed
-      || this.fallbackHolding
+      || this.fallbackKeyDown
     ) return;
     event.preventDefault?.();
+    this.fallbackKeyDown = true;
     this.fallbackHolding = this.doorDefense?.setFallbackHolding(true) === true;
   }
 
   handleFallbackKeyUp(event) {
-    if (event.code !== "Space" || !this.fallbackHolding) return;
+    if (event.code !== "Space" || !this.fallbackKeyDown) return;
     event.preventDefault?.();
     this.releaseFallbackHold();
   }
@@ -337,8 +367,9 @@ export class DesktopApp {
   }
 
   releaseFallbackHold() {
-    if (!this.fallbackHolding) return;
+    if (!this.fallbackHolding && !this.fallbackKeyDown) return;
     this.fallbackHolding = false;
+    this.fallbackKeyDown = false;
     this.doorDefense?.setFallbackHolding(false);
   }
 

@@ -353,8 +353,24 @@ button {
   animation: brace-impact 240ms ease-out;
 }
 
+.play-surface.brace-impact::after {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  border: 2px solid rgba(208, 233, 133, 0.58);
+  box-shadow: inset 0 0 42px rgba(208, 233, 133, 0.18);
+  animation: brace-surface-impact 180ms ease-out;
+  pointer-events: none;
+  content: "";
+}
+
 @keyframes brace-impact {
   35% { border-color: #d0e985; box-shadow: 0 0 0 3px rgba(208, 233, 133, 0.22), 0 18px 48px rgba(0, 0, 0, 0.55); }
+}
+
+@keyframes brace-surface-impact {
+  from { opacity: 0.95; }
+  to { opacity: 0; }
 }
 
 /* Keep the full-screen gesture surface clear of permanent controls. */
