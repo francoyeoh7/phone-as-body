@@ -6,7 +6,7 @@ Replace the unreliable one-frame camera gesture with a lightweight rear-camera d
 
 ## Confirmed Product Rules
 
-- Prefer the rear camera with `facingMode: { ideal: "environment" }` and fall back to any available camera if the browser cannot provide it.
+- Require the rear camera with `facingMode: { exact: "environment" }`; never fall back to an unconstrained or front-facing source.
 - Ordinary gesture interactions have an exact 500 ms cooldown. They do not add a second quiet-frame cooldown after those 500 ms.
 - Door defense requires four uninterrupted seconds of camera presence.
 - One absent presence sample fails door defense immediately, clears progress to zero, and restarts the breach attempt.
@@ -33,8 +33,8 @@ The feature is split into three independent units:
 
 - Request a 640x480 rear-facing stream at an ideal 20 FPS, with a maximum of 24 FPS.
 - Analyze 96x72 grayscale frames every 50 ms.
-- Query `MediaStreamTrack.getSettings().facingMode` when available and report the actual selected facing mode through detector state.
-- If the environment-facing request fails, retry once with an unconstrained video source before declaring the camera unavailable.
+- Query `MediaStreamTrack.getSettings().facingMode` when available, reject a stream that reports `user`, and report the actual selected mode through detector state.
+- If the environment-facing request fails, declare camera interaction unavailable while leaving touch controls usable; do not open another camera.
 
 ### Pulse Mode
 
@@ -43,7 +43,8 @@ Pulse mode is used for ordinary interactables such as the fuse, panel, washbasin
 - Keep a four-frame history and compare the current frame with the frame approximately 150 ms earlier instead of only the immediately previous frame.
 - Maintain an exponential moving noise floor while no gesture is active.
 - Use the noise floor to raise thresholds on noisy cameras while retaining a low fixed minimum for clean cameras.
-- Accept a connected local foreground region or a sufficiently large moderate frame change.
+- Accept a connected local foreground region only. Require the largest connected active region to account for at least 18% of active pixels, so scattered edges from a phone shake cannot satisfy the pulse.
+- Estimate a small global translation on sufficiently large samples; if a shifted frame substantially lowers the scene-wide error, classify it as phone movement and reject it.
 - Reject near-global changes affecting at least 96 percent of the frame.
 - After a pulse, suppress further pulses for exactly 500 ms. Frame capture and reference updates continue during suppression.
 - At 500 ms the detector is armed again without waiting for three more quiet frames.
@@ -158,7 +159,7 @@ Controller additions:
 
 ## Error Handling
 
-- If rear-camera selection fails, retry with any available camera and report the selected mode.
+- If rear-camera selection fails, report camera interaction unavailable and do not request a second camera source.
 - If no camera can start, ordinary touch interaction remains available. Continuous scenes expose a keyboard development fallback, but the public phone flow explains that camera permission is required.
 - If presence mode cannot obtain a stable baseline within three seconds, it aborts the cinematic rather than starting false progress.
 - A stale presence event with the wrong context is ignored.

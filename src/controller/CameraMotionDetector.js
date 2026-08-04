@@ -1,19 +1,27 @@
 const CAMERA_CONSTRAINTS = Object.freeze({
   audio: false,
   video: {
-    facingMode: { ideal: "environment" },
+    // An unconstrained fallback can silently select the front camera. This
+    // detector is intentionally rear-camera-only because the controller
+    // surface is not part of the interaction target.
+    facingMode: { exact: "environment" },
     width: { ideal: 640 },
     height: { ideal: 480 },
     frameRate: { ideal: 20, max: 24 },
   },
 });
 
-const FALLBACK_CAMERA_CONSTRAINTS = Object.freeze({ audio: false, video: true });
 const PULSE_COOLDOWN_MS = 500;
 const HISTORY_MS = 150;
 const PRESENCE_HEARTBEAT_MS = 250;
 const CALIBRATION_MAX_MEAN_DIFFERENCE = 3 / 255;
 const CALIBRATION_MAX_LARGEST_ACTIVE_RATIO = 0.003;
+const GLOBAL_MOTION_MIN_ACTIVE_RATIO = 0.015;
+const GLOBAL_MOTION_MIN_MEAN_DIFFERENCE = 0.004;
+const GLOBAL_MOTION_MIN_DIMENSION = 16;
+const GLOBAL_MOTION_MAX_SHIFT = 8;
+const GLOBAL_MOTION_SAMPLE_STEP = 3;
+const GLOBAL_MOTION_MAX_REMAINING_ERROR = 0.55;
 
 const DEFAULT_OPTIONS = Object.freeze({
   pixelThreshold: 6 / 255,
@@ -21,6 +29,7 @@ const DEFAULT_OPTIONS = Object.freeze({
   maxMeanDifference: 0.8,
   minActiveRatio: 0.02,
   minLargestActiveRatio: 0.004,
+  minMotionCoherence: 0.18,
   maxActiveRatio: 0.96,
 });
 
@@ -38,14 +47,64 @@ function stopMediaStream(stream) {
   stream?.getTracks?.().forEach((track) => track.stop?.());
 }
 
+function streamFacingMode(stream) {
+  return stream?.getTracks?.()
+    ?.map((track) => track?.getSettings?.()?.facingMode)
+    .find(Boolean) ?? null;
+}
+
 function finitePositive(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function sampledFrameDifference(previous, current, width, height, offsetX = 0, offsetY = 0) {
+  const startX = Math.max(0, offsetX);
+  const endX = Math.min(width, width + offsetX);
+  const startY = Math.max(0, offsetY);
+  const endY = Math.min(height, height + offsetY);
+  if (endX <= startX || endY <= startY) return Infinity;
+  let differenceSum = 0;
+  let sampleCount = 0;
+  for (let y = startY; y < endY; y += GLOBAL_MOTION_SAMPLE_STEP) {
+    for (let x = startX; x < endX; x += GLOBAL_MOTION_SAMPLE_STEP) {
+      const currentIndex = y * width + x;
+      const previousIndex = (y - offsetY) * width + (x - offsetX);
+      differenceSum += Math.abs(Number(current[currentIndex]) - Number(previous[previousIndex]));
+      sampleCount += 1;
+    }
+  }
+  return sampleCount ? differenceSum / sampleCount / 255 : Infinity;
+}
+
+function detectsGlobalTranslation(previous, current, width, height, activeRatio, meanDifference) {
+  if (
+    width < GLOBAL_MOTION_MIN_DIMENSION
+    || height < GLOBAL_MOTION_MIN_DIMENSION
+    ||
+    activeRatio < GLOBAL_MOTION_MIN_ACTIVE_RATIO
+    || meanDifference < GLOBAL_MOTION_MIN_MEAN_DIFFERENCE
+  ) return false;
+  const baselineDifference = sampledFrameDifference(previous, current, width, height);
+  if (!Number.isFinite(baselineDifference) || baselineDifference <= 0) return false;
+  let bestDifference = baselineDifference;
+  let bestShift = 0;
+  for (let offsetY = -GLOBAL_MOTION_MAX_SHIFT; offsetY <= GLOBAL_MOTION_MAX_SHIFT; offsetY += 1) {
+    for (let offsetX = -GLOBAL_MOTION_MAX_SHIFT; offsetX <= GLOBAL_MOTION_MAX_SHIFT; offsetX += 1) {
+      if (!offsetX && !offsetY) continue;
+      const difference = sampledFrameDifference(previous, current, width, height, offsetX, offsetY);
+      if (difference < bestDifference) {
+        bestDifference = difference;
+        bestShift = Math.hypot(offsetX, offsetY);
+      }
+    }
+  }
+  return bestShift > 0 && bestDifference <= baselineDifference * GLOBAL_MOTION_MAX_REMAINING_ERROR;
 }
 
 export function measureFrameMotion(previous, current, width, height, options = {}) {
   const pixelCount = Math.max(0, Math.floor(Number(width) * Number(height)));
   if (!pixelCount || !previous || !current || previous.length < pixelCount || current.length < pixelCount) {
-    return { meanDifference: 0, activeRatio: 0 };
+    return { meanDifference: 0, activeRatio: 0, globalMotion: false };
   }
 
   const threshold = Number.isFinite(options.pixelThreshold)
@@ -96,10 +155,19 @@ export function measureFrameMotion(previous, current, width, height, options = {
     }
     largestActivePixels = Math.max(largestActivePixels, componentSize);
   }
+  const meanDifference = differenceSum / pixelCount;
   return {
-    meanDifference: differenceSum / pixelCount,
+    meanDifference,
     activeRatio: activePixels / pixelCount,
     largestActiveRatio: largestActivePixels / pixelCount,
+    globalMotion: detectsGlobalTranslation(
+      previous,
+      current,
+      width,
+      height,
+      activePixels / pixelCount,
+      meanDifference,
+    ),
   };
 }
 
@@ -120,13 +188,19 @@ export function shouldTriggerMotion(metrics, options = {}) {
   const maxActiveRatio = Number.isFinite(options.maxActiveRatio)
     ? options.maxActiveRatio
     : DEFAULT_OPTIONS.maxActiveRatio;
+  const minMotionCoherence = Number.isFinite(options.minMotionCoherence)
+    ? Math.min(1, Math.max(0, options.minMotionCoherence))
+    : DEFAULT_OPTIONS.minMotionCoherence;
   const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
     ? metrics.largestActiveRatio
     : metrics.activeRatio;
+  const motionCoherence = largestActiveRatio / Math.max(metrics.activeRatio, Number.EPSILON);
   return metrics.meanDifference >= minMeanDifference
     && metrics.meanDifference <= maxMeanDifference
     && metrics.activeRatio >= minActiveRatio
     && largestActiveRatio >= minLargestActiveRatio
+    && motionCoherence >= minMotionCoherence
+    && metrics.globalMotion !== true
     && metrics.activeRatio < maxActiveRatio;
 }
 
@@ -137,8 +211,7 @@ export function adaptiveScoringOptions(noiseMean = 0) {
     minMeanDifference: Math.max(0.0015, noise * 2.25),
     minActiveRatio: 0.008,
     minLargestActiveRatio: 0.0015,
-    broadMeanDifference: Math.max(0.006, noise * 3),
-    broadActiveRatio: 0.08,
+    minMotionCoherence: 0.18,
     maxActiveRatio: 0.96,
   };
 }
@@ -152,14 +225,18 @@ function qualifiesForPulse(metrics, options) {
   const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
     ? metrics.largestActiveRatio
     : metrics.activeRatio;
+  const minMotionCoherence = Number.isFinite(options.minMotionCoherence)
+    ? Math.min(1, Math.max(0, options.minMotionCoherence))
+    : DEFAULT_OPTIONS.minMotionCoherence;
+  const motionCoherence = largestActiveRatio / Math.max(metrics.activeRatio, Number.EPSILON);
   return metrics.activeRatio < options.maxActiveRatio
     && metrics.meanDifference >= options.minMeanDifference
     && (!Number.isFinite(options.maxMeanDifference)
       || metrics.meanDifference <= options.maxMeanDifference)
-    && ((metrics.activeRatio >= options.minActiveRatio
-      && largestActiveRatio >= options.minLargestActiveRatio)
-      || (metrics.meanDifference >= options.broadMeanDifference
-        && metrics.activeRatio >= options.broadActiveRatio));
+    && metrics.activeRatio >= options.minActiveRatio
+    && largestActiveRatio >= options.minLargestActiveRatio
+    && motionCoherence >= minMotionCoherence
+    && metrics.globalMotion !== true;
 }
 
 function qualifiesForPresence(metrics, options) {
@@ -167,9 +244,15 @@ function qualifiesForPresence(metrics, options) {
   const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
     ? metrics.largestActiveRatio
     : metrics.activeRatio;
+  const minMotionCoherence = Number.isFinite(options.minMotionCoherence)
+    ? Math.min(1, Math.max(0, options.minMotionCoherence))
+    : DEFAULT_OPTIONS.minMotionCoherence;
+  const motionCoherence = largestActiveRatio / Math.max(metrics.activeRatio, Number.EPSILON);
   return metrics.meanDifference >= options.minMeanDifference
     && metrics.activeRatio < options.maxActiveRatio
-    && largestActiveRatio >= options.minLargestActiveRatio;
+    && largestActiveRatio >= options.minLargestActiveRatio
+    && motionCoherence >= minMotionCoherence
+    && metrics.globalMotion !== true;
 }
 
 function createCaptureElements(documentRef, width, height) {
@@ -266,12 +349,12 @@ export class CameraMotionDetector {
   async acquireCamera() {
     let acquiredStream = null;
     try {
-      try {
-        acquiredStream = await this.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
-      } catch {
-        if (this.destroyed) return { cameraGranted: false };
-        acquiredStream = await this.mediaDevices.getUserMedia(FALLBACK_CAMERA_CONSTRAINTS);
-      }
+      acquiredStream = await this.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
+      const facingMode = streamFacingMode(acquiredStream);
+      // Exact constraints are enforced by compliant browsers, but checking
+      // the selected track protects against mocks and browser implementations
+      // that silently ignore the facingMode constraint.
+      if (facingMode && facingMode !== "environment") throw new Error("rear camera required");
       if (this.destroyed) {
         stopMediaStream(acquiredStream);
         return { cameraGranted: false };
@@ -292,9 +375,6 @@ export class CameraMotionDetector {
         this.onState?.("ready");
         this.scheduleFrame();
       }
-      const facingMode = this.stream?.getTracks?.()
-        .map((track) => track.getSettings?.().facingMode)
-        .find(Boolean) ?? null;
       return { cameraGranted: true, facingMode };
     } catch {
       if (acquiredStream && acquiredStream !== this.stream) stopMediaStream(acquiredStream);
@@ -551,4 +631,4 @@ export class CameraMotionDetector {
   }
 }
 
-export { CAMERA_CONSTRAINTS, FALLBACK_CAMERA_CONSTRAINTS, HISTORY_MS, PULSE_COOLDOWN_MS };
+export { CAMERA_CONSTRAINTS, HISTORY_MS, PULSE_COOLDOWN_MS };

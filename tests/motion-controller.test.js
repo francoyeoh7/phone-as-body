@@ -60,6 +60,31 @@ describe("motion controller", () => {
     expect(harness.samples.at(-1).pitch).toBe(0);
   });
 
+  it("passes orientation timestamps through to the bounded rapid-turn response", async () => {
+    const harness = createController();
+    await harness.controller.requestPermission();
+
+    const yawQuaternion = (degrees) => ({
+      x: 0,
+      y: 0,
+      z: Math.sin(degrees * Math.PI / 360),
+      w: Math.cos(degrees * Math.PI / 360),
+    });
+    harness.target.dispatch("deviceorientation", { quaternion: yawQuaternion(0), timeStamp: 0 });
+    harness.controller.engage();
+    const samples = [10, 20, 30, 40, 50, 60].map((degrees, index) => {
+      harness.target.dispatch("deviceorientation", {
+        quaternion: yawQuaternion(degrees),
+        timeStamp: (index + 1) * 16,
+      });
+      return harness.samples.at(-1);
+    });
+
+    expect(samples[0].rapidProgress).toBeGreaterThan(0);
+    expect(samples.at(-1).rapidProgress).toBeGreaterThan(0);
+    expect(samples.reduce((sum, sample) => sum + sample.yaw, 0)).toBeGreaterThan(150);
+  });
+
   it("freezes released motion and recalibrates every engagement", async () => {
     const harness = createController();
     await harness.controller.requestPermission();

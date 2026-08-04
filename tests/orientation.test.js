@@ -3,6 +3,7 @@ import * as THREE from "three";
 import {
   createOrientationTracker,
   deviceOrientationToQuaternion,
+  adaptiveTurnProfile,
   multiplyQuaternions,
   normalizeQuaternion,
   quaternionToAimVector,
@@ -48,6 +49,74 @@ function axisQuaternion(axis, degrees) {
 }
 
 describe("phone aiming orientation", () => {
+  it("keeps slow motion precise while exposing a bounded rapid-turn profile", () => {
+    const slow = adaptiveTurnProfile(60);
+    expect(slow.progress).toBe(0);
+    expect(slow.gainMultiplier).toBe(1);
+    expect(slow.physicalLimitDeg).toBe(25);
+    expect(slow.maxCameraDeltaDeg).toBe(75);
+
+    const rapid = adaptiveTurnProfile(360);
+    expect(rapid.progress).toBe(1);
+    expect(rapid.gainMultiplier).toBeGreaterThan(1.5);
+    expect(rapid.physicalLimitDeg).toBeGreaterThan(100);
+    expect(rapid.maxCameraDeltaDeg).toBeLessThanOrEqual(180);
+  });
+
+  it("expands only for sustained rapid rotation and stays still after the phone stops", () => {
+    const yawQuaternion = (degrees) => axisQuaternion({ x: 0, y: 0, z: 1 }, degrees);
+    const slow = createOrientationTracker({ smoothingStrength: 0 });
+    slow.calibrate(yawQuaternion(0), 0);
+    const slowSamples = [10, 20, 30, 40].map((degrees, index) => (
+      slow.update(yawQuaternion(degrees), (index + 1) * 500)
+    ));
+
+    const rapid = createOrientationTracker({ smoothingStrength: 0 });
+    rapid.calibrate(yawQuaternion(0), 0);
+    const rapidSamples = [10, 20, 30, 40, 50, 60].map((degrees, index) => (
+      rapid.update(yawQuaternion(degrees), (index + 1) * 16)
+    ));
+
+    const slowTotal = slowSamples.reduce((sum, sample) => sum + sample.yaw, 0);
+    const rapidTotal = rapidSamples.reduce((sum, sample) => sum + sample.yaw, 0);
+    expect(slowTotal).toBeCloseTo(75, 3);
+    expect(rapidTotal).toBeGreaterThan(slowTotal * 2);
+    expect(Math.max(...rapidSamples.map((sample) => Math.abs(sample.yaw)))).toBeLessThanOrEqual(45.001);
+    expect(rapid.update(yawQuaternion(60), 200).yaw).toBe(0);
+  });
+
+  it("bounds an isolated sensor jump instead of amplifying it into a full turn", () => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0 });
+    tracker.calibrate(axisQuaternion({ x: 0, y: 0, z: 1 }, 0), 0);
+
+    const result = tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, 180), 16);
+
+    expect(Math.abs(result.yaw)).toBeLessThanOrEqual(45.001);
+  });
+
+  it("does not build a rapid envelope from alternating phone shake", () => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0 });
+    tracker.calibrate(axisQuaternion({ x: 0, y: 0, z: 1 }, 0), 0);
+    const samples = [10, -10, 10, -10, 10, -10, 10, -10].map((degrees, index) => (
+      tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, degrees), (index + 1) * 16)
+    ));
+
+    expect(Math.max(...samples.map((sample) => sample.rapidProgress))).toBeLessThan(0.1);
+    expect(Math.max(...samples.map((sample) => sample.turnGain))).toBeLessThan(3.2);
+  });
+
+  it("keeps a rapid backward turn near a half-turn instead of overshooting it", () => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0 });
+    tracker.calibrate(axisQuaternion({ x: 0, y: 0, z: 1 }, 0), 0);
+    const samples = [10, 20, 30, 40, 50, 60].map((degrees, index) => (
+      tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, degrees), (index + 1) * 16)
+    ));
+    const total = samples.reduce((sum, sample) => sum + sample.yaw, 0);
+
+    expect(total).toBeGreaterThan(150);
+    expect(total).toBeLessThanOrEqual(190);
+  });
+
   it.each([
     { alpha: 0, beta: 0, gamma: 0, screenAngle: 0 },
     { alpha: 37, beta: 18, gamma: -24, screenAngle: 0 },

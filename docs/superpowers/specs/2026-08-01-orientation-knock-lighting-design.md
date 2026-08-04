@@ -17,14 +17,14 @@ The controller remains an install-free phone web page. It no longer requests cam
 
 - Enabling motion or pressing recenter records the current phone orientation as the neutral reference.
 - Subsequent orientation events are converted to normalized quaternions. The phone's local long axis, pointing from its bottom edge toward its top edge, is transformed into a world-space aim vector.
-- View control uses a ratcheting gesture around that neutral aim vector. During the outward part of a gesture, each increase in horizontal or vertical excursion emits the corresponding view delta. Movement back toward the neutral cone emits no reverse delta and only rearms the next gesture. This lets the player turn, relax the wrist back to center, and turn again without undoing the camera movement.
+- View control follows the calibrated relative aim while the joystick clutch is held. Returning toward the neutral aim reverses the emitted delta, so the camera remains mathematically reversible; releasing the clutch freezes the view and the next engagement establishes a fresh neutral pose.
 - Entering a 2.5-degree neutral cone completes and rearms the gesture. An opposite turn is accepted at full sensitivity as soon as the phone has re-entered that cone; there is no timed lockout.
 - Rotation around the aim vector is treated as grip roll and discarded. Changing from the face-on grip in Figure 1 to the edge-on grip in Figure 4 therefore produces no intended view motion.
 - Figure 1 to Figures 2/3 and Figure 4 to Figures 5/6 change the aim vector's horizontal azimuth and therefore control yaw. Changing its elevation controls pitch in either grip.
 - Grip-transition filtering activates only when roll clearly dominates swing: at least 25 degrees of roll within a 250 ms window and at least 2.5 times the aim-vector change. While that condition holds, aim drift below 3 degrees is suppressed and drift from 3 to 6 degrees is smoothly blended from zero to full strength. Aim changes above 6 degrees retain full response. There is no hard view lock during a grip change, so a deliberate horizontal or vertical turn remains immediately detectable.
-- Default gain is 4:1: approximately 20 degrees of deliberate phone rotation produces approximately 80 degrees of game-camera rotation.
+- Default gain is 3:1: approximately 20 degrees of deliberate phone rotation produces approximately 60 degrees of game-camera rotation at a calm movement speed.
 - The existing sensitivity setting scales that gain while preserving a useful minimum and maximum.
-- Per-sample tremor below 0.8 degrees is discarded. Each valid physical delta is clamped to 25 degrees before gain is applied so a dropped or corrupt sensor sample cannot jump the view.
+- Per-sample tremor below 0.8 degrees is discarded. Calm motion remains limited to a 25-degree physical excursion. A signed, timestamped angular-velocity estimate activates a smooth rapid-turn envelope only after sustained same-direction movement: 90 degrees/second starts the ramp, 300 degrees/second reaches a 1.6x gain multiplier and a 120-degree physical excursion, and the resulting camera target is capped at 180 degrees per clutch. Individual emitted samples remain capped at approximately 45 degrees at 60 Hz, so a dropped sensor frame cannot become an uncontrolled snap; alternating tremor does not build the envelope.
 - Pitch remains clamped to the existing playable range. Y inversion remains supported.
 - Screen-orientation changes discard pending deltas, wait briefly for stabilization, and establish a new neutral sample.
 
@@ -114,7 +114,7 @@ Automated tests cover:
 - face-on and edge-on gestures producing the same yaw and pitch signs,
 - a 90-degree grip roll preserving the long-axis aim vector and producing no view delta,
 - roll-dominant grip transitions suppressing sub-3-degree residual movement, blending 3-to-6-degree movement, and preserving full response above 6 degrees,
-- 20 degrees of phone motion producing approximately 80 degrees of camera motion at default sensitivity,
+- 20 degrees of calm phone motion producing approximately 60 degrees of camera motion at default sensitivity,
 - returning from an outward turn to the neutral cone producing no reverse view delta and rearming the next gesture,
 - an opposite turn after rearming producing full response with the correct sign,
 - no output for stationary jitter inside the dead zone,

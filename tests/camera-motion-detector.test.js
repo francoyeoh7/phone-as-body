@@ -30,6 +30,43 @@ function lowContrastRectangle(width, height, offsetX, offsetY) {
   return pixels;
 }
 
+function texturedScene(width, height, offsetX = 0) {
+  return Uint8Array.from(
+    { length: width * height },
+    (_, index) => {
+      const x = index % width;
+      const y = Math.floor(index / width);
+      const tileX = Math.floor((Math.max(0, x - offsetX)) / 4);
+      const tileY = Math.floor(y / 4);
+      return (tileX + tileY) % 2 ? 180 : 60;
+    },
+  );
+}
+
+function broadBandScene(width, height, offsetX = 0) {
+  return Uint8Array.from(
+    { length: width * height },
+    (_, index) => {
+      const x = Math.max(0, (index % width) - offsetX);
+      if (x < 24) return 70;
+      if (x < 48) return 120;
+      if (x < 72) return 180;
+      return 220;
+    },
+  );
+}
+
+function continuousGradientScene(width, height, offsetX = 0) {
+  return Uint8Array.from(
+    { length: width * height },
+    (_, index) => {
+      const x = Math.max(0, (index % width) - offsetX);
+      const y = Math.floor(index / width);
+      return Math.min(255, 32 + Math.round(x * 2.2 + y * 0.2));
+    },
+  );
+}
+
 function noisyQuietFrame(width, height, phase = 0) {
   return Uint8Array.from(
     { length: width * height },
@@ -143,21 +180,33 @@ describe("camera motion detector", () => {
     expect(detector.sampleHeight).toBe(72);
   });
 
-  it("prefers the rear camera and falls back to any camera", async () => {
-    const stream = { getTracks: () => [{ getSettings: () => ({ facingMode: "user" }) }] };
-    const getUserMedia = vi.fn()
-      .mockRejectedValueOnce(new Error("rear unavailable"))
-      .mockResolvedValueOnce(stream);
+  it("requires a rear camera and never retries with an unconstrained source", async () => {
+    const getUserMedia = vi.fn().mockRejectedValueOnce(new Error("rear unavailable"));
     const detector = new CameraMotionDetector({
       mediaDevices: { getUserMedia },
       createCaptureElements: () => null,
     });
 
-    await expect(detector.start()).resolves.toMatchObject({ cameraGranted: true, facingMode: "user" });
-    expect(getUserMedia).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      video: expect.objectContaining({ facingMode: { ideal: "environment" } }),
+    await expect(detector.start()).resolves.toEqual({ cameraGranted: false });
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenCalledWith(expect.objectContaining({
+      video: expect.objectContaining({ facingMode: { exact: "environment" } }),
     }));
-    expect(getUserMedia).toHaveBeenNthCalledWith(2, { audio: false, video: true });
+  });
+
+  it("rejects a stream that reports a front-facing track instead of using it", async () => {
+    const track = { stop: vi.fn(), getSettings: () => ({ facingMode: "user" }) };
+    const stream = { getTracks: () => [track] };
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    const detector = new CameraMotionDetector({
+      mediaDevices: { getUserMedia },
+      createCaptureElements: () => null,
+    });
+
+    await expect(detector.start()).resolves.toEqual({ cameraGranted: false });
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(detector.stream).toBeNull();
   });
 
   it("uses a 150 ms history reference and rearms at exactly 500 ms", async () => {
@@ -239,6 +288,84 @@ describe("camera motion detector", () => {
 
     expect(await detect(broadChange)).not.toHaveBeenCalled();
     expect(await detect(lowContrastRectangle(96, 72, 30, 18))).toHaveBeenCalledOnce();
+  });
+
+  it("ignores broad scene motion caused by moving the phone while retaining local hand pulses", async () => {
+    async function detect(frames) {
+      const onPulse = vi.fn();
+      const detector = new CameraMotionDetector({
+        onPulse,
+        mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+        createCaptureElements: () => null,
+      });
+
+      await detector.start();
+      detector.setFocused(true);
+      frames.forEach(([sample, timestamp]) => detector.ingestFrame(sample, 96, 72, timestamp));
+      return onPulse;
+    }
+
+    const stableScene = texturedScene(96, 72);
+    const movedScene = texturedScene(96, 72, 1);
+    const phoneMovement = await detect([
+      [stableScene, 0],
+      [stableScene, 50],
+      [stableScene, 100],
+      [stableScene, 150],
+      [movedScene, 200],
+    ]);
+    const localHand = await detect([
+      [new Uint8Array(96 * 72).fill(112), 0],
+      [new Uint8Array(96 * 72).fill(112), 50],
+      [new Uint8Array(96 * 72).fill(112), 100],
+      [new Uint8Array(96 * 72).fill(112), 150],
+      [lowContrastRectangle(96, 72, 30, 18), 200],
+    ]);
+
+    expect(phoneMovement).not.toHaveBeenCalled();
+    expect(localHand).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a coherent global translation even when one moved edge forms the largest region", async () => {
+    const onPulse = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPulse,
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+      createCaptureElements: () => null,
+    });
+    const stableScene = broadBandScene(96, 72);
+    const movedScene = broadBandScene(96, 72, 2);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(stableScene, 96, 72, 0);
+    detector.ingestFrame(stableScene, 96, 72, 50);
+    detector.ingestFrame(stableScene, 96, 72, 100);
+    detector.ingestFrame(stableScene, 96, 72, 150);
+    detector.ingestFrame(movedScene, 96, 72, 200);
+
+    expect(onPulse).not.toHaveBeenCalled();
+  });
+
+  it("rejects an eight-pixel translation of a continuous gradient", async () => {
+    const onPulse = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPulse,
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+      createCaptureElements: () => null,
+    });
+    const stableScene = continuousGradientScene(96, 72);
+    const movedScene = continuousGradientScene(96, 72, 8);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(stableScene, 96, 72, 0);
+    detector.ingestFrame(stableScene, 96, 72, 50);
+    detector.ingestFrame(stableScene, 96, 72, 100);
+    detector.ingestFrame(stableScene, 96, 72, 150);
+    detector.ingestFrame(movedScene, 96, 72, 200);
+
+    expect(onPulse).not.toHaveBeenCalled();
   });
 
   it("honors an explicit maximum mean difference", async () => {
@@ -480,16 +607,11 @@ describe("camera motion detector", () => {
     expect(onPulse.mock.calls.map(([event]) => event.timestamp)).toEqual([200, 700]);
   });
 
-  it.each([
-    ["preferred camera request", false],
-    ["fallback camera request", true],
-  ])("disposes a stream that resolves after destroy during the %s", async (_label, useFallback) => {
+  it("disposes a stream that resolves after destroy during the rear camera request", async () => {
     const pending = deferred();
     const track = { stop: vi.fn() };
     const stream = streamWithTrack(track);
-    const getUserMedia = useFallback
-      ? vi.fn().mockRejectedValueOnce(new Error("rear unavailable")).mockReturnValueOnce(pending.promise)
-      : vi.fn().mockReturnValueOnce(pending.promise);
+    const getUserMedia = vi.fn().mockReturnValueOnce(pending.promise);
     const createCaptureElements = vi.fn(() => null);
     const requestFrame = vi.fn(() => 1);
     const detector = new CameraMotionDetector({
@@ -499,7 +621,7 @@ describe("camera motion detector", () => {
     });
 
     const startResult = detector.start();
-    if (useFallback) await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
     detector.destroy();
     pending.resolve(stream);
 

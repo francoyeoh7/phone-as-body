@@ -160,9 +160,9 @@ export class MotionController {
       this.lastOrientation = quaternion;
       let result = null;
       if (this.tracker.calibrated) {
-        result = this.tracker.update(quaternion);
+        result = this.tracker.update(quaternion, timestamp);
       } else if (this.engaged) {
-        this.tracker.calibrate(quaternion);
+        this.tracker.calibrate(quaternion, timestamp);
       }
       if (result && this.engaged) this.onSample?.(result);
       this.onTelemetry?.({
@@ -211,10 +211,11 @@ export class MotionController {
   reset() {
     if (this.destroyed) return false;
     const quaternion = this.lastOrientation;
+    const timestamp = this.lastOrientationTimestamp;
     this.previousGravity = null;
     this.lastOrientationTimestamp = null;
     this.impactStartedAt = null;
-    if (!quaternion || !this.tracker.calibrate(quaternion)) return false;
+    if (!quaternion || !this.tracker.calibrate(quaternion, timestamp)) return false;
     this.onSample?.(zeroViewDelta());
     return true;
   }

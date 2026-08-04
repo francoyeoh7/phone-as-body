@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Prefer `facingMode: { ideal: "environment" }`; retry once with unconstrained video if the rear-facing request fails.
+- Require `facingMode: { exact: "environment" }`; never retry with an unconstrained or front-facing source.
 - Ordinary pulse interactions have an exact 500 ms cooldown with no extra quiet-frame delay.
 - Door defense succeeds only after 4.0 uninterrupted seconds; one absent presence sample immediately resets progress to zero.
 - Found-phone inspection closes on the first absent presence sample and remains repeatable.
@@ -49,26 +49,23 @@
 - Consumes: browser `mediaDevices.getUserMedia`, grayscale sample frames, `setFocused(boolean)`.
 - Produces: `setMode({ mode, context, baseline })`, `onPulse(event)`, and `onPresence({ ready, active, context, metrics, timestamp })`.
 
-- [ ] **Step 1: Write failing rear-camera and fallback tests**
+- [ ] **Step 1: Write failing rear-camera-only tests**
 
-Add tests that require the first request to use the rear camera and a rejected request to retry without facing constraints:
+Add tests that require the only request to use the rear camera, reject a front-facing track, and never retry with an unconstrained source:
 
 ```js
-it("prefers the rear camera and falls back to any camera", async () => {
-  const stream = { getTracks: () => [{ getSettings: () => ({ facingMode: "user" }) }] };
-  const getUserMedia = vi.fn()
-    .mockRejectedValueOnce(new Error("rear unavailable"))
-    .mockResolvedValueOnce(stream);
+it("requires the rear camera and never retries with an unconstrained source", async () => {
+  const getUserMedia = vi.fn().mockRejectedValueOnce(new Error("rear unavailable"));
   const detector = new CameraMotionDetector({
     mediaDevices: { getUserMedia },
     createCaptureElements: () => null,
   });
 
-  await expect(detector.start()).resolves.toMatchObject({ cameraGranted: true, facingMode: "user" });
-  expect(getUserMedia).toHaveBeenNthCalledWith(1, expect.objectContaining({
-    video: expect.objectContaining({ facingMode: { ideal: "environment" } }),
+  await expect(detector.start()).resolves.toEqual({ cameraGranted: false });
+  expect(getUserMedia).toHaveBeenCalledOnce();
+  expect(getUserMedia).toHaveBeenCalledWith(expect.objectContaining({
+    video: expect.objectContaining({ facingMode: { exact: "environment" } }),
   }));
-  expect(getUserMedia).toHaveBeenNthCalledWith(2, { audio: false, video: true });
 });
 ```
 
@@ -105,7 +102,7 @@ Add a retained-baseline test that triggers a pulse, switches to `found-phone`, a
 
 Run: `npm test -- --run tests/camera-motion-detector.test.js`
 
-Expected: FAIL because rear fallback, `setMode`, `onPulse`, `onPresence`, pulse history, and exact 500 ms rearming do not exist.
+Expected: FAIL because rear-only acquisition, `setMode`, `onPulse`, `onPresence`, pulse history, and exact 500 ms rearming do not exist.
 
 - [ ] **Step 5: Implement capture constraints and detector modes**
 
@@ -115,13 +112,12 @@ Use these public constants and defaults:
 const CAMERA_CONSTRAINTS = Object.freeze({
   audio: false,
   video: {
-    facingMode: { ideal: "environment" },
+    facingMode: { exact: "environment" },
     width: { ideal: 640 },
     height: { ideal: 480 },
     frameRate: { ideal: 20, max: 24 },
   },
 });
-const FALLBACK_CAMERA_CONSTRAINTS = Object.freeze({ audio: false, video: true });
 const PULSE_COOLDOWN_MS = 500;
 const HISTORY_MS = 150;
 ```
@@ -151,14 +147,13 @@ export function adaptiveScoringOptions(noiseMean = 0) {
     minMeanDifference: Math.max(0.0015, noise * 2.25),
     minActiveRatio: 0.008,
     minLargestActiveRatio: 0.0015,
-    broadMeanDifference: Math.max(0.006, noise * 3),
-    broadActiveRatio: 0.08,
+    minMotionCoherence: 0.18,
     maxActiveRatio: 0.96,
   };
 }
 ```
 
-A frame is stable for fresh-baseline calibration when its mean difference is within ordinary low-level sensor noise and its largest connected active region stays below the foreground threshold. Pulse qualification requires `meanDifference >= minMeanDifference` and either `(activeRatio >= minActiveRatio && largestActiveRatio >= minLargestActiveRatio)` or `(meanDifference >= broadMeanDifference && activeRatio >= broadActiveRatio)`. Presence qualification requires a connected foreground region, so scattered sensor noise cannot hold a scene active.
+A frame is stable for fresh-baseline calibration when its mean difference is within ordinary low-level sensor noise and its largest connected active region stays below the foreground threshold. Pulse qualification requires `meanDifference >= minMeanDifference`, a connected foreground region, and `largestActiveRatio / activeRatio >= minMotionCoherence`; the previous broad-change shortcut is intentionally absent. For sufficiently large samples, a small translation search also rejects frames whose scene-wide error drops substantially after shifting, which identifies phone movement. Presence uses the same connected-region and global-translation gates, so scattered sensor noise or camera shake cannot hold a scene active.
 
 For fresh presence, accept three stable calibration frames, freeze the latest as baseline, then evaluate the following frame. For retained presence, evaluate the first following frame immediately. Emit the first `{ ready: true, active }` result and repeat the unchanged state every 250 ms. A desktop scene aborts after three seconds without a ready state; found-phone inspection uses the same timeout only before its first ready state.
 
@@ -166,7 +161,7 @@ For fresh presence, accept three stable calibration frames, freeze the latest as
 
 Run: `npm test -- --run tests/camera-motion-detector.test.js`
 
-Expected: all detector tests pass, including low-contrast, scattered-noise, rear fallback, exact cooldown, static hold, and immediate release.
+Expected: all detector tests pass, including low-contrast, scattered-noise, rear-only acquisition, global-shake rejection, exact cooldown, static hold, and immediate release.
 
 ```bash
 git add src/controller/CameraMotionDetector.js tests/camera-motion-detector.test.js
