@@ -6,10 +6,11 @@ const DEFAULT_RAPID_START_SPEED = 90;
 const DEFAULT_RAPID_FULL_SPEED = 300;
 const DEFAULT_RAPID_GAIN_MULTIPLIER = 1.6;
 const DEFAULT_RAPID_MAX_CAMERA_DELTA_DEG = 180;
-const DEFAULT_TURN_PITCH_DEAD_ZONE_DEG = 20;
+const DEFAULT_TURN_PITCH_DEAD_ZONE_DEG = 18;
 const DEFAULT_TURN_YAW_STEP_DEG = 0.5;
 const DEFAULT_TURN_YAW_SPEED_DEG_PER_SECOND = 30;
 const DEFAULT_TURN_YAW_DOMINANCE_RATIO = 1.25;
+const DEFAULT_TURN_YAW_ACTIVATION_DEG = 1.5;
 const TURN_PITCH_REARM_DEG = 0.25;
 
 const smoothstep = (value) => value * value * (3 - 2 * value);
@@ -214,6 +215,7 @@ export function createOrientationTracker({
   turnYawStepDeg = DEFAULT_TURN_YAW_STEP_DEG,
   turnYawSpeedDegPerSecond = DEFAULT_TURN_YAW_SPEED_DEG_PER_SECOND,
   turnYawDominanceRatio = DEFAULT_TURN_YAW_DOMINANCE_RATIO,
+  turnYawActivationDeg = DEFAULT_TURN_YAW_ACTIVATION_DEG,
 } = {}) {
   let baselineAim = null;
   let previousAim = null;
@@ -234,6 +236,9 @@ export function createOrientationTracker({
   let turnPitchAnchor = null;
   let previousPhysicalYaw = 0;
   let previousPhysicalPitch = 0;
+  let yawCandidateDegrees = 0;
+  let yawCandidateDirection = 0;
+  let yawCandidatePitchAnchor = 0;
 
   const relativeAngles = (aim) => {
     const baseline = vectorAngles(baselineAim);
@@ -369,6 +374,9 @@ export function createOrientationTracker({
       turnPitchAnchor = null;
       previousPhysicalYaw = 0;
       previousPhysicalPitch = 0;
+      yawCandidateDegrees = 0;
+      yawCandidateDirection = 0;
+      yawCandidatePitchAnchor = 0;
       return true;
     },
 
@@ -402,9 +410,30 @@ export function createOrientationTracker({
       const yawMotionQualified = hasTurnInterval
         ? yawSpeed >= yawSpeedThreshold
         : hasUntimestampedTrace && Math.abs(physicalYawStep) >= yawThreshold;
-      const yawTurning = yawMotionQualified
+      const yawDominant = yawMotionQualified
         && Math.abs(physicalYawStep) >= Math.abs(physicalPitchStep) * yawDominance;
-      if (yawTurning && turnPitchAnchor === null) turnPitchAnchor = previousPhysicalPitch;
+      const yawDirection = Math.sign(physicalYawStep);
+      if (turnPitchAnchor === null && yawDominant) {
+        if (yawCandidateDirection !== yawDirection) {
+          yawCandidateDegrees = 0;
+          yawCandidatePitchAnchor = previousPhysicalPitch;
+        }
+        yawCandidateDirection = yawDirection;
+        yawCandidateDegrees += Math.abs(physicalYawStep);
+        const activationDegrees = Number.isFinite(turnYawActivationDeg)
+          && turnYawActivationDeg > 0
+          ? turnYawActivationDeg
+          : DEFAULT_TURN_YAW_ACTIVATION_DEG;
+        if (yawCandidateDegrees >= activationDegrees) {
+          turnPitchAnchor = yawCandidatePitchAnchor;
+          yawCandidateDegrees = 0;
+          yawCandidateDirection = 0;
+        }
+      } else if (turnPitchAnchor === null) {
+        yawCandidateDegrees = 0;
+        yawCandidateDirection = 0;
+      }
+      const yawTurning = yawDominant && turnPitchAnchor !== null;
       const turnPitchCompensating = turnPitchAnchor !== null;
       const controlPitch = turnPitchCompensating
         ? applyTurnPitchDeadZone(rawAngles.pitch, turnPitchAnchor, turnPitchDeadZoneDeg)

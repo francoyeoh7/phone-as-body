@@ -50,12 +50,12 @@ function axisQuaternion(axis, degrees) {
 }
 
 describe("phone aiming orientation", () => {
-  it("applies a 20-degree upward-only turn pitch dead zone continuously", () => {
+  it("applies an 18-degree upward-only turn pitch dead zone continuously", () => {
     expect(applyTurnPitchDeadZone(10, 0)).toBe(0);
     expect(applyTurnPitchDeadZone(18, 0)).toBe(0);
-    expect(applyTurnPitchDeadZone(20, 0)).toBe(0);
-    expect(applyTurnPitchDeadZone(22, 0)).toBe(2);
-    expect(applyTurnPitchDeadZone(26, 0)).toBe(6);
+    expect(applyTurnPitchDeadZone(20, 0)).toBe(2);
+    expect(applyTurnPitchDeadZone(22, 0)).toBe(4);
+    expect(applyTurnPitchDeadZone(26, 0)).toBe(8);
     expect(applyTurnPitchDeadZone(-10, 0)).toBe(-10);
   });
 
@@ -198,7 +198,7 @@ describe("phone aiming orientation", () => {
     const intentionalPitch = tracker.update(deliberate, 32);
     expect(Math.abs(intentionalPitch.physicalPitch)).toBeGreaterThan(20);
     expect(Math.abs(intentionalPitch.pitch)).toBeGreaterThan(5);
-    expect(intentionalPitch.controlPitch).toBeCloseTo(intentionalPitch.physicalPitch - 20, 3);
+    expect(intentionalPitch.controlPitch).toBeCloseTo(intentionalPitch.physicalPitch - 18, 3);
   });
 
   it("preserves a downward look coupled to a yaw turn", () => {
@@ -218,6 +218,22 @@ describe("phone aiming orientation", () => {
     expect(result.physicalPitch).toBeLessThan(-5);
     expect(result.controlPitch).toBeCloseTo(result.physicalPitch, 3);
     expect(result.pitch).toBeLessThan(-5);
+  });
+
+  it("does not arm turn-pitch compensation from one small yaw jitter sample", () => {
+    const tracker = createOrientationTracker({
+      smoothingStrength: 0,
+      gain: 1,
+      rapidGainMultiplier: 1,
+    });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+
+    const jitter = tracker.update(axisQuaternion({ x: 0, y: 0, z: 1 }, 0.6), 16);
+    expect(jitter.turnPitchCompensating).toBe(false);
+
+    const deliberateLook = tracker.update(axisQuaternion({ x: 1, y: 0, z: 0 }, 10), 32);
+    expect(deliberateLook.controlPitch).toBeCloseTo(deliberateLook.physicalPitch, 3);
+    expect(deliberateLook.pitch).toBeGreaterThan(5);
   });
 
   it("does not release suppressed turn pitch after yaw stops or reset a prior look angle", () => {
