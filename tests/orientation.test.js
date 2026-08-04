@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  applyTurnPitchDeadZone,
   createOrientationTracker,
   deviceOrientationToQuaternion,
   adaptiveTurnProfile,
@@ -49,6 +50,15 @@ function axisQuaternion(axis, degrees) {
 }
 
 describe("phone aiming orientation", () => {
+  it("applies a 20-degree upward-only turn pitch dead zone continuously", () => {
+    expect(applyTurnPitchDeadZone(10, 0)).toBe(0);
+    expect(applyTurnPitchDeadZone(18, 0)).toBe(0);
+    expect(applyTurnPitchDeadZone(20, 0)).toBe(0);
+    expect(applyTurnPitchDeadZone(22, 0)).toBe(2);
+    expect(applyTurnPitchDeadZone(26, 0)).toBe(6);
+    expect(applyTurnPitchDeadZone(-10, 0)).toBe(-10);
+  });
+
   it("keeps slow motion precise while exposing a bounded rapid-turn profile", () => {
     const slow = adaptiveTurnProfile(60);
     expect(slow.progress).toBe(0);
@@ -162,6 +172,181 @@ describe("phone aiming orientation", () => {
     const vertical = tracker.update(axisQuaternion({ x: 1, y: 0, z: 0 }, 20));
     expect(vertical.pitch).toBeCloseTo(80, 3);
     expect(vertical.yaw).toBeCloseTo(0, 3);
+  });
+
+  it("ignores a small upward pitch coupled to a yaw turn but preserves deliberate pitch", () => {
+    const tracker = createOrientationTracker({
+      smoothingStrength: 0,
+      gain: 1,
+      rapidGainMultiplier: 1,
+    });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+
+    const coupled = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 15),
+      axisQuaternion({ x: 1, y: 0, z: 0 }, 10),
+    );
+    const smallPitch = tracker.update(coupled, 16);
+    expect(Math.abs(smallPitch.physicalYaw)).toBeGreaterThan(10);
+    expect(Math.abs(smallPitch.physicalPitch)).toBeGreaterThan(5);
+    expect(smallPitch.pitch).toBeCloseTo(0, 3);
+
+    const deliberate = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 30),
+      axisQuaternion({ x: 1, y: 0, z: 0 }, 30),
+    );
+    const intentionalPitch = tracker.update(deliberate, 32);
+    expect(Math.abs(intentionalPitch.physicalPitch)).toBeGreaterThan(20);
+    expect(Math.abs(intentionalPitch.pitch)).toBeGreaterThan(5);
+    expect(intentionalPitch.controlPitch).toBeCloseTo(intentionalPitch.physicalPitch - 20, 3);
+  });
+
+  it("preserves a downward look coupled to a yaw turn", () => {
+    const tracker = createOrientationTracker({
+      smoothingStrength: 0,
+      gain: 1,
+      rapidGainMultiplier: 1,
+    });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+
+    const downwardTurn = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 15),
+      axisQuaternion({ x: 1, y: 0, z: 0 }, -10),
+    );
+    const result = tracker.update(downwardTurn, 16);
+
+    expect(result.physicalPitch).toBeLessThan(-5);
+    expect(result.controlPitch).toBeCloseTo(result.physicalPitch, 3);
+    expect(result.pitch).toBeLessThan(-5);
+  });
+
+  it("does not release suppressed turn pitch after yaw stops or reset a prior look angle", () => {
+    const tracker = createOrientationTracker({
+      smoothingStrength: 0,
+      gain: 1,
+      rapidGainMultiplier: 1,
+    });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+
+    const lookUp = axisQuaternion({ x: 1, y: 0, z: 0 }, 10);
+    expect(tracker.update(lookUp, 16).pitch).toBeCloseTo(10, 3);
+
+    const turnWhileLooking = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 15),
+      axisQuaternion({ x: 1, y: 0, z: 0 }, 11),
+    );
+    expect(tracker.update(turnWhileLooking, 32).pitch).toBeCloseTo(0, 3);
+    expect(tracker.update(turnWhileLooking, 400).pitch).toBeCloseTo(0, 3);
+    expect(tracker.update(turnWhileLooking, 800).pitch).toBeCloseTo(0, 3);
+
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 816);
+    const coupled = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 15),
+      lookUp,
+    );
+    expect(tracker.update(coupled, 832).pitch).toBeCloseTo(0, 3);
+    expect(tracker.update(coupled, 1200).pitch).toBeCloseTo(0, 3);
+  });
+
+  it("does not let compensated pitch inflate the rapid yaw profile", () => {
+    const sampleTurn = (withCoupledPitch) => {
+      const tracker = createOrientationTracker({ smoothingStrength: 0, gain: 1 });
+      tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+      return [5, 10, 15, 20].map((degrees, index) => {
+        const yaw = axisQuaternion({ x: 0, y: 0, z: 1 }, degrees);
+        const pose = withCoupledPitch
+          ? multiplyQuaternions(yaw, axisQuaternion({ x: 1, y: 0, z: 0 }, degrees * 0.6))
+          : yaw;
+        return tracker.update(pose, (index + 1) * 16);
+      });
+    };
+
+    const yawOnly = sampleTurn(false);
+    const coupled = sampleTurn(true);
+    expect(coupled.every((sample) => sample.pitch === 0)).toBe(true);
+    coupled.forEach((sample, index) => {
+      expect(sample.rapidProgress).toBeCloseTo(yawOnly[index].rapidProgress, 12);
+      expect(sample.turnGain).toBeCloseTo(yawOnly[index].turnGain, 12);
+    });
+  });
+
+  it("keeps pitch continuous when compensation rearms after a rapid yaw turn", () => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0 });
+    const identity = { x: 0, y: 0, z: 0, w: 1 };
+    const lookUp = axisQuaternion({ x: 1, y: 0, z: 0 }, 10);
+    tracker.calibrate(identity, 0);
+    expect(tracker.update(lookUp, 500).pitch).toBeCloseTo(30, 3);
+
+    const rapidTurn = [10, 20, 30, 40, 50, 60].map((yaw, index) => tracker.update(
+      multiplyQuaternions(axisQuaternion({ x: 0, y: 0, z: 1 }, yaw), lookUp),
+      516 + index * 16,
+    ));
+    expect(rapidTurn.at(-1).rapidProgress).toBeGreaterThan(0.5);
+
+    const heldPose = multiplyQuaternions(axisQuaternion({ x: 0, y: 0, z: 1 }, 60), lookUp);
+    expect(tracker.update(heldPose, 700).pitch).toBeCloseTo(0, 6);
+    expect(tracker.update(heldPose, 716).pitch).toBeCloseTo(0, 6);
+  });
+
+  it.each([100, 99])("does not establish turn compensation from a non-forward timestamp (%s)", (timestamp) => {
+    const tracker = createOrientationTracker({ smoothingStrength: 0, gain: 1, rapidGainMultiplier: 1 });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 100);
+    const mostlyPitch = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 0.6),
+      axisQuaternion({ x: 1, y: 0, z: 0 }, 0.3),
+    );
+
+    const result = tracker.update(mostlyPitch, timestamp);
+    expect(result.turnPitchCompensating).toBe(false);
+    expect(result.controlPitch).toBeCloseTo(result.physicalPitch, 6);
+  });
+
+  it("falls back to safe yaw intent gates for negative configuration", () => {
+    const tracker = createOrientationTracker({
+      smoothingStrength: 0,
+      gain: 1,
+      rapidGainMultiplier: 1,
+      turnYawSpeedDegPerSecond: -1,
+      turnYawDominanceRatio: -1,
+    });
+    tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+    const mostlyPitch = multiplyQuaternions(
+      axisQuaternion({ x: 0, y: 0, z: 1 }, 0.6),
+      axisQuaternion({ x: 1, y: 0, z: 0 }, 15),
+    );
+
+    const result = tracker.update(mostlyPitch, 1000);
+    expect(result.turnPitchCompensating).toBe(false);
+    expect(result.controlPitch).toBeCloseTo(15, 3);
+  });
+
+  it.each([30, 60, 120])("keeps turn-pitch intent consistent at %s Hz", (sampleRate) => {
+    const trace = ({ yaw, pitch, durationMs }) => {
+      const tracker = createOrientationTracker({
+        smoothingStrength: 0,
+        gain: 1,
+        rapidGainMultiplier: 1,
+      });
+      tracker.calibrate({ x: 0, y: 0, z: 0, w: 1 }, 0);
+      const sampleCount = Math.round((durationMs / 1000) * sampleRate);
+      return Array.from({ length: sampleCount }, (_, index) => {
+        const progress = (index + 1) / sampleCount;
+        const pose = multiplyQuaternions(
+          axisQuaternion({ x: 0, y: 0, z: 1 }, yaw * progress),
+          axisQuaternion({ x: 1, y: 0, z: 0 }, pitch * progress),
+        );
+        return tracker.update(pose, ((index + 1) * 1000) / sampleRate);
+      });
+    };
+
+    const yawDominantTurn = trace({ yaw: 24, pitch: 12, durationMs: 400 });
+    expect(yawDominantTurn.reduce((sum, sample) => sum + sample.pitch, 0)).toBeCloseTo(0, 6);
+    expect(yawDominantTurn.at(-1).physicalPitch).toBeCloseTo(12, 3);
+    expect(yawDominantTurn.at(-1).controlPitch).toBeCloseTo(0, 3);
+
+    const pitchDominantLook = trace({ yaw: 0.6, pitch: 15, durationMs: 400 });
+    expect(pitchDominantLook.reduce((sum, sample) => sum + sample.pitch, 0)).toBeCloseTo(15, 3);
+    expect(pitchDominantLook.at(-1).controlPitch).toBeCloseTo(15, 3);
   });
 
   it("keeps face-on and edge-on horizontal gestures equivalent", () => {

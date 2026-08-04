@@ -21,3 +21,20 @@ export function normalizeJoystick(input) {
     y: Object.is(y, -0) ? 0 : y,
   };
 }
+
+export function normalizeJoystickWithDeadZone(input, deadZone = 0) {
+  if (!isValidInput(input) || !Number.isFinite(deadZone) || deadZone < 0) {
+    return { x: 0, y: 0 };
+  }
+
+  const distance = Math.hypot(input.dx, input.dy);
+  if (distance <= deadZone || deadZone >= input.radius) return { x: 0, y: 0 };
+
+  const magnitude = Math.min(1, (distance - deadZone) / (input.radius - deadZone));
+  const x = (input.dx / distance) * magnitude;
+  const y = (-input.dy / distance) * magnitude;
+  return {
+    x: Object.is(x, -0) ? 0 : x,
+    y: Object.is(y, -0) ? 0 : y,
+  };
+}

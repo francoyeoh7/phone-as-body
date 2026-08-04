@@ -2,11 +2,11 @@
 
 ## Goal
 
-Preserve the current phone orientation behavior exactly while making camera motion slightly softer, simplifying the phone UI, enlarging the usable touch area, improving the hospital corridor presentation, and adding the optional side quest “影子”.
+Preserve the phone-control architecture while refining turn compensation and touch intent, simplifying the phone UI, enlarging the usable touch area, improving the hospital corridor presentation, and adding the optional side quest “影子”.
 
 ## Frozen Control Baseline
 
-The current orientation model is the accepted baseline. The implementation must not change sensor-axis selection, grip-roll handling, clutch calibration, dead zones, accumulated yaw/pitch deltas, recenter behavior, or the WebRTC input cadence in `MotionController`, `orientation`, `VirtualJoystick`, and `PhoneSession`.
+Sensor-axis selection, grip-roll handling, clutch calibration, accumulated yaw/pitch transport, recenter behavior, and WebRTC input cadence remain the accepted baseline. This revision intentionally adds yaw-coupled upward-pitch compensation and a radial locomotion dead zone; those thresholds are covered by dedicated trace tests.
 
 Sensitivity remains available to the player, but it scales the accepted yaw and pitch deltas after they reach the desktop player controller. At the default value of `1.0`, the resulting target angle must match the current build.
 
@@ -37,17 +37,17 @@ Opening settings pauses locomotion, clears joystick engagement, and prevents bac
 
 Interaction uses one short tap anywhere on the play surface. There is no visible interaction button.
 
-The same surface also supports movement and view control. On pointer-down, the app records a floating joystick origin at the touch point. Once the pointer travels beyond the tap threshold or remains held for `180 ms`, it becomes an active hold: displacement from that origin is normalized and sent as movement, while the existing phone clutch is engaged so phone pose deltas control the view. A stationary hold therefore permits turning in place. Releasing resets movement to zero and disengages the clutch. The drag origin is visualized only while active with a small transient ring at the contact point; no permanent control panel occupies the surface.
+The same surface also supports movement and view control. On pointer-down, the app records a floating joystick origin at the touch point. Holding for `180 ms` enters an `observing` state that engages only the phone motion clutch, so phone pose deltas can turn the view without sending locomotion. Radial displacement must reach `14 CSS px` before the pointer enters `dragging`; movement remains zero at that boundary, then scales continuously from zero to full speed across the remaining joystick radius. This dead zone keeps normal finger drift in view-only mode while the clutch stays engaged for concurrent locomotion and view control once movement begins. Releasing from either active state resets movement to zero and disengages the clutch. The origin is visualized only while observing or dragging with a small transient ring at the contact point; no permanent control panel occupies the surface.
 
 A touch becomes an interaction only when all conditions are true:
 
 - It starts and ends outside the settings control, settings sheet, and permission overlays.
-- The same pointer ends within `240 ms`.
-- Travel from touch-down to touch-up is at most `10 CSS px`.
+- The same pointer ends before the `180 ms` hold threshold.
+- Maximum travel at any point in the gesture never exceeds `10 CSS px`; returning near the origin does not restore tap eligibility.
 - No second pointer joined the gesture.
 - The pointer was not canceled and the page did not lose visibility.
 
-The action fires on pointer-up, followed by a short haptic pulse when supported. Holding past the time threshold, dragging past the distance threshold, settings use, multitouch, and canceled gestures never interact. The pointer classifier must transition from `tap-candidate` to `dragging` on the first threshold crossing and never reclassify that gesture as a tap.
+The action fires on pointer-up, followed by a short haptic pulse when supported. Holding past the time threshold, leaving the tap tolerance, dragging past the distance threshold, settings use, multitouch, and canceled gestures never interact. The pointer classifier transitions from `tap-candidate` to `observing` at the hold threshold, or to `dragging` at the distance threshold; an observing pointer can later become dragging, and no active gesture can be reclassified as a tap.
 
 The iPhone hardware Volume Down button is not a supported primary input. Mobile Safari does not reliably expose the physical button to a web page, and the browser Media Session API has no volume-button action. A future native iOS wrapper may revisit that option, but the web demo must not depend on it.
 
@@ -115,7 +115,7 @@ This separation keeps the accepted orientation pipeline isolated and makes the s
 
 ## Verification
 
-- Orientation and motion tests remain unchanged and continue to pass.
+- Orientation and motion tests cover yaw-dominant pitch compensation, timestamp faults, rapid-turn continuity, and 30/60/120 Hz traces.
 - Player-controller tests prove default sensitivity preserves current accumulated angles, zero smoothing is immediate, smoothing converges without losing total angle, and frame rate does not change the result materially.
 - Controller and gesture tests prove the simplified UI, settings persistence, compact radar, full-surface floating movement, and every tap threshold/cancellation case.
 - Shadow-quest tests prove eligibility requires distance plus flashlight aim, aim assist is bounded, interaction is one-shot, controls lock during the cinematic, and the exact saved pose is restored.

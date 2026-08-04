@@ -1,8 +1,8 @@
-import { clampJoystickPoint, normalizeJoystick } from "../shared/joystick.js";
+import { clampJoystickPoint, normalizeJoystickWithDeadZone } from "../shared/joystick.js";
 
-const TAP_MAX_MS = 240;
 const TAP_MAX_DISTANCE = 10;
 const HOLD_TO_ENGAGE_MS = 180;
+const DEFAULT_DRAG_THRESHOLD_PX = 14;
 
 export class VirtualJoystick {
   constructor(element, {
@@ -12,19 +12,33 @@ export class VirtualJoystick {
     onTap,
     onIgnoreTarget = () => false,
     clock = () => performance.now(),
+    dragThreshold = DEFAULT_DRAG_THRESHOLD_PX,
+    movementDeadZone,
   }) {
     this.element = element;
-    this.radius = radius;
+    this.radius = Number.isFinite(radius) && radius > 1 ? radius : 84;
     this.onChange = onChange;
     this.onEngagementChange = onEngagementChange;
     this.onTap = onTap;
     this.onIgnoreTarget = onIgnoreTarget;
     this.clock = clock;
+    const fallbackDragThreshold = Math.min(DEFAULT_DRAG_THRESHOLD_PX, this.radius - 1);
+    this.dragThreshold = Number.isFinite(dragThreshold)
+      && dragThreshold > 0
+      && dragThreshold < this.radius
+      ? dragThreshold
+      : fallbackDragThreshold;
+    this.movementDeadZone = Number.isFinite(movementDeadZone)
+      && movementDeadZone >= this.dragThreshold
+      && movementDeadZone < this.radius
+      ? movementDeadZone
+      : this.dragThreshold;
     this.pointerId = null;
     this.mode = "idle";
     this.origin = { x: 0, y: 0 };
     this.startedAt = 0;
     this.multiTouch = false;
+    this.tapCancelled = false;
     this.holdTimer = null;
     this.base = element.querySelector(".joystick-base");
     this.thumb = element.querySelector(".joystick-thumb");
@@ -60,11 +74,12 @@ export class VirtualJoystick {
     this.origin = { x: event.clientX, y: event.clientY };
     this.startedAt = this.getEventTime();
     this.multiTouch = false;
+    this.tapCancelled = false;
     this.element.setPointerCapture?.(event.pointerId);
     this.holdTimer = setTimeout(() => {
       this.holdTimer = null;
       if (this.mode === "tap-candidate" && this.pointerId === event.pointerId && !this.multiTouch) {
-        this.engageDrag();
+        this.engageObservation();
       }
     }, HOLD_TO_ENGAGE_MS);
   }
@@ -73,10 +88,12 @@ export class VirtualJoystick {
     if (event.pointerId !== this.pointerId) return;
     event.preventDefault();
     const displacement = this.displacement(event);
-    if (this.mode === "tap-candidate" && displacement.distance > TAP_MAX_DISTANCE) {
+    if (displacement.distance > TAP_MAX_DISTANCE) this.tapCancelled = true;
+    if ((this.mode === "tap-candidate" || this.mode === "observing")
+      && displacement.distance >= this.dragThreshold) {
       this.engageDrag();
     }
-    if (this.mode !== "dragging") return;
+    if (this.mode !== "observing" && this.mode !== "dragging") return;
     this.update(event);
   }
 
@@ -88,16 +105,28 @@ export class VirtualJoystick {
     };
     const point = clampJoystickPoint(input);
     this.thumb.style.transform = `translate3d(${point.dx}px, ${point.dy}px, 0)`;
-    this.onChange?.(normalizeJoystick(input));
+    this.onChange?.(normalizeJoystickWithDeadZone(input, this.movementDeadZone));
+  }
+
+  engageObservation() {
+    if (this.mode !== "tap-candidate") return;
+    clearTimeout(this.holdTimer);
+    this.holdTimer = null;
+    this.mode = "observing";
+    this.showBase();
+    this.onEngagementChange?.(true);
   }
 
   engageDrag() {
     if (this.mode === "dragging") return;
+    const wasEngaged = this.mode === "observing";
     clearTimeout(this.holdTimer);
     this.holdTimer = null;
     this.mode = "dragging";
-    this.showBase();
-    this.onEngagementChange?.(true);
+    if (!wasEngaged) {
+      this.showBase();
+      this.onEngagementChange?.(true);
+    }
   }
 
   handleEnd(event) {
@@ -108,7 +137,8 @@ export class VirtualJoystick {
     const displacement = event ? this.displacement(event) : { distance: Infinity };
     const canTap = mode === "tap-candidate"
       && !this.multiTouch
-      && duration <= TAP_MAX_MS
+      && !this.tapCancelled
+      && duration < HOLD_TO_ENGAGE_MS
       && displacement.distance <= TAP_MAX_DISTANCE;
     this.reset();
     if (canTap) this.onTap?.();
@@ -138,11 +168,12 @@ export class VirtualJoystick {
 
   reset() {
     const wasActive = this.pointerId !== null;
-    const wasDragging = this.mode === "dragging";
+    const wasEngaged = this.mode === "observing" || this.mode === "dragging";
     const pointerId = this.pointerId;
     this.pointerId = null;
     this.mode = "idle";
     this.multiTouch = false;
+    this.tapCancelled = false;
     if (pointerId !== null && this.element.hasPointerCapture?.(pointerId)) {
       this.element.releasePointerCapture(pointerId);
     }
@@ -151,7 +182,7 @@ export class VirtualJoystick {
     this.base.classList.remove("is-active");
     this.thumb.style.transform = "translate3d(0, 0, 0)";
     if (wasActive) this.onChange?.({ x: 0, y: 0 });
-    if (wasDragging) this.onEngagementChange?.(false);
+    if (wasEngaged) this.onEngagementChange?.(false);
   }
 
   destroy() {

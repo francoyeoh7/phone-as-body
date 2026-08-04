@@ -6,8 +6,34 @@ const DEFAULT_RAPID_START_SPEED = 90;
 const DEFAULT_RAPID_FULL_SPEED = 300;
 const DEFAULT_RAPID_GAIN_MULTIPLIER = 1.6;
 const DEFAULT_RAPID_MAX_CAMERA_DELTA_DEG = 180;
+const DEFAULT_TURN_PITCH_DEAD_ZONE_DEG = 20;
+const DEFAULT_TURN_YAW_STEP_DEG = 0.5;
+const DEFAULT_TURN_YAW_SPEED_DEG_PER_SECOND = 30;
+const DEFAULT_TURN_YAW_DOMINANCE_RATIO = 1.25;
+const TURN_PITCH_REARM_DEG = 0.25;
 
 const smoothstep = (value) => value * value * (3 - 2 * value);
+
+/**
+ * Removes upward wrist-coupled pitch relative to the pose where a yaw turn
+ * began. Downward motion stays direct, while upward motion beyond the cone is
+ * continuous from the cone boundary.
+ */
+export function applyTurnPitchDeadZone(
+  pitchDeg,
+  referencePitchDeg = 0,
+  deadZoneDeg = DEFAULT_TURN_PITCH_DEAD_ZONE_DEG,
+) {
+  const pitch = Number.isFinite(pitchDeg) ? pitchDeg : 0;
+  const reference = Number.isFinite(referencePitchDeg) ? referencePitchDeg : 0;
+  const deadZone = Number.isFinite(deadZoneDeg)
+    ? Math.max(0, deadZoneDeg)
+    : DEFAULT_TURN_PITCH_DEAD_ZONE_DEG;
+  const offset = pitch - reference;
+  if (offset <= 0) return pitch;
+  if (offset <= deadZone) return reference;
+  return reference + offset - deadZone;
+}
 
 /**
  * Converts a measured angular velocity into a bounded rapid-turn response.
@@ -184,6 +210,10 @@ export function createOrientationTracker({
   rapidRampMs = 60,
   rapidReleaseMs = 180,
   maxOutputStepDeg = 45,
+  turnPitchDeadZoneDeg = DEFAULT_TURN_PITCH_DEAD_ZONE_DEG,
+  turnYawStepDeg = DEFAULT_TURN_YAW_STEP_DEG,
+  turnYawSpeedDegPerSecond = DEFAULT_TURN_YAW_SPEED_DEG_PER_SECOND,
+  turnYawDominanceRatio = DEFAULT_TURN_YAW_DOMINANCE_RATIO,
 } = {}) {
   let baselineAim = null;
   let previousAim = null;
@@ -201,6 +231,9 @@ export function createOrientationTracker({
   let previousStepYaw = 0;
   let previousStepPitch = 0;
   let hasPreviousStep = false;
+  let turnPitchAnchor = null;
+  let previousPhysicalYaw = 0;
+  let previousPhysicalPitch = 0;
 
   const relativeAngles = (aim) => {
     const baseline = vectorAngles(baselineAim);
@@ -234,15 +267,17 @@ export function createOrientationTracker({
   };
 
   const updateRapidProfile = (angles, timestamp) => {
-    const hasTimestamp = Number.isFinite(timestamp)
-      && Number.isFinite(previousTimestamp)
+    const hasCurrentTimestamp = Number.isFinite(timestamp);
+    const hasPreviousTimestamp = Number.isFinite(previousTimestamp);
+    const hasTimestamp = hasCurrentTimestamp
+      && hasPreviousTimestamp
       && timestamp > previousTimestamp;
     if (!hasTimestamp) {
-      if (Number.isFinite(timestamp)) previousTimestamp = timestamp;
+      if (hasCurrentTimestamp && !hasPreviousTimestamp) previousTimestamp = timestamp;
       lastIntervalMs = null;
       previousRawYaw = angles.yaw;
       previousRawPitch = angles.pitch;
-      return profileForProgress(0);
+      return profileForProgress(rapidProgress);
     }
 
     const intervalMs = clamp(timestamp - previousTimestamp, 8, 250);
@@ -331,6 +366,9 @@ export function createOrientationTracker({
       previousStepYaw = 0;
       previousStepPitch = 0;
       hasPreviousStep = false;
+      turnPitchAnchor = null;
+      previousPhysicalYaw = 0;
+      previousPhysicalPitch = 0;
       return true;
     },
 
@@ -340,10 +378,44 @@ export function createOrientationTracker({
       if (!normalized || !aim || !baselineAim) return noDelta(false);
 
       const rawAngles = relativeAngles(aim);
-      const profile = updateRapidProfile(rawAngles, timestamp);
+      const physicalYawStep = wrapDegrees(rawAngles.yaw - previousPhysicalYaw);
+      const yawThreshold = Number.isFinite(turnYawStepDeg)
+        ? Math.max(0, turnYawStepDeg)
+        : DEFAULT_TURN_YAW_STEP_DEG;
+      const physicalPitchStep = rawAngles.pitch - previousPhysicalPitch;
+      const hasTurnInterval = Number.isFinite(timestamp)
+        && Number.isFinite(previousTimestamp)
+        && timestamp > previousTimestamp;
+      const yawSpeed = hasTurnInterval
+        ? Math.abs(physicalYawStep) / ((timestamp - previousTimestamp) / 1000)
+        : 0;
+      const yawSpeedThreshold = Number.isFinite(turnYawSpeedDegPerSecond)
+        && turnYawSpeedDegPerSecond >= 0
+        ? turnYawSpeedDegPerSecond
+        : DEFAULT_TURN_YAW_SPEED_DEG_PER_SECOND;
+      const yawDominance = Number.isFinite(turnYawDominanceRatio)
+        && turnYawDominanceRatio > 0
+        ? turnYawDominanceRatio
+        : DEFAULT_TURN_YAW_DOMINANCE_RATIO;
+      const hasUntimestampedTrace = !Number.isFinite(timestamp)
+        && !Number.isFinite(previousTimestamp);
+      const yawMotionQualified = hasTurnInterval
+        ? yawSpeed >= yawSpeedThreshold
+        : hasUntimestampedTrace && Math.abs(physicalYawStep) >= yawThreshold;
+      const yawTurning = yawMotionQualified
+        && Math.abs(physicalYawStep) >= Math.abs(physicalPitchStep) * yawDominance;
+      if (yawTurning && turnPitchAnchor === null) turnPitchAnchor = previousPhysicalPitch;
+      const turnPitchCompensating = turnPitchAnchor !== null;
+      const controlPitch = turnPitchCompensating
+        ? applyTurnPitchDeadZone(rawAngles.pitch, turnPitchAnchor, turnPitchDeadZoneDeg)
+        : rawAngles.pitch;
+      const rearmTurnPitch = turnPitchCompensating
+        && !yawTurning
+        && rawAngles.pitch - turnPitchAnchor <= TURN_PITCH_REARM_DEG;
+      const profile = updateRapidProfile({ yaw: rawAngles.yaw, pitch: controlPitch }, timestamp);
       const angles = {
         yaw: clamp(rawAngles.yaw, -profile.physicalLimitDeg, profile.physicalLimitDeg),
-        pitch: clamp(rawAngles.pitch, -profile.physicalLimitDeg, profile.physicalLimitDeg),
+        pitch: clamp(controlPitch, -profile.physicalLimitDeg, profile.physicalLimitDeg),
       };
       const roll = gripRollDegrees(previousQuaternion, normalized, previousAim, aim);
       const rollDominates = roll >= 25 && roll >= vectorDistanceDegrees(previousAim, aim) * 2.5;
@@ -355,7 +427,9 @@ export function createOrientationTracker({
 
       const smooth = clamp(Number.isFinite(smoothingStrength) ? smoothingStrength : 0, 0, 1);
       const smoothing = 1 - smooth * 0.35;
-      const turnGain = (Number.isFinite(gain) ? gain : 1) * profile.gainMultiplier * smoothing;
+      const baseTurnGain = (Number.isFinite(gain) ? gain : 1) * smoothing;
+      const turnGain = baseTurnGain * profile.gainMultiplier;
+      const pitchGain = baseTurnGain;
       const maxCameraDelta = profile.maxCameraDeltaDeg;
       const targetYaw = clamp(
         (Math.abs(angles.yaw) <= deadZoneDeg ? 0 : angles.yaw) * turnGain,
@@ -363,7 +437,7 @@ export function createOrientationTracker({
         maxCameraDelta,
       );
       const targetPitch = clamp(
-        (Math.abs(angles.pitch) <= deadZoneDeg ? 0 : angles.pitch) * turnGain,
+        (Math.abs(angles.pitch) <= deadZoneDeg ? 0 : angles.pitch) * pitchGain,
         -Math.min(maxPitchDeg, maxCameraDelta),
         Math.min(maxPitchDeg, maxCameraDelta),
       );
@@ -378,11 +452,16 @@ export function createOrientationTracker({
       previousTargetPitch = pitchStep.clipped && transitionScale === 1 ? targetPitch : previousTargetPitch + pitch;
       previousAim = aim;
       previousQuaternion = normalized;
+      previousPhysicalYaw = rawAngles.yaw;
+      previousPhysicalPitch = rawAngles.pitch;
+      if (rearmTurnPitch) turnPitchAnchor = null;
       return {
         yaw,
         pitch,
         physicalYaw: angles.yaw,
-        physicalPitch: angles.pitch,
+        physicalPitch: rawAngles.pitch,
+        controlPitch: angles.pitch,
+        turnPitchCompensating,
         transitionScale,
         roll,
         turnGain,
