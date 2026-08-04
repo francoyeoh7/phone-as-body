@@ -11,6 +11,9 @@ const CAMERA_CONSTRAINTS = Object.freeze({
 const FALLBACK_CAMERA_CONSTRAINTS = Object.freeze({ audio: false, video: true });
 const PULSE_COOLDOWN_MS = 500;
 const HISTORY_MS = 150;
+const PRESENCE_HEARTBEAT_MS = 250;
+const CALIBRATION_MAX_MEAN_DIFFERENCE = 3 / 255;
+const CALIBRATION_MAX_LARGEST_ACTIVE_RATIO = 0.003;
 
 const DEFAULT_OPTIONS = Object.freeze({
   pixelThreshold: 6 / 255,
@@ -159,6 +162,16 @@ function qualifiesForPulse(metrics, options) {
         && metrics.activeRatio >= options.broadActiveRatio));
 }
 
+function qualifiesForPresence(metrics, options) {
+  if (!metrics || !Number.isFinite(metrics.meanDifference) || !Number.isFinite(metrics.activeRatio)) return false;
+  const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
+    ? metrics.largestActiveRatio
+    : metrics.activeRatio;
+  return metrics.meanDifference >= options.minMeanDifference
+    && metrics.activeRatio < options.maxActiveRatio
+    && largestActiveRatio >= options.minLargestActiveRatio;
+}
+
 function createCaptureElements(documentRef, width, height) {
   if (!documentRef?.createElement) return null;
   const video = documentRef.createElement("video");
@@ -220,6 +233,7 @@ export class CameraMotionDetector {
     this.context = null;
     this.presenceReady = false;
     this.lastPresence = null;
+    this.lastPresenceEmittedAt = -Infinity;
     this.presenceBaseline = null;
     this.calibrationFrames = [];
     this.focused = false;
@@ -309,6 +323,7 @@ export class CameraMotionDetector {
     this.context = this.mode === "presence" ? context : null;
     this.presenceReady = false;
     this.lastPresence = null;
+    this.lastPresenceEmittedAt = -Infinity;
     this.presenceBaseline = baseline === "retained" ? this.lastQuietFrame?.slice() ?? null : null;
     this.calibrationFrames = [];
   }
@@ -334,9 +349,14 @@ export class CameraMotionDetector {
   }
 
   emitPresence(active, metrics, timestamp) {
-    if (this.presenceReady && this.lastPresence === active) return;
+    if (
+      this.presenceReady
+      && this.lastPresence === active
+      && timestamp - this.lastPresenceEmittedAt < PRESENCE_HEARTBEAT_MS
+    ) return;
     this.presenceReady = true;
     this.lastPresence = active;
+    this.lastPresenceEmittedAt = timestamp;
     this.onPresence?.({ ready: true, active, context: this.context, metrics, timestamp });
   }
 
@@ -366,8 +386,16 @@ export class CameraMotionDetector {
     if (!this.presenceBaseline) {
       if (!hasHistoryReference) return false;
       const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
-      const stable = metrics.meanDifference < options.minMeanDifference
-        && metrics.activeRatio < options.minActiveRatio;
+      const largestActiveRatio = Number.isFinite(metrics.largestActiveRatio)
+        ? metrics.largestActiveRatio
+        : metrics.activeRatio;
+      const stable = metrics.meanDifference < Math.max(
+        options.minMeanDifference,
+        CALIBRATION_MAX_MEAN_DIFFERENCE,
+      ) && largestActiveRatio < Math.max(
+        options.minLargestActiveRatio,
+        CALIBRATION_MAX_LARGEST_ACTIVE_RATIO,
+      );
       if (stable) this.calibrationFrames.push(sample.slice());
       else this.calibrationFrames = [];
       if (this.calibrationFrames.length === 3) {
@@ -379,7 +407,7 @@ export class CameraMotionDetector {
 
     const options = resolvedScoringOptions(this.noiseMean, this.scoringOptions);
     const presenceMetrics = measureFrameMotion(this.presenceBaseline, sample, width, height, options);
-    const active = qualifiesForPulse(presenceMetrics, options);
+    const active = qualifiesForPresence(presenceMetrics, options);
     if (!active) this.lastQuietFrame = sample.slice();
     this.emitPresence(active, presenceMetrics, timestamp);
     return active;

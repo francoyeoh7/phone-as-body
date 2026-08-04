@@ -158,9 +158,9 @@ export function adaptiveScoringOptions(noiseMean = 0) {
 }
 ```
 
-A frame is stable for fresh-baseline calibration when its `meanDifference` is below `minMeanDifference` and its `activeRatio` is below `minActiveRatio`. Pulse qualification requires `meanDifference >= minMeanDifference` and either `(activeRatio >= minActiveRatio && largestActiveRatio >= minLargestActiveRatio)` or `(meanDifference >= broadMeanDifference && activeRatio >= broadActiveRatio)`.
+A frame is stable for fresh-baseline calibration when its mean difference is within ordinary low-level sensor noise and its largest connected active region stays below the foreground threshold. Pulse qualification requires `meanDifference >= minMeanDifference` and either `(activeRatio >= minActiveRatio && largestActiveRatio >= minLargestActiveRatio)` or `(meanDifference >= broadMeanDifference && activeRatio >= broadActiveRatio)`. Presence qualification requires a connected foreground region, so scattered sensor noise cannot hold a scene active.
 
-For fresh presence, accept three stable calibration frames, freeze the latest as baseline, then evaluate the following frame. For retained presence, evaluate the first following frame immediately. Emit the first `{ ready: true, active }` result and subsequent events only when `active` changes.
+For fresh presence, accept three stable calibration frames, freeze the latest as baseline, then evaluate the following frame. For retained presence, evaluate the first following frame immediately. Emit the first `{ ready: true, active }` result and repeat the unchanged state every 250 ms. A desktop scene aborts after three seconds without a ready state; found-phone inspection uses the same timeout only before its first ready state.
 
 - [ ] **Step 6: Verify GREEN and commit**
 

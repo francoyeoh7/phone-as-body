@@ -79,6 +79,39 @@ describe("found phone director", () => {
     expect(director.handleInteraction("found-phone")).toBe(true);
   });
 
+  it("returns the phone and exploration controls when presence never becomes ready", () => {
+    const { director, foundPhone, player, audio, sendControllerEvent } = createHarness();
+    director.handleInteraction("found-phone");
+
+    director.update(2.999);
+    expect(director.isInspecting()).toBe(true);
+    expect(player.endCinematic).not.toHaveBeenCalled();
+
+    director.update(0.001);
+
+    expect(director.isInspecting()).toBe(false);
+    expect(foundPhone.setHeld).toHaveBeenLastCalledWith(false);
+    expect(player.endCinematic).toHaveBeenCalledOnce();
+    expect(audio.cue).toHaveBeenLastCalledWith("phone-release");
+    expect(sendControllerEvent).toHaveBeenLastCalledWith({
+      type: "gesture-mode",
+      mode: "pulse",
+      context: null,
+      baseline: "fresh",
+    });
+  });
+
+  it("does not time-limit reading after the first active presence state", () => {
+    const { director, player } = createHarness();
+    director.handleInteraction("found-phone");
+    director.handlePresence({ context: "found-phone", ready: true, active: true });
+
+    director.update(30);
+
+    expect(director.isInspecting()).toBe(true);
+    expect(player.endCinematic).not.toHaveBeenCalled();
+  });
+
   it("destroy restores the initial controller and prop state once", () => {
     const { director, foundPhone, player, audio, sendControllerEvent } = createHarness();
     director.handleInteraction("found-phone");

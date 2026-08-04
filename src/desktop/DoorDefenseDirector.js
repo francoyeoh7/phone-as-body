@@ -18,6 +18,7 @@ const INTRO_SECONDS = 1.2;
 const HOLD_SECONDS = 4;
 const FAILURE_SECONDS = 0.7;
 const RETURN_SECONDS = 1;
+const CALIBRATION_TIMEOUT_SECONDS = 3;
 const DOOR_CONTEXT = "door-defense";
 const PRESENCE_MODE_EVENT = Object.freeze({
   type: "gesture-mode",
@@ -129,7 +130,12 @@ export class DoorDefenseDirector {
 
     if (this.phase === PHASE.intro) {
       this.updateIntro(seconds);
-    } else if (this.phase === PHASE.calibrating || this.phase === PHASE.awaiting) {
+    } else if (this.phase === PHASE.calibrating) {
+      this.phaseElapsed += seconds;
+      this.applyDoorAnimation();
+      this.updateCamera(1, this.doorImpact());
+      if (this.phaseElapsed >= CALIBRATION_TIMEOUT_SECONDS) this.abort();
+    } else if (this.phase === PHASE.awaiting) {
       this.phaseElapsed += seconds;
       this.applyDoorAnimation();
       this.updateCamera(1, this.doorImpact());

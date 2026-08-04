@@ -58,8 +58,10 @@ Presence mode compares every current frame against a frozen background captured 
 - `retained-baseline` reuses the last quiet pulse reference. Found phone pickup uses this mode so the pickup gesture becomes the held state.
 - Presence remains true while a connected foreground region differs from the baseline, even if that foreground becomes motionless.
 - One false presence sample is a release. There is no debounce because the requested failure rule is immediate.
-- Presence state is sent only when it changes. Socket.IO reliability handles delivery; no high-frequency video or score stream is sent.
+- Presence state is repeated every 250 ms while unchanged so a dropped controller packet cannot strand a cinematic; no video or score stream is sent.
 - Backgrounding, pausing, camera loss, or controller disconnection forces presence false.
+
+Fresh calibration tolerates ordinary low-level sensor noise while rejecting scattered noise without a connected foreground region. If no ready state is produced within three seconds, the desktop aborts the cinematic and restores exploration controls; it never starts progress from an uncalibrated baseline.
 
 ## Desktop-Controller Protocol
 
@@ -98,7 +100,7 @@ The story objective `reach-elevator` becomes `reach-door`. The terminal event be
 1. **Dormant:** The door exists but cannot start its finale before power is restored.
 2. **Acquired:** When the objective is `reach-door` and the player comes within 2.35 m, save the exact player pose and begin cinematic control automatically.
 3. **Threat intro:** Over 1.2 seconds, move the camera toward the door. Twist the handle, move the lock, rattle the leaf, play lock and impact audio, and show the attacker trying to enter.
-4. **Calibrating:** Request `fresh-baseline` presence mode and wait for three stable samples before showing the brace instruction.
+4. **Calibrating:** Request `fresh-baseline` presence mode and wait for three stable samples before showing the brace instruction. If calibration is still not ready after three seconds, abort and restore exploration.
 5. **Bracing:** On presence true, show the first-person arms, start brace haptics, and fill a desktop progress bar continuously for 4.0 seconds.
 6. **Failed:** On the first presence false sample, stop haptics, hide or relax the arms, set progress to zero, kick the door open slightly, then return to the threat intro for another attempt.
 7. **Secured:** At four uninterrupted seconds, latch the lock, stop impacts and haptics, mark the story state `secured`, and hide the progress UI.
@@ -116,7 +118,7 @@ Pickup flow:
 2. Hide the floor object and show a first-person held-phone prop.
 3. Switch the detector to `retained-baseline` presence mode.
 4. Send `found-phone-ui: active` to the controller and suspend movement/view input while inspection is active.
-5. A presence false event closes the UI immediately, hides the held prop, returns the floor object, restores pulse mode, and resumes control.
+5. A presence false event closes the UI immediately, hides the held prop, returns the floor object, restores pulse mode, and resumes control. If the first ready state never arrives within three seconds, the same cleanup runs automatically; once active, reading has no time limit.
 
 The controller UI has three pages:
 
@@ -158,7 +160,7 @@ Controller additions:
 
 - If rear-camera selection fails, retry with any available camera and report the selected mode.
 - If no camera can start, ordinary touch interaction remains available. Continuous scenes expose a keyboard development fallback, but the public phone flow explains that camera permission is required.
-- If presence mode cannot obtain a stable baseline, it remains in calibration rather than starting false progress.
+- If presence mode cannot obtain a stable baseline within three seconds, it aborts the cinematic rather than starting false progress.
 - A stale presence event with the wrong context is ignored.
 - Found-phone inspection and door defense are mutually exclusive; starting one explicitly closes the other.
 

@@ -187,6 +187,33 @@ describe("door defense director", () => {
     });
   });
 
+  it("returns to exploration when camera calibration never becomes ready", () => {
+    const harness = createHarness();
+    harness.director.update(0.016);
+    harness.director.update(1.2);
+
+    harness.director.update(2.999);
+    expect(harness.director.isCinematic()).toBe(true);
+    expect(harness.player.restorePose).not.toHaveBeenCalled();
+
+    harness.director.update(0.001);
+
+    expect(harness.director.isCinematic()).toBe(false);
+    expect(harness.player.restorePose).toHaveBeenCalledExactlyOnceWith(harness.savedPose);
+    expect(harness.player.endCinematic).toHaveBeenCalledOnce();
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith({
+      visible: false,
+      progress: 0,
+      status: "dormant",
+    });
+    expect(harness.sendControllerEvent).toHaveBeenLastCalledWith({
+      type: "gesture-mode",
+      mode: "pulse",
+      context: null,
+      baseline: "fresh",
+    });
+  });
+
   it("resets progress and haptics synchronously on the first bracing release", () => {
     const harness = createHarness();
     startBracing(harness);

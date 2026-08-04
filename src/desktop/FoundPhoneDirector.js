@@ -1,4 +1,5 @@
 const PHONE_ID = "found-phone";
+const PRESENCE_READY_TIMEOUT_SECONDS = 3;
 
 export class FoundPhoneDirector {
   constructor({ experience, player, audio, sendControllerEvent }) {
@@ -7,6 +8,8 @@ export class FoundPhoneDirector {
     this.audio = audio;
     this.sendControllerEvent = typeof sendControllerEvent === "function" ? sendControllerEvent : () => {};
     this.inspecting = false;
+    this.presencePending = false;
+    this.presenceWaitElapsed = 0;
     this.destroyed = false;
   }
 
@@ -20,6 +23,8 @@ export class FoundPhoneDirector {
     ) return false;
 
     this.inspecting = true;
+    this.presencePending = true;
+    this.presenceWaitElapsed = 0;
     this.player.beginCinematic();
     this.foundPhone.setHeld(true);
     this.audio.cue("phone-pickup");
@@ -37,11 +42,19 @@ export class FoundPhoneDirector {
     if (
       !this.inspecting ||
       event?.context !== PHONE_ID ||
-      event.ready !== true ||
-      event.active !== false
+      event.ready !== true
     ) return false;
 
+    this.presencePending = false;
+    if (event.active !== false) return false;
     return this.release();
+  }
+
+  update(delta) {
+    if (!this.inspecting || !this.presencePending) return;
+    const seconds = Number.isFinite(delta) ? Math.max(0, delta) : 0;
+    this.presenceWaitElapsed += seconds;
+    if (this.presenceWaitElapsed >= PRESENCE_READY_TIMEOUT_SECONDS) this.release();
   }
 
   isInspecting() {
@@ -52,6 +65,8 @@ export class FoundPhoneDirector {
     if (!this.inspecting) return false;
 
     this.inspecting = false;
+    this.presencePending = false;
+    this.presenceWaitElapsed = 0;
     this.foundPhone?.setHeld?.(false);
     this.player.endCinematic();
     this.sendControllerEvent({ type: "found-phone-ui", active: false });

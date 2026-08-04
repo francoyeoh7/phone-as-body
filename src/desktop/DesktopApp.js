@@ -278,6 +278,7 @@ export class DesktopApp {
       this.experience.world.step();
       this.player.syncAfterPhysics();
       this.experience.update(delta, this.elapsed);
+      this.foundPhone?.update(delta);
       this.doorDefense?.update(delta);
       this.shadowQuest?.update(delta, this.elapsed);
       if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {

@@ -30,6 +30,17 @@ function lowContrastRectangle(width, height, offsetX, offsetY) {
   return pixels;
 }
 
+function noisyQuietFrame(width, height, phase = 0) {
+  return Uint8Array.from(
+    { length: width * height },
+    (_, index) => {
+      let hash = Math.imul(index + 1, 0x45d9f3b) ^ Math.imul(phase + 1, 0x27d4eb2d);
+      hash ^= hash >>> 16;
+      return 112 + (((hash >>> 0) % 5) - 2);
+    },
+  );
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -279,6 +290,30 @@ describe("camera motion detector", () => {
     expect(onPresence).toHaveBeenNthCalledWith(2, expect.objectContaining({ ready: true, active: false, context: "door-defense" }));
   });
 
+  it("calibrates fresh presence through ordinary low-level camera noise", async () => {
+    const onPresence = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPresence,
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+      createCaptureElements: () => null,
+    });
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setMode({ mode: "presence", context: "door-defense", baseline: "fresh" });
+    for (let index = 0; index < 8; index += 1) {
+      detector.ingestFrame(noisyQuietFrame(96, 72, index), 96, 72, index * 50);
+    }
+    detector.ingestFrame(hand, 96, 72, 400);
+
+    expect(onPresence).toHaveBeenCalledWith(expect.objectContaining({
+      ready: true,
+      active: true,
+      context: "door-defense",
+      timestamp: 400,
+    }));
+  });
+
   it("waits for three stable history comparisons before freezing a fresh baseline", async () => {
     const onPresence = vi.fn();
     const detector = new CameraMotionDetector({
@@ -380,6 +415,34 @@ describe("camera motion detector", () => {
     expect(onPresence.mock.calls.map(([event]) => ({ active: event.active, context: event.context }))).toEqual([
       { active: true, context: "found-phone" },
       { active: false, context: "found-phone" },
+    ]);
+  });
+
+  it("repeats unchanged presence every 250 ms so a lost state cannot lock a scene", async () => {
+    const onPresence = vi.fn();
+    const detector = new CameraMotionDetector({
+      onPresence,
+      mediaDevices: { getUserMedia: vi.fn(async () => streamWithTrack()) },
+      createCaptureElements: () => null,
+    });
+    const quiet = new Uint8Array(96 * 72).fill(112);
+    const hand = lowContrastRectangle(96, 72, 30, 18);
+
+    await detector.start();
+    detector.setFocused(true);
+    detector.ingestFrame(quiet, 96, 72, 0);
+    detector.setMode({ mode: "presence", context: "door-defense", baseline: "retained" });
+    detector.ingestFrame(hand, 96, 72, 200);
+    detector.ingestFrame(hand, 96, 72, 400);
+    detector.ingestFrame(hand, 96, 72, 450);
+
+    expect(onPresence.mock.calls.map(([event]) => ({
+      active: event.active,
+      context: event.context,
+      timestamp: event.timestamp,
+    }))).toEqual([
+      { active: true, context: "door-defense", timestamp: 200 },
+      { active: true, context: "door-defense", timestamp: 450 },
     ]);
   });
 

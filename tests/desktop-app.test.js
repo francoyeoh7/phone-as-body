@@ -75,7 +75,10 @@ function createTickHarness({ owner = null } = {}) {
     update: vi.fn(),
     isCinematic: vi.fn(() => owner === "door"),
   };
-  const foundPhone = { isInspecting: vi.fn(() => owner === "phone") };
+  const foundPhone = {
+    update: vi.fn(),
+    isInspecting: vi.fn(() => owner === "phone"),
+  };
   const shadowQuest = {
     update: vi.fn(),
     isCinematic: vi.fn(() => owner === "shadow"),
@@ -332,6 +335,15 @@ describe("desktop director routing", () => {
     app.tick(16);
 
     expect(director.update).toHaveBeenCalledExactlyOnceWith(0.016, 0.016);
+  });
+
+  it("ticks found-phone recovery while the phone owns the cinematic", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 11));
+    const { app, foundPhone } = createTickHarness({ owner: "phone" });
+
+    app.tick(16);
+
+    expect(foundPhone.update).toHaveBeenCalledExactlyOnceWith(0.016);
   });
 
   it("aborts both new scenes and the shadow quest on peer disconnect", () => {
