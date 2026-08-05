@@ -84,11 +84,15 @@ export class DesktopApp {
         return;
       }
       this.experience = experience;
-      this.handTracking = new HandTrackingDirector({ camera: this.experience.camera, sendControllerEvent: (event) => this.phone?.send(event) });
+      this.handTracking = new HandTrackingDirector({
+        camera: this.experience.camera,
+        sendControllerEvent: (event) => this.phone?.send(event),
+        onGesture: (event) => this.handleHandGesture(event),
+      });
       await this.handTracking.load();
       this.player = new PlayerController({
         ...this.experience,
-        onInteract: (id) => this.handleInteraction(id),
+        onInteract: (id, details) => this.handleInteraction(id, details),
         onAction: (action) => this.handlePhoneAction({ action }),
         onPrompt: (label) => this.ui.setPrompt(label),
         onTarget: (target) => this.handleTargetFocus(target),
@@ -154,7 +158,7 @@ export class DesktopApp {
       if (payload.context === "door-defense") this.doorDefense?.handlePresence(payload);
       return;
     }
-    if (action === "interact") this.player?.interact();
+    if (action === "interact") this.player?.interact("touch");
     if (action === "flashlight" && this.experience) {
       this.experience.objects.flashlight.visible = !this.experience.objects.flashlight.visible;
       this.audio.cue("flashlight");
@@ -182,15 +186,29 @@ export class DesktopApp {
     this.experience.camera.rotation.set(0, Math.PI / 2, 0, "YXZ");
   }
 
-  handleInteraction(id) {
+  handleInteraction(id, details = {}) {
     if (
       this.doorDefense?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
-    if (this.foundPhone?.handleInteraction(id)) return true;
+    if (this.foundPhone?.handleInteraction(id, details)) return true;
     if (this.shadowQuest?.handleInteraction(id)) return true;
     return this.director?.handleInteraction(id) ?? false;
+  }
+
+  handleHandGesture(event) {
+    if (
+      event?.type !== "grab"
+      || !this.currentTargetId
+      || this.destroyed
+      || this.paused
+      || this.doorDefense?.isCinematic()
+      || this.foundPhone?.isInspecting()
+      || this.shadowQuest?.isCinematic()
+    ) return false;
+    this.player?.interact?.("hand");
+    return true;
   }
 
   handleTargetFocus({ id, focused }) {

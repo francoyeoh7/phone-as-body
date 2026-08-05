@@ -234,6 +234,38 @@ describe("desktop control feedback", () => {
 });
 
 describe("desktop director routing", () => {
+  it("applies a confirmed hand grab only to the currently focused target", () => {
+    const player = { interact: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      player,
+      currentTargetId: "washbasin",
+      doorDefense: { isCinematic: vi.fn(() => false) },
+      foundPhone: { isInspecting: vi.fn(() => false) },
+      shadowQuest: { isCinematic: vi.fn(() => false) },
+    });
+
+    expect(app.handleHandGesture({ type: "grab" })).toBe(true);
+    expect(player.interact).toHaveBeenCalledExactlyOnceWith("hand");
+
+    app.currentTargetId = null;
+    expect(app.handleHandGesture({ type: "grab" })).toBe(false);
+    expect(player.interact).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses ordinary grab pulses while a cinematic owns input", () => {
+    const player = { interact: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      player,
+      currentTargetId: "found-phone",
+      doorDefense: { isCinematic: vi.fn(() => true) },
+      foundPhone: { isInspecting: vi.fn(() => false) },
+      shadowQuest: { isCinematic: vi.fn(() => false) },
+    });
+
+    expect(app.handleHandGesture({ type: "grab" })).toBe(false);
+    expect(player.interact).not.toHaveBeenCalled();
+  });
+
   it("routes the complete validated presence payload only to its matching context", () => {
     const foundPhone = { handlePresence: vi.fn() };
     const doorDefense = { handlePresence: vi.fn() };

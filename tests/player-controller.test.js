@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { PlayerController } from "../src/desktop/PlayerController.js";
 
@@ -16,6 +16,19 @@ function createPlayer() {
 }
 
 describe("player phone view deltas", () => {
+  it("preserves the interaction source for scene-specific input rules", () => {
+    const onInteract = vi.fn();
+    const player = Object.assign(Object.create(PlayerController.prototype), {
+      cinematic: false,
+      selected: { id: "found-phone" },
+      onInteract,
+    });
+
+    player.interact("hand");
+
+    expect(onInteract).toHaveBeenCalledExactlyOnceWith("found-phone", { source: "hand" });
+  });
+
   it("softly attracts the camera and reports a newly focused assisted target", () => {
     const focused = [];
     const targetRoot = {

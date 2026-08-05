@@ -300,8 +300,8 @@ export class PlayerController {
     }
   }
 
-  interact() {
-    if (!this.cinematic && this.selected) this.onInteract?.(this.selected.id);
+  interact(source = "unknown") {
+    if (!this.cinematic && this.selected) this.onInteract?.(this.selected.id, { source });
   }
 
   setPaused(paused) {
@@ -312,7 +312,7 @@ export class PlayerController {
   handleKeyDown(event) {
     if (["KeyW", "KeyA", "KeyS", "KeyD"].includes(event.code)) this.keys.add(event.code);
     if (event.repeat) return;
-    if (event.code === "KeyE") this.interact();
+    if (event.code === "KeyE") this.interact("keyboard");
     if (event.code === "KeyF") this.onAction?.("flashlight");
     if (event.code === "KeyR") this.recenter();
     if (event.code === "Escape") this.onAction?.(this.paused ? "resume" : "pause");

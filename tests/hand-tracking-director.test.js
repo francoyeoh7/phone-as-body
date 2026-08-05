@@ -39,6 +39,25 @@ describe("HandTrackingDirector", () => {
     expect(director.owner).toBeNull();
   });
 
+  it("emits global grab pulses only when no semantic task owns the hand", () => {
+    let now = 10;
+    const onGesture = vi.fn();
+    const gestureGate = { update: vi.fn(() => true), reset: vi.fn() };
+    const hand = { fallback: false, setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
+    const director = new HandTrackingDirector({ hand, gestureGate, onGesture, now: () => now, sendControllerEvent: vi.fn() });
+    director.acceptFrame(frame({ receivedAt: now }));
+
+    director.update(0);
+    expect(onGesture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: "grab", at: now }));
+
+    director.beginTask({ context: "door-defense", requiredAction: "brace" });
+    now = 20;
+    director.acceptFrame(frame({ seq: 1, receivedAt: now }));
+    director.update(0);
+    expect(onGesture).toHaveBeenCalledOnce();
+    expect(gestureGate.reset).toHaveBeenCalledWith({ requireRelease: true });
+  });
+
   it("owns one context and emits exactly-once task lifecycle events", () => {
     let now = 0;
     const hand = { fallback: false, load: vi.fn(async () => true), setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };

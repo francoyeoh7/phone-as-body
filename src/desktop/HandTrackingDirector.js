@@ -1,5 +1,6 @@
 import { FirstPersonHand } from "./FirstPersonHand.js";
 import { HandPoseStream } from "./HandPoseStream.js";
+import { HandGestureGate } from "./HandGestureGate.js";
 import { HandTaskStateMachine } from "../shared/hand-task-state.js";
 
 export class HandTrackingDirector {
@@ -9,6 +10,8 @@ export class HandTrackingDirector {
     this.now = typeof options.now === "function" ? options.now : () => performance.now();
     this.stream = options.stream ?? new HandPoseStream();
     this.machine = options.machine ?? new HandTaskStateMachine();
+    this.gestureGate = options.gestureGate ?? new HandGestureGate();
+    this.onGesture = typeof options.onGesture === "function" ? options.onGesture : () => {};
     this.owner = null;
     this.lastAcceptedAt = null;
     this.lastSample = null;
@@ -23,6 +26,7 @@ export class HandTrackingDirector {
     this.owner = context;
     this.fallback = Boolean(this.hand?.fallback || this.lastSample?.state === "unavailable");
     this.machine.begin({ context, requiredAction, now: this.now() });
+    this.gestureGate.reset({ requireRelease: true });
     this.hand?.setContext?.(context);
     this.hand?.setVisible?.(!this.fallback);
     this.sendControllerEvent({ type: "hand-task", active: true, context });
@@ -34,6 +38,7 @@ export class HandTrackingDirector {
     const activeContext = this.owner;
     this.owner = null;
     this.machine.reset();
+    this.gestureGate.reset({ requireRelease: true });
     this.hand?.setVisible?.(!this.hand?.fallback);
     this.hand?.setContext?.(null);
     this.sendControllerEvent({ type: "hand-task", active: false, context: activeContext });
@@ -70,7 +75,12 @@ export class HandTrackingDirector {
     } else if (sample?.state === "lost" || sample?.state === "unavailable") {
       this.hand?.applyPose?.({ state: sample.state, opacity: 0 }, delta);
     }
-    if (!this.owner) return sample ? { sample, fallback: this.fallback } : null;
+    if (!this.owner) {
+      if (this.gestureGate.update(sample, now)) {
+        this.onGesture({ type: "grab", at: now, pose: sample?.pose ?? null });
+      }
+      return sample ? { sample, fallback: this.fallback } : null;
+    }
     const state = this.machine.update(sample ?? { state: "lost", fresh: false }, now);
     return { ...state, sample, fresh: sample?.fresh === true };
   }
