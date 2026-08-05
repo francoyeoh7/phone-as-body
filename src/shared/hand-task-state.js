@@ -52,7 +52,13 @@ export class HandTaskStateMachine {
     this.lossAt = null;
   }
 
-  begin({ context = null, requiredAction = null, preCalibrated = false, now = 0 } = {}) {
+  begin({
+    context = null,
+    requiredAction = null,
+    preCalibrated = false,
+    skipCalibration = false,
+    now = 0,
+  } = {}) {
     this.reset();
     this.state.context = context;
     this.state.requiredAction = requiredAction;
@@ -62,6 +68,10 @@ export class HandTaskStateMachine {
       this.state.calibrated = true;
       this.state.calibrationProgress = 1;
       this.candidateAt = now;
+    } else if (skipCalibration) {
+      this.state.phase = "tracking";
+      this.state.calibrated = true;
+      this.state.calibrationProgress = 1;
     }
     return this.snapshot();
   }

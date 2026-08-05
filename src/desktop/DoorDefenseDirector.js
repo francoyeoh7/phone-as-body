@@ -251,7 +251,11 @@ export class DoorDefenseDirector {
     this.legacyPresenceStarted = false;
     this.exitDoor.braceRig.visible = false;
     this.ui?.setDoorDefense?.(UI_STATE.calibrating);
-    if (!this.handTracking?.beginTask?.({ context: DOOR_CONTEXT, requiredAction: "brace" }) || this.handTracking.usesFallback(DOOR_CONTEXT)) {
+    if (!this.handTracking?.beginTask?.({
+      context: DOOR_CONTEXT,
+      requiredAction: "brace",
+      skipCalibration: true,
+    }) || this.handTracking.usesFallback(DOOR_CONTEXT)) {
       this.legacyPresenceStarted = true;
       this.sendControllerEvent(PRESENCE_MODE_EVENT);
     }

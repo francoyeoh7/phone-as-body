@@ -20,12 +20,12 @@ export class HandTrackingDirector {
     this.paused = false;
   }
 
-  beginTask({ context, requiredAction, preCalibrated = false } = {}) {
+  beginTask({ context, requiredAction, preCalibrated = false, skipCalibration = false } = {}) {
     if (this.destroyed || this.paused || !context || (this.owner && this.owner !== context)) return false;
     if (this.owner === context) return true;
     this.owner = context;
     this.fallback = Boolean(this.hand?.fallback || this.lastSample?.state === "unavailable");
-    this.machine.begin({ context, requiredAction, preCalibrated, now: this.now() });
+    this.machine.begin({ context, requiredAction, preCalibrated, skipCalibration, now: this.now() });
     this.gestureGate.reset({ requireRelease: true });
     this.hand?.setContext?.(context);
     this.hand?.setVisible?.(!this.fallback);

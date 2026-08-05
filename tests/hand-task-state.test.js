@@ -19,6 +19,22 @@ describe("hand action scoring", () => {
 });
 
 describe("HandTaskStateMachine", () => {
+  it("can skip repeated calibration while still waiting for a stable task action", () => {
+    const machine = new HandTaskStateMachine();
+    const started = machine.begin({
+      context: "door-defense",
+      requiredAction: "brace",
+      skipCalibration: true,
+      now: 0,
+    });
+
+    expect(started).toMatchObject({ phase: "tracking", calibrated: true, calibrationProgress: 1 });
+    expect(machine.update({ state: "lost", fresh: false }, 100)).toMatchObject({
+      phase: "tracking",
+      calibrated: true,
+    });
+  });
+
   it("can start a grab task pre-calibrated from a globally confirmed grab", () => {
     const machine = new HandTaskStateMachine({ candidateMs: 0 });
     machine.begin({ context: "found-phone", requiredAction: "grab", preCalibrated: true, now: 0 });

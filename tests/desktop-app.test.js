@@ -266,7 +266,7 @@ describe("desktop director routing", () => {
     expect(player.interact).not.toHaveBeenCalled();
   });
 
-  it("routes the complete validated presence payload only to its matching context", () => {
+  it("discards obsolete camera-pixel presence actions before they reach gameplay", () => {
     const foundPhone = { handlePresence: vi.fn() };
     const doorDefense = { handlePresence: vi.fn() };
     const app = Object.assign(Object.create(DesktopApp.prototype), { foundPhone, doorDefense });
@@ -286,12 +286,9 @@ describe("desktop director routing", () => {
     };
 
     app.handlePhoneAction(phonePayload);
-    expect(foundPhone.handlePresence).toHaveBeenCalledExactlyOnceWith(phonePayload);
-    expect(doorDefense.handlePresence).not.toHaveBeenCalled();
-
     app.handlePhoneAction(doorPayload);
-    expect(doorDefense.handlePresence).toHaveBeenCalledExactlyOnceWith(doorPayload);
-    expect(foundPhone.handlePresence).toHaveBeenCalledOnce();
+    expect(doorDefense.handlePresence).not.toHaveBeenCalled();
+    expect(foundPhone.handlePresence).not.toHaveBeenCalled();
   });
 
   it("produces and closes the controller found-phone UI through held hand-task state", () => {

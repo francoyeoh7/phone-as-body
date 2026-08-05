@@ -296,6 +296,44 @@ describe("door defense director", () => {
     });
   });
 
+  it("reuses persistent hand calibration and advances only from a held brace", () => {
+    let handState = { phase: "tracking", calibrated: true, fresh: true };
+    const handTracking = {
+      usesFallback: vi.fn(() => false),
+      snapshot: vi.fn(() => ({ ...handState })),
+      beginTask: vi.fn(() => true),
+      endTask: vi.fn(),
+      hand: { fallback: false },
+    };
+    const harness = createHarness({ handTracking });
+
+    harness.director.update(0.016);
+    harness.director.update(1.2);
+    expect(handTracking.beginTask).toHaveBeenCalledExactlyOnceWith({
+      context: "door-defense",
+      requiredAction: "brace",
+      skipCalibration: true,
+    });
+    expect(harness.sendControllerEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "gesture-mode",
+      mode: "presence",
+    }));
+
+    harness.director.update(0.1);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      progress: 0,
+      status: "awaiting",
+    }));
+
+    handState = { phase: "held", calibrated: true, fresh: true, sample: { state: "tracked", fresh: true } };
+    harness.director.update(0.016);
+    harness.director.update(0.5);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      progress: 0.125,
+      status: "bracing",
+    }));
+  });
+
   it("emits immutable progress snapshots across bracing updates", () => {
     const harness = createHarness();
     startBracing(harness);

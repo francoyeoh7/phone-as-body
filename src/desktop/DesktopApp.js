@@ -154,8 +154,6 @@ export class DesktopApp {
     if (this.destroyed) return;
     const { action, settings } = payload;
     if (action === "gesture-presence") {
-      if (payload.context === "found-phone") this.foundPhone?.handlePresence(payload);
-      if (payload.context === "door-defense") this.doorDefense?.handlePresence(payload);
       return;
     }
     if (action === "interact") this.player?.interact("touch");
