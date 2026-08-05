@@ -90,6 +90,30 @@ function setMaterialOpacity(root, opacity) {
   });
 }
 
+function disposeResources(root) {
+  const geometries = new Set();
+  const materials = new Set();
+  const textures = new Set();
+  root.traverse?.((object) => {
+    if (object.geometry && !geometries.has(object.geometry)) {
+      geometries.add(object.geometry);
+      object.geometry.dispose?.();
+    }
+    const entries = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+    for (const material of entries) {
+      if (materials.has(material)) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) {
+        if (value?.isTexture && !textures.has(value)) {
+          textures.add(value);
+          value.dispose?.();
+        }
+      }
+      material.dispose?.();
+    }
+  });
+}
+
 function discoverBones(root) {
   const bones = {};
   root.traverse?.((object) => { if (object.isBone || object.type === "Bone" || WEBXR_JOINTS.includes(object.name)) bones[object.name] = object; });
@@ -119,6 +143,9 @@ export class FirstPersonHand {
     this.loaded = false;
     this.fallback = false;
     this.opacity = 0;
+    this.lossFadeElapsed = 0;
+    this.lossFadeStartOpacity = 0;
+    this.lossActive = false;
     this.fallbackPose = "open";
   }
 
@@ -176,9 +203,21 @@ export class FirstPersonHand {
     } else { this.competingHandedness = null; this.competingSince = null; }
 
     const targetOpacity = Number.isFinite(pose.opacity) ? pose.opacity : pose.state === "lost" || pose.state === "unavailable" ? 0 : Number.isFinite(pose.trackingConfidence) ? pose.trackingConfidence : 1;
-    const fade = targetOpacity < this.opacity ? Math.max(0, 1 - seconds * 1000 / 350) : 1;
-    this._setOpacity(targetOpacity < this.opacity ? this.opacity * fade : targetOpacity);
-    if (targetOpacity <= 0 || pose.state === "lost" || pose.state === "unavailable") return this;
+    const lost = targetOpacity <= 0 || pose.state === "lost" || pose.state === "unavailable";
+    if (lost) {
+      if (!this.lossActive) {
+        this.lossActive = true;
+        this.lossFadeElapsed = 0;
+        this.lossFadeStartOpacity = this.opacity;
+      }
+      this.lossFadeElapsed += seconds * 1000;
+      this._setOpacity(this.lossFadeStartOpacity * clamp(1 - this.lossFadeElapsed / 350, 0, 1));
+      return this;
+    }
+    this.lossActive = false;
+    this.lossFadeElapsed = 0;
+    this.lossFadeStartOpacity = 0;
+    this._setOpacity(targetOpacity);
 
     const center = finitePoint(pose.center ?? [0.5, 0.5, 0]);
     const biasY = this.context === "door-defense" ? -0.06 : 0;
@@ -215,6 +254,7 @@ export class FirstPersonHand {
 
   destroy() {
     this.camera?.remove(this.root);
+    for (const model of Object.values(this.models)) disposeResources(model);
     this.root.clear();
     this.models = {};
     this.boneSets = {};
