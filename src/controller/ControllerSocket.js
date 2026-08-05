@@ -1,5 +1,5 @@
 import { io } from "socket.io-client";
-import { EVENTS } from "../shared/protocol.js";
+import { EVENTS, isHandFrame } from "../shared/protocol.js";
 
 export class ControllerSocket {
   constructor({ room, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
@@ -29,6 +29,7 @@ export class ControllerSocket {
     this.timer = null;
     this.peerConnection = null;
     this.dataChannel = null;
+    this.handChannel = null;
     this.pendingCandidates = [];
   }
 
@@ -46,15 +47,18 @@ export class ControllerSocket {
       this.joined = false;
       this.latest = { move: { x: 0, y: 0 }, clutch: false };
       this.clearPendingViewDelta();
+      this.closePeerConnection();
       this.onStatus?.("disconnected");
     });
     this.socket.on("connect_error", () => this.onStatus?.("connect-error"));
     this.socket.on(EVENTS.controllerReplaced, () => {
       this.joined = false;
+      this.closePeerConnection();
       this.onStatus?.("replaced");
     });
     this.socket.on(EVENTS.sessionEnded, () => {
       this.joined = false;
+      this.closePeerConnection();
       this.onStatus?.("session-ended");
     });
     this.socket.on(EVENTS.desktopEvent, (event) => this.onEvent?.(event));
@@ -128,13 +132,24 @@ export class ControllerSocket {
   }
 
   attachDataChannel(channel) {
-    this.dataChannel = channel;
-    channel.onopen = () => this.reportTelemetry({ transport: "webrtc", serverRttMs: null });
+    const isControls = !channel?.label || channel.label === "controls";
+    const isHand = channel?.label === "hand";
+    if (!isControls && !isHand) return;
+    if (isHand) this.handChannel = channel;
+    else this.dataChannel = channel;
+    channel.onopen = () => {
+      if (isControls) this.reportTelemetry({ transport: "webrtc", serverRttMs: null });
+    };
     channel.onclose = () => {
-      if (this.dataChannel === channel) this.dataChannel = null;
-      this.reportTelemetry({ transport: this.socket?.io?.engine?.transport?.name ?? "unknown" });
+      if (isHand) {
+        if (this.handChannel === channel) this.handChannel = null;
+      } else {
+        if (this.dataChannel === channel) this.dataChannel = null;
+        this.reportTelemetry({ transport: this.socket?.io?.engine?.transport?.name ?? "unknown" });
+      }
     };
     channel.onmessage = ({ data }) => {
+      if (!isControls) return;
       try {
         const message = JSON.parse(data);
         if (message?.type === "feedback") this.onEvent?.(message.payload);
@@ -142,6 +157,17 @@ export class ControllerSocket {
         // Ignore malformed peer messages and keep the fallback socket alive.
       }
     };
+  }
+
+  sendHandFrame(frame) {
+    if (!this.joined || !this.socket?.connected || !isHandFrame(frame)) return false;
+    if (this.handChannel?.readyState === "open") {
+      if ((this.handChannel.bufferedAmount ?? 0) > 32_768) return false;
+      this.handChannel.send(JSON.stringify({ type: "hand", payload: frame }));
+      return true;
+    }
+    this.socket.emit(EVENTS.controllerHand, frame);
+    return true;
   }
 
   async handleRtcSignal(signal) {
@@ -166,9 +192,13 @@ export class ControllerSocket {
   }
 
   closePeerConnection() {
-    this.dataChannel?.close?.();
+    const controls = this.dataChannel;
+    const hand = this.handChannel;
+    controls?.close?.();
+    if (hand && hand !== controls) hand.close?.();
     this.peerConnection?.close?.();
     this.dataChannel = null;
+    this.handChannel = null;
     this.peerConnection = null;
     this.pendingCandidates = [];
   }

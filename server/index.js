@@ -64,8 +64,11 @@ io.on("connection", (socket) => {
     socket.join(code);
     socket.data.roomCode = code;
     socket.data.role = "controller";
-    if (joined.replacedId) io.to(joined.replacedId).emit(EVENTS.controllerReplaced);
     const room = sessions.get(code);
+    if (joined.replacedId) {
+      io.to(joined.replacedId).emit(EVENTS.controllerReplaced);
+      io.to(room.desktopId).emit(EVENTS.peerStatus, { connected: false });
+    }
     io.to(room.desktopId).emit(EVENTS.peerStatus, { connected: true });
     if (typeof acknowledge === "function") acknowledge({ ok: true });
   });
@@ -83,12 +86,25 @@ io.on("connection", (socket) => {
     if (typeof acknowledge === "function") acknowledge({ ok: accepted.ok, reason: accepted.reason });
   });
 
+  socket.on(EVENTS.controllerHand, (payload, acknowledge) => {
+    const accepted = sessions.acceptHand(socket.data.roomCode, socket.id, payload);
+    if (accepted.ok) io.to(accepted.room.desktopId).emit(EVENTS.controllerHand, payload);
+    if (typeof acknowledge === "function") acknowledge({ ok: accepted.ok, reason: accepted.reason });
+  });
+
   socket.on(EVENTS.rtcSignal, (payload) => {
     const code = socket.data.roomCode;
     const room = sessions.get(code);
     if (!room || payload === null || typeof payload !== "object") return;
-    if (JSON.stringify(payload).length > 32_768) return;
-    const targetId = socket.data.role === "desktop" ? room.controllerId : room.desktopId;
+    try {
+      if (JSON.stringify(payload).length > 32_768) return;
+    } catch {
+      return;
+    }
+    const ownsDesktop = socket.data.role === "desktop" && room.desktopId === socket.id;
+    const ownsController = socket.data.role === "controller" && room.controllerId === socket.id;
+    if (!ownsDesktop && !ownsController) return;
+    const targetId = ownsDesktop ? room.controllerId : room.desktopId;
     if (targetId) io.to(targetId).emit(EVENTS.rtcSignal, payload);
   });
 

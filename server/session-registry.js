@@ -1,4 +1,4 @@
-import { isControllerAction, isControllerInput, isRoomCode } from "../src/shared/protocol.js";
+import { isControllerAction, isControllerInput, isHandFrame, isRoomCode } from "../src/shared/protocol.js";
 
 const stoppedInput = () => ({
   seq: -1,
@@ -31,6 +31,8 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
       desktopId,
       controllerId: null,
       input: stoppedInput(),
+      handSeq: -1,
+      handEpoch: 0,
     };
     rooms.set(code, room);
     return { code };
@@ -43,6 +45,8 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     const replacedId = room.controllerId && room.controllerId !== controllerId ? room.controllerId : null;
     room.controllerId = controllerId;
     room.input = stoppedInput();
+    room.handSeq = -1;
+    room.handEpoch = 0;
     return { ok: true, replacedId };
   }
 
@@ -71,6 +75,21 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     return { ok: true, room };
   }
 
+  function acceptHand(code, controllerId, frame) {
+    const room = rooms.get(code);
+    if (!room) return { ok: false, reason: "room-not-found" };
+    if (room.controllerId !== controllerId) return { ok: false, reason: "not-controller" };
+    if (!isHandFrame(frame)) return { ok: false, reason: "invalid-hand" };
+    if (frame.modeEpoch < room.handEpoch
+      || (frame.modeEpoch === room.handEpoch && frame.seq <= room.handSeq)
+      || (frame.modeEpoch > room.handEpoch && frame.seq <= room.handSeq)) {
+      return { ok: false, reason: "stale-hand" };
+    }
+    room.handEpoch = frame.modeEpoch;
+    room.handSeq = frame.seq;
+    return { ok: true, room };
+  }
+
   function disconnect(socketId) {
     for (const [code, room] of rooms) {
       if (room.desktopId === socketId) {
@@ -80,6 +99,8 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
       if (room.controllerId === socketId) {
         room.controllerId = null;
         room.input = stoppedInput();
+        room.handSeq = -1;
+        room.handEpoch = 0;
         return { role: "controller", roomCode: code, peerId: room.desktopId };
       }
     }
@@ -91,6 +112,7 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     attachController,
     acceptInput,
     acceptAction,
+    acceptHand,
     disconnect,
     get: (code) => rooms.get(code) ?? null,
   };

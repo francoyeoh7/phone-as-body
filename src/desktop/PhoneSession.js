@@ -1,6 +1,6 @@
 import QRCode from "qrcode";
 import { io } from "socket.io-client";
-import { EVENTS, isControllerInput } from "../shared/protocol.js";
+import { EVENTS, isControllerInput, isHandFrame } from "../shared/protocol.js";
 
 const stoppedInput = () => ({
   seq: -1,
@@ -20,6 +20,9 @@ export class PhoneSession extends EventTarget {
     this.connected = false;
     this.peerConnection = null;
     this.dataChannel = null;
+    this.handChannel = null;
+    this.handSeq = -1;
+    this.handEpoch = 0;
     this.pendingCandidates = [];
   }
 
@@ -29,6 +32,7 @@ export class PhoneSession extends EventTarget {
     this.socket.on("disconnect", () => this.setPeerConnected(false));
     this.socket.on(EVENTS.peerStatus, ({ connected }) => this.setPeerConnected(Boolean(connected)));
     this.socket.on(EVENTS.controllerInput, (input) => this.acceptInput(input));
+    this.socket.on(EVENTS.controllerHand, (frame) => this.acceptHandFrame(frame));
     this.socket.on(EVENTS.controllerAction, (action) => {
       this.dispatchEvent(new CustomEvent("action", { detail: action }));
     });
@@ -49,6 +53,24 @@ export class PhoneSession extends EventTarget {
       receivedAt: performance.now(),
     };
     this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
+  }
+
+  acceptHandFrame(frame) {
+    if (!isHandFrame(frame)) return false;
+    if (frame.modeEpoch < this.handEpoch
+      || (frame.modeEpoch === this.handEpoch && frame.seq <= this.handSeq)
+      || (frame.modeEpoch > this.handEpoch && frame.seq <= this.handSeq)) return false;
+    this.handEpoch = frame.modeEpoch;
+    this.handSeq = frame.seq;
+    this.dispatchEvent(new CustomEvent("hand", {
+      detail: { ...frame, receivedAt: performance.now() },
+    }));
+    return true;
+  }
+
+  resetHandOrdering() {
+    this.handSeq = -1;
+    this.handEpoch = 0;
   }
 
   createRoom() {
@@ -89,6 +111,7 @@ export class PhoneSession extends EventTarget {
     if (connected && !wasConnected) {
       this.input = stoppedInput();
       this.pendingViewDelta = { yaw: 0, pitch: 0 };
+      this.resetHandOrdering();
     } else if (!connected) {
       this.input = {
         ...this.input,
@@ -97,6 +120,7 @@ export class PhoneSession extends EventTarget {
         clutch: false,
       };
       this.pendingViewDelta = { yaw: 0, pitch: 0 };
+      this.resetHandOrdering();
     }
     this.dispatchEvent(new CustomEvent("peer", { detail: { connected } }));
     if (connected) this.startRtcOffer();
@@ -118,11 +142,18 @@ export class PhoneSession extends EventTarget {
   }
 
   attachDataChannel(channel) {
-    this.dataChannel = channel;
+    const isControls = !channel?.label || channel.label === "controls";
+    const isHand = channel?.label === "hand";
+    if (!isControls && !isHand) return;
+    if (isHand) this.handChannel = channel;
+    else this.dataChannel = channel;
     channel.onclose = () => {
-      if (this.dataChannel === channel) this.dataChannel = null;
+      if (isHand) {
+        if (this.handChannel === channel) this.handChannel = null;
+      } else if (this.dataChannel === channel) this.dataChannel = null;
     };
     channel.onmessage = ({ data }) => {
+      if (!isControls) return;
       try {
         const message = JSON.parse(data);
         if (message?.type === "input") this.acceptInput(message.payload);
@@ -137,6 +168,7 @@ export class PhoneSession extends EventTarget {
     if (!peer) return;
     try {
       this.attachDataChannel(peer.createDataChannel("controls", { ordered: false }));
+      this.attachDataChannel(peer.createDataChannel("hand", { ordered: false, maxRetransmits: 0 }));
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       this.socket?.emit(EVENTS.rtcSignal, { description: peer.localDescription });
@@ -162,11 +194,16 @@ export class PhoneSession extends EventTarget {
   }
 
   closePeerConnection() {
-    this.dataChannel?.close?.();
+    const controls = this.dataChannel;
+    const hand = this.handChannel;
+    controls?.close?.();
+    if (hand && hand !== controls) hand.close?.();
     this.peerConnection?.close?.();
     this.dataChannel = null;
+    this.handChannel = null;
     this.peerConnection = null;
     this.pendingCandidates = [];
+    this.resetHandOrdering();
   }
 
   currentInput(maxAgeMs = 500) {

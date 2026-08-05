@@ -12,6 +12,34 @@ const controllerInput = (overrides = {}) => ({
   ...overrides,
 });
 
+const handLandmarks = () => Array.from({ length: 21 }, (_, index) => [
+  index === 9 ? 0 : index === 17 ? 1 : 0.1 + index / 100,
+  index === 5 || index === 17 ? 1 : 0.2 + index / 100,
+  index === 9 ? 1 : 0.3 + index / 100,
+]);
+
+const handFrame = (overrides = {}) => ({
+  version: 1,
+  seq: 1,
+  capturedAt: 4102.3,
+  modeEpoch: 4,
+  state: "tracked",
+  handedness: "left",
+  handConfidence: 0.94,
+  trackingConfidence: 0.87,
+  landmarks: handLandmarks(),
+  worldLandmarks: handLandmarks(),
+  center: [0.1, 0.2, 0.3],
+  wrist: { right: [1, 0, 0], up: [0, 1, 0], forward: [0, 0, 1] },
+  curls: [0.1, 0.2, 0.3, 0.4, 0.5],
+  openness: 0.82,
+  grabStrength: 0.18,
+  palmFacing: 0.76,
+  relativeScale: 1.04,
+  velocity: 0.03,
+  ...overrides,
+});
+
 describe("view delta protocol", () => {
   it("accepts finite bounded view deltas in degrees", () => {
     expect(protocol.isViewDelta({ yaw: 42, pitch: -18 })).toBe(true);
@@ -31,6 +59,39 @@ describe("view delta protocol", () => {
     { yaw: 0, pitch: Number.POSITIVE_INFINITY },
   ])("rejects invalid view deltas", (value) => {
     expect(protocol.isViewDelta(value)).toBe(false);
+  });
+});
+
+describe("strict hand frame protocol", () => {
+  it("accepts a complete tracked frame with exactly 21 finite points", () => {
+    expect(protocol.EVENTS.controllerHand).toBe("controller:hand");
+    expect(protocol.isHandFrame(handFrame())).toBe(true);
+  });
+
+  it.each([
+    ["20 landmarks", { landmarks: handLandmarks().slice(0, 20) }],
+    ["invalid confidence", { handConfidence: 1.01 }],
+    ["unknown state", { state: "maybe" }],
+    ["raw video key", { video: undefined }],
+    ["non-orthogonal wrist", { wrist: { right: [1, 0, 0], up: [1, 0, 0], forward: [0, 0, 1] } }],
+  ])("rejects %s", (_label, overrides) => {
+    expect(protocol.isHandFrame(handFrame(overrides))).toBe(false);
+  });
+
+  it("rejects a serialized payload over 12 KiB and catches stringify failures", () => {
+    expect(protocol.isHandFrame(handFrame({ reason: "x".repeat(13_000) }))).toBe(false);
+    const circular = handFrame();
+    circular.loop = circular;
+    expect(protocol.isHandFrame(circular)).toBe(false);
+  });
+
+  it("accepts status frames without landmark arrays", () => {
+    expect(protocol.isHandFrame({
+      version: 1, seq: 2, capturedAt: 1, modeEpoch: 0, state: "lost", reason: "occluded",
+    })).toBe(true);
+    expect(protocol.isHandFrame({
+      version: 1, seq: 2, capturedAt: 1, modeEpoch: 0, state: "unavailable", landmarks: [],
+    })).toBe(false);
   });
 });
 
@@ -196,7 +257,7 @@ describe("controller snapshot flush", () => {
         this.localDescription = null;
       }
 
-      createDataChannel = vi.fn(() => ({ readyState: "connecting", close: vi.fn() }));
+      createDataChannel = vi.fn((label) => ({ label, readyState: "connecting", close: vi.fn() }));
       createOffer = vi.fn(async () => ({ type: "offer", sdp: "fake" }));
       setLocalDescription = vi.fn(async (description) => {
         this.localDescription = description;
@@ -210,7 +271,54 @@ describe("controller snapshot flush", () => {
 
     await session.startRtcOffer();
 
-    expect(session.peerConnection.createDataChannel).toHaveBeenCalledWith("controls", { ordered: false });
+    expect(session.peerConnection.createDataChannel).toHaveBeenNthCalledWith(1, "controls", { ordered: false });
+    expect(session.peerConnection.createDataChannel).toHaveBeenNthCalledWith(2, "hand", { ordered: false, maxRetransmits: 0 });
+    expect(session.handChannel).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("routes labeled channels independently and keeps controls feedback on controls", () => {
+    const socket = new ControllerSocket({ room: "617042" });
+    const controls = { label: "controls", readyState: "open", send: vi.fn(), close: vi.fn() };
+    const hand = { label: "hand", readyState: "open", bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    socket.attachDataChannel(controls);
+    socket.attachDataChannel(hand);
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+
+    socket.setInput({ move: { x: 0, y: 1 } }, { immediate: true });
+    socket.sendHandFrame(handFrame({ seq: 7 }));
+
+    expect(controls.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(hand.send.mock.calls[0][0])).toMatchObject({ type: "hand", payload: { seq: 7 } });
+    hand.onclose();
+    socket.setInput({ move: { x: 1, y: 0 } }, { immediate: true });
+    expect(controls.send).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([32768, 32769])("handles hand-channel high-water boundary %s", (bufferedAmount) => {
+    const socket = new ControllerSocket({ room: "617042" });
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+    socket.handChannel = { readyState: "open", bufferedAmount, send: vi.fn() };
+    socket.sendHandFrame(handFrame());
+    if (bufferedAmount <= 32768) expect(socket.handChannel.send).toHaveBeenCalledOnce();
+    else expect(socket.handChannel.send).not.toHaveBeenCalled();
+    expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything(), expect.anything());
+  });
+
+  it("dispatches only newer hand frames with local receive time", () => {
+    vi.stubGlobal("performance", { now: vi.fn(() => 9876) });
+    const session = new PhoneSession();
+    const hand = vi.fn();
+    session.addEventListener("hand", hand);
+    session.acceptHandFrame(handFrame({ seq: 2, modeEpoch: 1 }));
+    session.acceptHandFrame(handFrame({ seq: 1, modeEpoch: 1 }));
+    session.acceptHandFrame(handFrame({ seq: 3, modeEpoch: 0 }));
+    session.acceptHandFrame(handFrame({ seq: 3, modeEpoch: 2 }));
+    expect(hand).toHaveBeenCalledTimes(2);
+    expect(hand.mock.calls[0][0].detail.receivedAt).toBe(9876);
+    expect(hand.mock.calls[1][0].detail.seq).toBe(3);
     vi.unstubAllGlobals();
   });
 
