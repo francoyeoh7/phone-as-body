@@ -162,7 +162,13 @@ export class ControllerSocket {
   sendHandFrame(frame) {
     if (!this.joined || !this.socket?.connected || !isHandFrame(frame)) return false;
     if (this.handChannel?.readyState === "open") {
-      if ((this.handChannel.bufferedAmount ?? 0) > 32_768) return false;
+      let bufferedAmount;
+      try {
+        bufferedAmount = this.handChannel.bufferedAmount;
+      } catch {
+        return false;
+      }
+      if (!Number.isFinite(bufferedAmount) || bufferedAmount > 32_768) return false;
       this.handChannel.send(JSON.stringify({ type: "hand", payload: frame }));
       return true;
     }

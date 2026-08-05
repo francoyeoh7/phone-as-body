@@ -322,6 +322,43 @@ describe("controller snapshot flush", () => {
     vi.unstubAllGlobals();
   });
 
+  it("accepts hand envelopes arriving on the hand DataChannel", () => {
+    const session = new PhoneSession();
+    const hand = vi.fn();
+    session.addEventListener("hand", hand);
+    const channel = { label: "hand", onmessage: null, onclose: null };
+
+    session.attachDataChannel(channel);
+    channel.onmessage({ data: JSON.stringify({ type: "hand", payload: handFrame({ seq: 8, modeEpoch: 2 }) }) });
+
+    expect(hand).toHaveBeenCalledOnce();
+    expect(hand.mock.calls[0][0].detail).toMatchObject({ seq: 8, modeEpoch: 2 });
+  });
+
+  it("drops hand frames when bufferedAmount is non-finite or unreadable", () => {
+    for (const bufferedAmount of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const socket = new ControllerSocket({ room: "617042" });
+      socket.joined = true;
+      socket.socket = { connected: true, emit: vi.fn() };
+      socket.handChannel = { readyState: "open", bufferedAmount, send: vi.fn() };
+
+      expect(socket.sendHandFrame(handFrame())).toBe(false);
+      expect(socket.handChannel.send).not.toHaveBeenCalled();
+      expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
+    }
+
+    const socket = new ControllerSocket({ room: "617042" });
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+    const channel = { readyState: "open", send: vi.fn() };
+    Object.defineProperty(channel, "bufferedAmount", { get: () => { throw new Error("unreadable"); } });
+    socket.handChannel = channel;
+
+    expect(socket.sendHandFrame(handFrame())).toBe(false);
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
+  });
+
   it("clears stale tunnel RTT when WebRTC opens", () => {
     const telemetry = vi.fn();
     const socket = new ControllerSocket({ room: "617042", onTelemetry: telemetry });

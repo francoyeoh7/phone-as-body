@@ -153,10 +153,13 @@ export class PhoneSession extends EventTarget {
       } else if (this.dataChannel === channel) this.dataChannel = null;
     };
     channel.onmessage = ({ data }) => {
-      if (!isControls) return;
       try {
         const message = JSON.parse(data);
-        if (message?.type === "input") this.acceptInput(message.payload);
+        if (isControls) {
+          if (message?.type === "input") this.acceptInput(message.payload);
+        } else if (message?.type === "hand") {
+          this.acceptHandFrame(message.payload);
+        }
       } catch {
         // Ignore malformed peer messages; Socket.IO remains the fallback.
       }
