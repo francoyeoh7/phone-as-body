@@ -106,6 +106,25 @@ button {
   touch-action: none;
 }
 
+.play-surface::before {
+  position: absolute;
+  z-index: 3;
+  top: 18px;
+  left: 68px;
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(168, 170, 163, 0.55);
+  border-radius: 50%;
+  background: rgba(18, 21, 19, 0.75);
+  content: "";
+}
+
+.play-surface[data-hand="starting"]::before,
+.play-surface[data-hand="calibrating"]::before { border-color: #ce9c4c; }
+.play-surface[data-hand="tracked"]::before { border-color: #89b174; background: #89b174; }
+.play-surface[data-hand="lost"]::before,
+.play-surface[data-hand="fallback"]::before { border-color: #c25e54; }
+
 .play-surface > * {
   pointer-events: none;
 }

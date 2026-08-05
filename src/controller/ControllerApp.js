@@ -11,6 +11,7 @@ import {
 import { isRoomCode } from "../shared/protocol.js";
 import { BraceHaptics } from "./BraceHaptics.js";
 import { CameraMotionDetector } from "./CameraMotionDetector.js";
+import { MediaPipeHandTracker } from "./MediaPipeHandTracker.js";
 import { ControllerSocket } from "./ControllerSocket.js";
 import { FoundPhoneUI } from "./FoundPhoneUI.js";
 import { MotionController } from "./MotionController.js";
@@ -65,6 +66,7 @@ export class ControllerApp {
     this.motionEnabled = false;
     this.cameraEnabled = false;
     this.cameraMotion = null;
+    this.handTracker = null;
     this.connectionState = "connecting";
     this.hapticsActive = false;
     this.foreground = true;
@@ -204,6 +206,11 @@ export class ControllerApp {
       onPresence: (presence) => this.handleCameraPresence(presence),
       onState: (state) => this.handleCameraState(state),
     });
+    this.handTracker = new MediaPipeHandTracker({
+      getVideo: () => this.cameraMotion?.getVideoElement?.() ?? null,
+      onFrame: (frame) => this.socket?.sendHandFrame?.(frame),
+      onState: (state) => { if (this.playSurface) this.playSurface.dataset.hand = state; },
+    });
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
     this.root.querySelector("#recenter").addEventListener("click", () => {
@@ -301,6 +308,7 @@ export class ControllerApp {
     if (this.destroyed) return;
     if (generation !== this.lifecycleGeneration) {
       this.cameraMotion?.suspend?.();
+      this.handTracker?.suspend?.();
       this.permissionPanel.hidden = false;
       this.permissionTitle.textContent = "控制已暂停";
       this.permissionCopy.textContent = "返回页面后，请重新确认动作与后置摄像头权限。";
@@ -311,6 +319,7 @@ export class ControllerApp {
     this.cameraEnabled = Boolean(cameraResult?.cameraGranted);
     if (!motionGranted) {
       this.cameraMotion?.suspend?.();
+      this.handTracker?.suspend?.();
       this.enableMotion.disabled = false;
       return;
     }
@@ -322,6 +331,7 @@ export class ControllerApp {
     this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
     this.socket?.sendAction("resume");
     if (this.cameraEnabled) this.cameraMotion?.resume?.();
+    this.handTracker?.resume?.();
     this.calibrationTimer = window.setTimeout(() => {
       this.calibrationTimer = null;
       this.motion.reset();
@@ -350,6 +360,7 @@ export class ControllerApp {
     await this.motion.resume();
     if (!this.isLifecycleCurrent(generation)) return;
     this.cameraMotion?.resume?.();
+    this.handTracker?.resume?.();
     this.motion.reset();
     this.viewDelta = zeroViewDelta();
     this.sendInput();
@@ -427,6 +438,7 @@ export class ControllerApp {
     this.sendInput({ includeViewDelta: true, immediate: true });
     this.motion?.suspend();
     this.cameraMotion?.suspend();
+    this.handTracker?.suspend?.();
     this.haptics?.stop();
     this.foundPhoneUI?.setActive(false);
     this.socket?.sendAction("pause");
@@ -505,6 +517,7 @@ export class ControllerApp {
       this.sendInput();
       this.motion?.suspend();
       this.cameraMotion?.suspend();
+      this.handTracker?.suspend?.();
       this.haptics?.stop();
       this.foundPhoneUI?.setActive(false);
       this.socket?.sendAction("pause");
@@ -519,6 +532,7 @@ export class ControllerApp {
       if (!this.isLifecycleCurrent(generation)) return;
       this.motion.reset();
       this.cameraMotion?.resume?.();
+      this.handTracker?.resume?.();
       this.viewDelta = zeroViewDelta();
       this.socket?.clearPendingViewDelta?.();
       this.sendInput();
@@ -541,6 +555,11 @@ export class ControllerApp {
   }
 
   handleDesktopEvent(event) {
+    if (event.type === "hand-task") {
+      this.handTracker?.setTask?.(event);
+      if (this.playSurface) this.playSurface.dataset.hand = event.active ? "starting" : "off";
+      return;
+    }
     if (event.type === "target-focus") {
       this.cameraMotion?.setFocused(Boolean(event.id));
       return;
@@ -621,6 +640,7 @@ export class ControllerApp {
     this.joystick?.destroy();
     this.motion?.destroy();
     this.cameraMotion?.destroy();
+    this.handTracker?.destroy?.();
     this.foundPhoneUI?.destroy();
     this.diagnostics?.destroy();
     this.socket?.destroy();

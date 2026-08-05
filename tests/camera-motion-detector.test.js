@@ -163,6 +163,17 @@ describe("camera motion scoring", () => {
     expect(metrics.largestActiveRatio).toBeLessThan(0.004);
     expect(shouldTriggerMotion(metrics)).toBe(false);
   });
+
+  it("exposes the hidden rear video without creating another capture", async () => {
+    const capture = { video: { play: vi.fn() }, context: {} };
+    const getUserMedia = vi.fn(async () => streamWithTrack());
+    const detector = new CameraMotionDetector({ mediaDevices: { getUserMedia }, createCaptureElements: () => capture });
+
+    await detector.start();
+
+    expect(detector.getVideoElement()).toBe(capture.video);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+  });
 });
 
 describe("camera motion detector", () => {

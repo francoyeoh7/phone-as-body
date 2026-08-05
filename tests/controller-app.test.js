@@ -24,6 +24,7 @@ function createApp({ motionEnabled = true } = {}) {
   const app = Object.assign(Object.create(ControllerApp.prototype), {
     motion,
     cameraMotion,
+    handTracker: { setTask: vi.fn(), suspend: vi.fn(), resume: vi.fn(), destroy: vi.fn() },
     haptics: { start: vi.fn(), stop: vi.fn() },
     foundPhoneUI: { element: { hidden: true }, setActive: vi.fn(), destroy: vi.fn() },
     hapticsActive: true,
@@ -282,6 +283,19 @@ describe("controller app lifecycle", () => {
     app.handleDesktopEvent(feedback);
 
     expect(app.socket.markApplied).toHaveBeenCalledWith(feedback);
+  });
+
+  it("routes hand tasks and mirrors hand tracker lifecycle independently", async () => {
+    const { app } = createApp();
+
+    app.handleDesktopEvent({ type: "hand-task", active: true, context: "door-defense" });
+    await app.setPaused(true);
+    await app.setPaused(false);
+
+    expect(app.handTracker.setTask).toHaveBeenCalledWith({ type: "hand-task", active: true, context: "door-defense" });
+    expect(app.playSurface.dataset.hand).toBe("starting");
+    expect(app.handTracker.suspend).toHaveBeenCalledOnce();
+    expect(app.handTracker.resume).toHaveBeenCalledOnce();
   });
 
   it("focuses camera motion analysis only while a desktop target is selected", () => {

@@ -346,6 +346,10 @@ export class CameraMotionDetector {
     }
   }
 
+  getVideoElement() {
+    return this.capture?.video ?? null;
+  }
+
   async acquireCamera() {
     let acquiredStream = null;
     try {
