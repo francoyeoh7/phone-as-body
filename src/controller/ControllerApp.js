@@ -71,7 +71,6 @@ export class ControllerApp {
     this.hapticsActive = false;
     this.foreground = true;
     this.destroyed = false;
-    this.touchFallback = false;
     this.requiresContinue = false;
     this.bfcacheSuspended = false;
     this.lifecycleGeneration = 0;
@@ -283,10 +282,6 @@ export class ControllerApp {
       await this.continueAfterVisibility();
       return;
     }
-    if (this.touchFallback) {
-      this.continueWithTouchControls();
-      return;
-    }
     if (this.motionEnabled) {
       this.permissionPanel.hidden = true;
       this.socket?.sendAction("recenter");
@@ -320,7 +315,14 @@ export class ControllerApp {
     if (!motionGranted) {
       this.cameraMotion?.suspend?.();
       this.handTracker?.suspend?.();
+      this.motionEnabled = false;
+      this.hapticsActive = false;
+      this.permissionPanel.hidden = false;
+      this.permissionTitle.textContent = "必须启用陀螺仪";
+      this.permissionCopy.textContent = "请允许动作与方向访问后重新授权；未授权时无法进入游戏。";
+      this.enableMotion.textContent = "重新授权";
       this.enableMotion.disabled = false;
+      this.socket?.sendAction("pause");
       return;
     }
     if (!this.cameraEnabled) {
@@ -345,16 +347,6 @@ export class ControllerApp {
     }, 420);
   }
 
-  continueWithTouchControls() {
-    this.touchFallback = false;
-    this.permissionPanel.hidden = true;
-    this.enableMotion.textContent = "允许并开始";
-    this.motion.reset();
-    this.socket?.sendAction("recenter");
-    this.socket?.sendAction("resume");
-    this.socket?.sendAction("settings", { settings: this.settings });
-  }
-
   async continueAfterVisibility() {
     const generation = this.lifecycleGeneration;
     this.enableMotion.disabled = true;
@@ -372,7 +364,6 @@ export class ControllerApp {
     this.requiresContinue = false;
     this.foreground = true;
     this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
-    this.touchFallback = false;
     this.enableMotion.textContent = "允许并开始";
     this.permissionPanel.hidden = true;
   }
@@ -446,7 +437,6 @@ export class ControllerApp {
 
   showContinuePrompt() {
     this.requiresContinue = true;
-    this.touchFallback = false;
     this.permissionPanel.hidden = false;
     this.permissionTitle.textContent = "控制已暂停";
     this.permissionCopy.textContent = "继续前请重新确认手机方向。";

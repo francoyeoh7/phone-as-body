@@ -139,6 +139,23 @@ describe("controller app lifecycle", () => {
     expect(app.cameraEnabled).toBe(true);
   });
 
+  it("blocks gameplay and hand tracking until gyroscope permission is granted", async () => {
+    const { app, motion, cameraMotion, actions } = createApp({ motionEnabled: false });
+    motion.requestPermission.mockResolvedValue({ motionGranted: false });
+
+    await app.enableSensors();
+
+    expect(app.motionEnabled).toBe(false);
+    expect(app.permissionPanel.hidden).toBe(false);
+    expect(app.permissionTitle.textContent).toContain("陀螺仪");
+    expect(app.enableMotion.textContent).toBe("重新授权");
+    expect(cameraMotion.suspend).toHaveBeenCalledOnce();
+    expect(app.handTracker.suspend).toHaveBeenCalledOnce();
+    expect(app.handTracker.setTask).not.toHaveBeenCalled();
+    expect(actions).toHaveBeenCalledWith("pause");
+    expect(actions).not.toHaveBeenCalledWith("resume");
+  });
+
   it("keeps motion controls available when camera permission is denied", async () => {
     const { app, cameraMotion } = createApp({ motionEnabled: false });
     cameraMotion.start.mockResolvedValue({ cameraGranted: false });
