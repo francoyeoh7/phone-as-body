@@ -106,7 +106,7 @@ function digitCurl(worldLandmarks, chain) {
 function readHandedness(sample) {
   let category = sample?.handedness;
   if (Array.isArray(category)) category = category[0];
-  const label = normalizeHandedness(
+  const label = normalizeMediaPipeHandedness(
     typeof category === "object" && category !== null
       ? category.categoryName ?? category.displayName ?? category.label
       : category,
@@ -192,12 +192,18 @@ function assertFiniteDerivedFeatures(pose) {
   return pose;
 }
 
-export function normalizeHandedness(value, inputMirrored) {
+export function normalizeHandedness(value) {
+  const label = String(value ?? "").toLowerCase();
+  if (label !== "left" && label !== "right") return null;
+  return label;
+}
+
+export function normalizeMediaPipeHandedness(value, inputMirrored) {
   if (typeof inputMirrored !== "boolean") {
     throw new RangeError("inputMirrored must be boolean");
   }
-  const label = String(value ?? "").toLowerCase();
-  if (label !== "left" && label !== "right") return null;
+  const label = normalizeHandedness(value);
+  if (!label) return null;
   if (inputMirrored) return label;
   return label === "left" ? "right" : "left";
 }

@@ -5,6 +5,7 @@ import {
   createTrackedHandFrame,
   deriveHandFeatures,
   normalizeHandedness,
+  normalizeMediaPipeHandedness,
 } from "../src/shared/hand-pose.js";
 import {
   MEDIAPIPE_HAND_LANDMARKS,
@@ -37,15 +38,23 @@ describe("hand pose features", () => {
     });
   });
 
-  it("normalizes MediaPipe labels from an explicit input mirror convention", () => {
-    expect(normalizeHandedness("Left", false)).toBe("right");
-    expect(normalizeHandedness("RIGHT", false)).toBe("left");
-    expect(normalizeHandedness("Left", true)).toBe("left");
-    expect(normalizeHandedness("RIGHT", true)).toBe("right");
-    expect(normalizeHandedness("unknown", false)).toBeNull();
-    expect(normalizeHandedness(null, true)).toBeNull();
-    expect(() => normalizeHandedness("Left")).toThrow(/inputMirrored/);
-    expect(() => normalizeHandedness("Left", "false")).toThrow(/inputMirrored/);
+  it("preserves the original single-argument handedness primitive", () => {
+    expect(normalizeHandedness.length).toBe(1);
+    expect(normalizeHandedness("Left")).toBe("left");
+    expect(normalizeHandedness("RIGHT")).toBe("right");
+    expect(normalizeHandedness("unknown")).toBeNull();
+    expect(normalizeHandedness(null)).toBeNull();
+  });
+
+  it("normalizes raw MediaPipe labels through an explicit input mirror helper", () => {
+    expect(normalizeMediaPipeHandedness("Left", false)).toBe("right");
+    expect(normalizeMediaPipeHandedness("RIGHT", false)).toBe("left");
+    expect(normalizeMediaPipeHandedness("Left", true)).toBe("left");
+    expect(normalizeMediaPipeHandedness("RIGHT", true)).toBe("right");
+    expect(normalizeMediaPipeHandedness("unknown", false)).toBeNull();
+    expect(normalizeMediaPipeHandedness(null, true)).toBeNull();
+    expect(() => normalizeMediaPipeHandedness("Left")).toThrow(/inputMirrored/);
+    expect(() => normalizeMediaPipeHandedness("Left", "false")).toThrow(/inputMirrored/);
   });
 
   it("separates a naturally open hand from a fist", () => {
