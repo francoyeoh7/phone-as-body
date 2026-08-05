@@ -291,6 +291,18 @@ describe("desktop director routing", () => {
     expect(foundPhone.handlePresence).not.toHaveBeenCalled();
   });
 
+  it("routes explicit fallback hold only to the door task", () => {
+    const setFallbackHolding = vi.fn(() => true);
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      doorDefense: { setFallbackHolding },
+    });
+
+    app.handlePhoneAction({ action: "task-hold", context: "door-defense", active: true });
+    app.handlePhoneAction({ action: "task-hold", context: "found-phone", active: true });
+
+    expect(setFallbackHolding).toHaveBeenCalledExactlyOnceWith(true, { explicit: true });
+  });
+
   it("produces and closes the controller found-phone UI through held hand-task state", () => {
     const phone = { send: vi.fn() };
     const player = { beginCinematic: vi.fn(), endCinematic: vi.fn() };

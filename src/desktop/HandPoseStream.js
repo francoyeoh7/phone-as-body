@@ -167,6 +167,8 @@ export class HandPoseStream {
     if (!this.lastFrame) return null;
     const ageMs = Math.max(0, now - this.lastReceivedAt);
     const rawConfidence = {
+      modeEpoch: this.lastFrame.modeEpoch,
+      seq: this.lastFrame.seq,
       trackingConfidence: this.lastFrame.trackingConfidence,
       handConfidence: this.lastFrame.handConfidence,
     };

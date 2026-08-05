@@ -78,6 +78,7 @@ export class DoorDefenseDirector {
         : () => Boolean(reducedMotion);
     this.handTracking = handTracking;
     this.trackedBracing = false;
+    this.explicitFallback = false;
     this.legacyPresenceStarted = false;
 
     this.phase = PHASE.dormant;
@@ -248,6 +249,7 @@ export class DoorDefenseDirector {
     this.holdElapsed = 0;
     this.retryNeedsInactive = retryNeedsInactive;
     this.trackedBracing = false;
+    this.explicitFallback = false;
     this.legacyPresenceStarted = false;
     this.exitDoor.braceRig.visible = false;
     this.ui?.setDoorDefense?.(UI_STATE.calibrating);
@@ -261,8 +263,8 @@ export class DoorDefenseDirector {
     }
   }
 
-  handlePresence(event) {
-    if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) return false;
+  handlePresence(event, { explicit = false } = {}) {
+    if (this.handTracking && !explicit && !this.handTracking.usesFallback(DOOR_CONTEXT)) return false;
     if (
       this.destroyed
       || !this.cinematic
@@ -273,7 +275,7 @@ export class DoorDefenseDirector {
     if (event.active === true) {
       if (this.phase === PHASE.calibrating || this.phase === PHASE.awaiting) {
         if (this.retryNeedsInactive) return false;
-        this.beginBracing();
+        this.beginBracing({ fallback: explicit || this.handTracking?.usesFallback?.(DOOR_CONTEXT) });
         return true;
       }
       return this.phase === PHASE.bracing;
@@ -298,18 +300,19 @@ export class DoorDefenseDirector {
     return false;
   }
 
-  setFallbackHolding(active) {
-    if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) return false;
+  setFallbackHolding(active, { explicit = false } = {}) {
+    if (this.handTracking && !explicit && !this.handTracking.usesFallback(DOOR_CONTEXT)) return false;
     this.fallbackPresenceEvent.active = Boolean(active);
-    return this.handlePresence(this.fallbackPresenceEvent);
+    return this.handlePresence(this.fallbackPresenceEvent, { explicit });
   }
 
-  beginBracing() {
+  beginBracing({ fallback = false } = {}) {
     this.phase = PHASE.bracing;
     this.phaseElapsed = 0;
     this.holdElapsed = 0;
     this.trackedBracing = true;
-    this.exitDoor.braceRig.visible = Boolean(!this.handTracking || this.handTracking.hand?.fallback);
+    this.explicitFallback = Boolean(fallback);
+    this.exitDoor.braceRig.visible = Boolean(this.explicitFallback || !this.handTracking || this.handTracking.hand?.fallback);
     this.ui?.setDoorDefense?.({ visible: true, progress: 0, status: "bracing" });
     this.setHaptics(true);
     this.audio?.cue?.("brace-strain");
@@ -317,7 +320,7 @@ export class DoorDefenseDirector {
   }
 
   updateBracing(delta) {
-    if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) {
+    if (this.handTracking && !this.explicitFallback && !this.handTracking.usesFallback(DOOR_CONTEXT)) {
       const handState = this.handTracking.snapshot(DOOR_CONTEXT);
       if (handState?.phase === "unstable") {
         this.holdElapsed = Math.max(0, this.holdElapsed - delta * 0.65);

@@ -7,6 +7,7 @@ import {
 const SAMPLE_INTERVAL_MS = 1000 / 15;
 const LOST_AFTER_MS = 250;
 const STATUS_HEARTBEAT_MS = 500;
+const VIDEO_READY_TIMEOUT_MS = 3_000;
 
 const defaultScheduler = {
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -85,6 +86,7 @@ export class MediaPipeHandTracker {
     this.lastLostAt = -Infinity;
     this.previous = null;
     this.unavailableEpoch = null;
+    this.videoUnavailableSince = null;
     if (this.worker) this.bindWorker(this.worker);
   }
 
@@ -137,6 +139,7 @@ export class MediaPipeHandTracker {
     this.lastResultAt = this.scheduler.now();
     this.lastLostAt = -Infinity;
     this.unavailableEpoch = null;
+    this.videoUnavailableSince = null;
     if (!this.active) return;
     this.emitState("starting");
     if (frontFacing(this.getVideo())) return this.emitUnavailable("front-camera");
@@ -189,7 +192,17 @@ export class MediaPipeHandTracker {
     if (!this.active || this.suspended || this.destroyed || this.inferencePending) return;
     if (this.worker && this.workerReadyEpoch !== this.modeEpoch) return;
     const video = this.getVideo();
-    if (!video || frontFacing(video) || video.readyState < 2) { this.schedule(); return; }
+    if (frontFacing(video)) return this.emitUnavailable("front-camera");
+    if (!video || video.readyState < 2) {
+      const now = this.scheduler.now();
+      this.videoUnavailableSince ??= now;
+      if (now - this.videoUnavailableSince >= VIDEO_READY_TIMEOUT_MS) {
+        return this.emitUnavailable("video-not-ready");
+      }
+      this.schedule();
+      return;
+    }
+    this.videoUnavailableSince = null;
     const capturedAt = this.scheduler.now();
     const epoch = this.modeEpoch;
     this.inferencePending = true;
@@ -308,7 +321,7 @@ export class MediaPipeHandTracker {
 
   clearStatusTimer() { if (this.statusTimer != null) this.scheduler.clearTimeout(this.statusTimer); this.statusTimer = null; }
   clearTimers() { if (this.timer != null) this.scheduler.clearTimeout(this.timer); this.timer = null; this.clearStatusTimer(); }
-  suspend() { this.suspended = true; this.clearTimers(); }
-  resume() { this.suspended = false; if (this.active) this.schedule(0); }
+  suspend() { this.suspended = true; this.videoUnavailableSince = null; this.clearTimers(); }
+  resume() { this.suspended = false; this.videoUnavailableSince = null; if (this.active) this.schedule(0); }
   destroy() { this.destroyed = true; this.active = false; this.clearTimers(); this.closeLandmarker(); this.worker?.terminate?.(); this.worker = null; }
 }

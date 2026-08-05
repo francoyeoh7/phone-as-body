@@ -296,6 +296,32 @@ describe("door defense director", () => {
     });
   });
 
+  it("uses an explicit full-screen hold when camera hand tracking is unavailable", () => {
+    const handTracking = {
+      usesFallback: vi.fn(() => false),
+      snapshot: vi.fn(() => ({ phase: "tracking", calibrated: true, fresh: false })),
+      beginTask: vi.fn(() => true),
+      endTask: vi.fn(),
+      hand: { fallback: false },
+    };
+    const harness = createHarness({ handTracking });
+    harness.director.update(0.016);
+    harness.director.update(1.2);
+
+    expect(harness.director.setFallbackHolding(true, { explicit: true })).toBe(true);
+    harness.director.update(1);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      progress: 0.25,
+      status: "bracing",
+    }));
+
+    expect(harness.director.setFallbackHolding(false, { explicit: true })).toBe(true);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      progress: 0,
+      status: "failed",
+    }));
+  });
+
   it("reuses persistent hand calibration and advances only from a held brace", () => {
     let handState = { phase: "tracking", calibrated: true, fresh: true };
     const handTracking = {

@@ -156,6 +156,12 @@ export class DesktopApp {
     if (action === "gesture-presence") {
       return;
     }
+    if (action === "task-hold") {
+      if (payload.context === "door-defense") {
+        this.doorDefense?.setFallbackHolding?.(payload.active, { explicit: true });
+      }
+      return;
+    }
     if (action === "interact") this.player?.interact("touch");
     if (action === "flashlight" && this.experience) {
       this.experience.objects.flashlight.visible = !this.experience.objects.flashlight.visible;

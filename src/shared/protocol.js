@@ -16,6 +16,7 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "flashlight",
   "recenter",
   "gesture-presence",
+  "task-hold",
   "pause",
   "resume",
   "settings",
@@ -146,6 +147,9 @@ export function isControllerAction(value) {
     typeof value === "object" &&
     CONTROLLER_ACTIONS.includes(value.action) &&
     (value.sentAt === undefined || isFiniteNumber(value.sentAt)) &&
+    (value.action !== "task-hold" || (
+      value.context === "door-defense" && typeof value.active === "boolean"
+    )) &&
     (value.action !== "gesture-presence" || (
       typeof value.ready === "boolean" &&
       typeof value.active === "boolean" &&

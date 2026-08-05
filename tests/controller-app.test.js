@@ -156,6 +156,37 @@ describe("controller app lifecycle", () => {
     expect(actions).not.toHaveBeenCalledWith("resume");
   });
 
+  it("keeps the desktop paused when an unapproved gyroscope session reconnects", () => {
+    const { app, actions } = createApp({ motionEnabled: false });
+    app.connectionState = "disconnected";
+    app.hapticsActive = true;
+
+    app.updateConnection("joined");
+
+    expect(app.hapticsActive).toBe(false);
+    expect(actions).toHaveBeenCalledExactlyOnceWith("pause");
+  });
+
+  it("uses full-screen hold only as an explicit door fallback when hand tracking is unavailable", () => {
+    const { app, actions, motion } = createApp();
+    app.cameraEnabled = true;
+    app.handTaskContext = "door-defense";
+    app.handTrackingState = "fallback";
+
+    app.handleJoystickEngagement(true);
+    app.handleJoystickEngagement(false);
+
+    expect(actions).toHaveBeenNthCalledWith(1, "task-hold", {
+      context: "door-defense",
+      active: true,
+    });
+    expect(actions).toHaveBeenNthCalledWith(2, "task-hold", {
+      context: "door-defense",
+      active: false,
+    });
+    expect(motion.engage).not.toHaveBeenCalled();
+  });
+
   it("keeps motion controls available when camera permission is denied", async () => {
     const { app, cameraMotion } = createApp({ motionEnabled: false });
     cameraMotion.start.mockResolvedValue({ cameraGranted: false });

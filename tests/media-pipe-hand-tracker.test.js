@@ -71,6 +71,35 @@ describe("MediaPipeHandTracker", () => {
     expect(bitmap).not.toHaveBeenCalled();
   });
 
+  it("reports unavailable when the authorized rear video never becomes ready", async () => {
+    let now = 0;
+    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => now) };
+    const createFromOptions = vi.fn(async () => ({ detectForVideo: vi.fn(), close: vi.fn() }));
+    const { tracker, video, callbacks } = setup({
+      worker: false,
+      scheduler,
+      loadModule: vi.fn(async () => ({
+        FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
+        HandLandmarker: { createFromOptions },
+      })),
+    });
+    video.readyState = 0;
+    await tracker.setTask({ active: true });
+
+    tracker.sample();
+    now = 2_999;
+    tracker.sample();
+    expect(callbacks.onFrame).not.toHaveBeenCalledWith(expect.objectContaining({ state: "unavailable" }));
+
+    now = 3_000;
+    tracker.sample();
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({
+      state: "unavailable",
+      reason: "video-not-ready",
+    }));
+    expect(tracker.active).toBe(false);
+  });
+
   it("increments epoch and ignores stale worker results", async () => {
     const worker = { postMessage: vi.fn(), terminate: vi.fn(), addEventListener: vi.fn() };
     const { tracker } = setup({

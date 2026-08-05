@@ -5,6 +5,7 @@ export class HandGestureGate {
       grabEnter: 0.72,
       grabExit: 0.55,
       candidateMs: 220,
+      candidateFrames: 3,
       releaseMs: 180,
       cooldownMs: 500,
       ...options,
@@ -16,7 +17,9 @@ export class HandGestureGate {
   reset({ requireRelease = false } = {}) {
     this.armed = !requireRelease;
     this.candidateAt = null;
+    this.candidateFrames = 0;
     this.releaseAt = null;
+    this.lastFrameKey = null;
     return this;
   }
 
@@ -25,6 +28,9 @@ export class HandGestureGate {
       ? sample.trackingConfidence
       : sample?.pose?.trackingConfidence;
     const strength = sample?.pose?.grabStrength;
+    const modeEpoch = Number.isInteger(sample?.modeEpoch) ? sample.modeEpoch : sample?.pose?.modeEpoch;
+    const seq = Number.isInteger(sample?.seq) ? sample.seq : sample?.pose?.seq;
+    const frameKey = Number.isInteger(modeEpoch) && Number.isInteger(seq) ? `${modeEpoch}:${seq}` : null;
     const valid = sample?.state === "tracked"
       && sample?.fresh === true
       && Number.isFinite(confidence)
@@ -32,9 +38,12 @@ export class HandGestureGate {
       && Number.isFinite(strength);
     if (!valid) {
       this.candidateAt = null;
+      this.candidateFrames = 0;
       this.releaseAt = null;
       return false;
     }
+    if (!frameKey || frameKey === this.lastFrameKey) return false;
+    this.lastFrameKey = frameKey;
 
     if (!this.armed) {
       if (strength <= this.options.grabExit) {
@@ -51,14 +60,22 @@ export class HandGestureGate {
 
     if (strength < this.options.grabEnter) {
       this.candidateAt = null;
+      this.candidateFrames = 0;
       return false;
     }
-    this.candidateAt ??= now;
+    if (this.candidateAt === null) {
+      this.candidateAt = now;
+      this.candidateFrames = 1;
+    } else {
+      this.candidateFrames += 1;
+    }
     if (now - this.candidateAt < this.options.candidateMs
+      || this.candidateFrames < this.options.candidateFrames
       || now - this.lastTriggerAt < this.options.cooldownMs) return false;
 
     this.lastTriggerAt = now;
     this.candidateAt = null;
+    this.candidateFrames = 0;
     this.armed = false;
     this.releaseAt = null;
     return true;

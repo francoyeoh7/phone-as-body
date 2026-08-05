@@ -65,6 +65,9 @@ export class ControllerApp {
     this.paused = false;
     this.motionEnabled = false;
     this.cameraEnabled = false;
+    this.handTaskContext = null;
+    this.handTrackingState = "idle";
+    this.doorFallbackHolding = false;
     this.cameraMotion = null;
     this.handTracker = null;
     this.connectionState = "connecting";
@@ -183,6 +186,10 @@ export class ControllerApp {
   bindControls() {
     this.joystick = new VirtualJoystick(this.playSurface, {
       onChange: (move) => {
+        if (this.usesDoorFallbackHold()) {
+          this.move = { x: 0, y: 0 };
+          return;
+        }
         this.move = move;
         this.diagnostics.updateJoystick(move);
         this.sendInput({ immediate: true });
@@ -208,7 +215,10 @@ export class ControllerApp {
     this.handTracker = new MediaPipeHandTracker({
       getVideo: () => this.cameraMotion?.getVideoElement?.() ?? null,
       onFrame: (frame) => this.socket?.sendHandFrame?.(frame),
-      onState: (state) => { if (this.playSurface) this.playSurface.dataset.hand = state; },
+      onState: (state) => {
+        this.handTrackingState = state;
+        if (this.playSurface) this.playSurface.dataset.hand = state;
+      },
     });
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
@@ -269,6 +279,11 @@ export class ControllerApp {
       this.permissionTitle.textContent = "启用手机控制";
       this.permissionCopy.textContent = "需要动作与后置摄像头权限；画面仅在本机分析。";
       this.enableMotion.disabled = false;
+      if (!this.motionEnabled) {
+        this.hapticsActive = false;
+        this.permissionPanel.hidden = false;
+        this.socket?.sendAction("pause");
+      }
     } else if (["replaced", "session-ended", "invalid-room", "room-not-found"].includes(state)) {
       this.permissionPanel.hidden = false;
       this.permissionTitle.textContent = labels[state];
@@ -326,6 +341,7 @@ export class ControllerApp {
       return;
     }
     if (!this.cameraEnabled) {
+      this.handTrackingState = "fallback";
       this.permissionCopy.textContent = "后置摄像头未启用，仍可使用短触操作。";
     }
     this.motionEnabled = true;
@@ -466,6 +482,15 @@ export class ControllerApp {
   }
 
   handleJoystickEngagement(engaged) {
+    if (this.usesDoorFallbackHold()) {
+      this.viewEngaged = false;
+      this.doorFallbackHolding = Boolean(engaged);
+      this.socket?.sendAction("task-hold", {
+        context: "door-defense",
+        active: this.doorFallbackHolding,
+      });
+      return;
+    }
     this.viewDelta = zeroViewDelta();
     this.viewEngaged = Boolean(engaged);
     let active = false;
@@ -479,6 +504,11 @@ export class ControllerApp {
     this.diagnostics?.updateEngagement(Boolean(active));
     if (this.playSurface) this.playSurface.dataset.clutch = active ? "on" : "off";
     this.sendInput({ includeViewDelta: true, immediate: true });
+  }
+
+  usesDoorFallbackHold() {
+    return this.doorFallbackHolding || (this.handTaskContext === "door-defense"
+      && (!this.cameraEnabled || this.handTrackingState === "fallback"));
   }
 
   sendInput({ includeViewDelta = false, immediate = false } = {}) {
@@ -546,7 +576,12 @@ export class ControllerApp {
 
   handleDesktopEvent(event) {
     if (event.type === "hand-task") {
-      if (this.playSurface) this.playSurface.dataset.handTask = event.active ? event.context : "off";
+      if (!event.active && this.doorFallbackHolding) {
+        this.socket?.sendAction("task-hold", { context: "door-defense", active: false });
+        this.doorFallbackHolding = false;
+      }
+      this.handTaskContext = event.active ? event.context : null;
+      if (this.playSurface) this.playSurface.dataset.handTask = this.handTaskContext ?? "off";
       return;
     }
     if (event.type === "target-focus") {

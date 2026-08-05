@@ -14,6 +14,7 @@ describe("HandPoseStream", () => {
     expect(stream.accept(pose({ seq: 1, receivedAt: 10, capturedAt: 1_000_000 }))).toBe(true);
     expect(stream.accept(pose({ seq: 1, receivedAt: 11 }))).toBe(false);
     expect(stream.accept(pose({ seq: 2, receivedAt: 95, center: [1, 0, 0] }))).toBe(true);
+    expect(stream.sample(100)).toMatchObject({ modeEpoch: 0, seq: 2 });
     expect(stream.sample(100).pose.center[0]).toBeGreaterThan(0);
     const repeated = stream.sample(10_000);
     expect(repeated.pose.center[0]).toBe(stream.sample(10_001).pose.center[0]);

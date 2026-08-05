@@ -277,6 +277,25 @@ describe("controller snapshot flush", () => {
     vi.unstubAllGlobals();
   });
 
+  it("accepts only a bounded explicit door fallback hold", () => {
+    expect(protocol.isControllerAction({
+      action: "task-hold",
+      context: "door-defense",
+      active: true,
+      sentAt: 12,
+    })).toBe(true);
+    expect(protocol.isControllerAction({
+      action: "task-hold",
+      context: "found-phone",
+      active: true,
+    })).toBe(false);
+    expect(protocol.isControllerAction({
+      action: "task-hold",
+      context: "door-defense",
+      active: "yes",
+    })).toBe(false);
+  });
+
   it("routes labeled channels independently and keeps controls feedback on controls", () => {
     const socket = new ControllerSocket({ room: "617042" });
     const controls = { label: "controls", readyState: "open", send: vi.fn(), close: vi.fn() };
