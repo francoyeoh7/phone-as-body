@@ -33,6 +33,21 @@ describe("MediaPipeHandTracker", () => {
     expect(getUserMedia).not.toHaveBeenCalled();
   });
 
+  it("resumes with the same supplied camera video without another camera request", async () => {
+    const getUserMedia = vi.fn();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const { tracker, video } = setup({ workerFactory: () => worker, OffscreenCanvas: class {} });
+    await tracker.setTask({ active: true });
+    tracker.suspend();
+    tracker.resume();
+    worker.onmessage({ data: { type: "ready", modeEpoch: tracker.modeEpoch } });
+
+    expect(tracker.getVideo()).toBe(video);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(worker.postMessage).toHaveBeenCalledOnce();
+  });
+
   it("uses VIDEO mode, numHands 2, emits one frame and inputMirrored false", async () => {
     const createFromOptions = vi.fn(async (_fileset, options) => ({ detectForVideo: vi.fn(() => handResult()), close: vi.fn(), options }));
     const { tracker, callbacks } = setup({ worker: false, loadModule: vi.fn(async () => ({ FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) }, HandLandmarker: { createFromOptions } })) });
@@ -60,6 +75,44 @@ describe("MediaPipeHandTracker", () => {
     await tracker.setTask({ active: false });
     worker.onmessage?.({ data: { type: "result", modeEpoch: epoch, result: handResult(), capturedAt: 1 } });
     expect(worker.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "detect" }));
+  });
+
+  it("does not capture for a new epoch until that epoch reports worker ready", async () => {
+    const bitmap = { close: vi.fn() };
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const { tracker } = setup({ workerFactory: () => worker, createImageBitmap: vi.fn(async () => bitmap), OffscreenCanvas: class {} });
+    await tracker.setTask({ active: true });
+    worker.onmessage({ data: { type: "ready", modeEpoch: 1 } });
+    await tracker.sample();
+    await tracker.setTask({ active: true });
+    worker.onmessage({ data: { type: "result", modeEpoch: 1, result: { landmarks: [] }, capturedAt: 2 } });
+    await tracker.sample();
+
+    expect(worker.postMessage.mock.calls.map(([message]) => `${message.type}:${message.modeEpoch}`)).toEqual([
+      "init:1", "detect:1", "init:2",
+    ]);
+    worker.onmessage({ data: { type: "ready", modeEpoch: 2 } });
+    await tracker.sample();
+    expect(worker.postMessage.mock.calls.map(([message]) => `${message.type}:${message.modeEpoch}`)).toEqual([
+      "init:1", "detect:1", "init:2", "detect:2",
+    ]);
+  });
+
+  it("limits capture scheduling to 15Hz and drops a busy capture", async () => {
+    const pending = deferred();
+    const bitmap = { close: vi.fn() };
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const createImageBitmap = vi.fn(() => pending.promise);
+    const { tracker, scheduler } = setup({ workerFactory: () => worker, createImageBitmap, OffscreenCanvas: class {} });
+    await tracker.setTask({ active: true });
+    worker.onmessage({ data: { type: "ready", modeEpoch: 1 } });
+    const first = tracker.sample();
+    await tracker.sample();
+    expect(createImageBitmap).toHaveBeenCalledOnce();
+    pending.resolve(bitmap);
+    await first;
+    worker.onmessage({ data: { type: "result", modeEpoch: 1, result: { landmarks: [] }, capturedAt: 1 } });
+    expect(scheduler.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), expect.closeTo(1000 / 15, 5));
   });
 
   it("closes a bitmap when worker transfer throws", async () => {

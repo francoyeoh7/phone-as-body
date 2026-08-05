@@ -75,6 +75,7 @@ export class MediaPipeHandTracker {
     this.suspended = false;
     this.inferencePending = false;
     this.inferenceEpoch = null;
+    this.workerReadyEpoch = null;
     this.initializing = false;
     this.landmarker = null;
     this.timer = null;
@@ -126,6 +127,7 @@ export class MediaPipeHandTracker {
     const epoch = this.modeEpoch;
     this.clearTimers();
     this.closeLandmarker();
+    this.workerReadyEpoch = null;
     this.active = Boolean(task.active);
     this.previous = null;
     this.lastResultAt = this.scheduler.now();
@@ -175,11 +177,13 @@ export class MediaPipeHandTracker {
 
   schedule(delay = this.sampleIntervalMs) {
     if (!this.active || this.suspended || this.destroyed) return;
+    if (this.worker && this.workerReadyEpoch !== this.modeEpoch) return;
     this.timer = this.scheduler.setTimeout(() => { this.timer = null; this.sample(); }, delay);
   }
 
   async sample() {
     if (!this.active || this.suspended || this.destroyed || this.inferencePending) return;
+    if (this.worker && this.workerReadyEpoch !== this.modeEpoch) return;
     const video = this.getVideo();
     if (!video || frontFacing(video) || video.readyState < 2) { this.schedule(); return; }
     const capturedAt = this.scheduler.now();
@@ -212,6 +216,7 @@ export class MediaPipeHandTracker {
     if (!data) return;
     if (data.type === "ready") {
       if (this.isEpochActive(data.modeEpoch) && !this.suspended) {
+        this.workerReadyEpoch = data.modeEpoch;
         this.emitState("calibrating");
         this.schedule(0);
       }
