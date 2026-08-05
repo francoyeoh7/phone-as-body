@@ -94,7 +94,11 @@ export class MediaPipeHandTracker {
   }
 
   canUseWorker() {
-    return Boolean(this.workerFactory || (this.Worker && this.bitmapFactory && this.OffscreenCanvas));
+    return Boolean(
+      this.bitmapFactory
+      && this.OffscreenCanvas
+      && (this.worker || this.workerFactory || this.Worker),
+    );
   }
 
   createWorker() {

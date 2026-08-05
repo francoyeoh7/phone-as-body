@@ -7,6 +7,8 @@ export function createWorkerHandler({
   postMessage,
 } = {}) {
   let landmarker = null;
+  let landmarkerEpoch = null;
+  let latestInitToken = 0;
   let unavailableEpoch = null;
   const createTask = async (delegate, canvas) => {
     const fileset = await FilesetResolverImpl.forVisionTasks("/assets/mediapipe/wasm");
@@ -26,26 +28,43 @@ export function createWorkerHandler({
 
   return async ({ data }) => {
     if (data?.type === "init") {
+      const initToken = ++latestInitToken;
+      const modeEpoch = data.modeEpoch;
+      landmarker?.close?.();
+      landmarker = null;
+      landmarkerEpoch = null;
+      const isCurrentInit = () => initToken === latestInitToken;
+      let created = null;
       try {
-        landmarker?.close?.();
-        landmarker = await createTask("GPU", data.canvas);
+        created = await createTask("GPU", data.canvas);
       } catch {
+        if (!isCurrentInit()) return;
         try {
-          landmarker?.close?.();
-          landmarker = await createTask(null, new OffscreenCanvasCtor(1, 1));
+          created = await createTask(null, new OffscreenCanvasCtor(1, 1));
         } catch (error) {
-          landmarker = null;
-          if (unavailableEpoch !== data.modeEpoch) {
-            unavailableEpoch = data.modeEpoch;
-            postMessage?.({ type: "unavailable", modeEpoch: data.modeEpoch, reason: String(error?.message ?? "init-failed") });
+          if (!isCurrentInit()) return;
+          if (unavailableEpoch !== modeEpoch) {
+            unavailableEpoch = modeEpoch;
+            postMessage?.({ type: "unavailable", modeEpoch, reason: String(error?.message ?? "init-failed") });
           }
+          return;
         }
       }
-      if (landmarker) postMessage?.({ type: "ready", modeEpoch: data.modeEpoch });
+      if (!isCurrentInit()) {
+        created?.close?.();
+        return;
+      }
+      landmarker = created;
+      landmarkerEpoch = modeEpoch;
+      postMessage?.({ type: "ready", modeEpoch });
       return;
     }
-    if (data?.type !== "detect" || !landmarker) return;
+    if (data?.type !== "detect") return;
     const bitmap = data.bitmap;
+    if (!landmarker || data.modeEpoch !== landmarkerEpoch) {
+      bitmap?.close?.();
+      return;
+    }
     try {
       const result = landmarker.detectForVideo(bitmap, data.capturedAt);
       postMessage?.({

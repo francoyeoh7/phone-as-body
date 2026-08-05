@@ -37,7 +37,11 @@ describe("MediaPipeHandTracker", () => {
     const getUserMedia = vi.fn();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const worker = { postMessage: vi.fn(), terminate: vi.fn() };
-    const { tracker, video } = setup({ workerFactory: () => worker, OffscreenCanvas: class {} });
+    const { tracker, video } = setup({
+      workerFactory: () => worker,
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
+      OffscreenCanvas: class {},
+    });
     await tracker.setTask({ active: true });
     tracker.suspend();
     tracker.resume();
@@ -69,7 +73,11 @@ describe("MediaPipeHandTracker", () => {
 
   it("increments epoch and ignores stale worker results", async () => {
     const worker = { postMessage: vi.fn(), terminate: vi.fn(), addEventListener: vi.fn() };
-    const { tracker } = setup({ workerFactory: () => worker });
+    const { tracker } = setup({
+      workerFactory: () => worker,
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
+      OffscreenCanvas: class {},
+    });
     await tracker.setTask({ active: true });
     const epoch = tracker.modeEpoch;
     await tracker.setTask({ active: false });
@@ -209,7 +217,11 @@ describe("MediaPipeHandTracker", () => {
 
   it("stops after an explicit worker inference error instead of rescheduling at 15Hz", async () => {
     const worker = { postMessage: vi.fn(), terminate: vi.fn() };
-    const { tracker, scheduler, callbacks } = setup({ workerFactory: () => worker, OffscreenCanvas: class {} });
+    const { tracker, scheduler, callbacks } = setup({
+      workerFactory: () => worker,
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
+      OffscreenCanvas: class {},
+    });
     await tracker.setTask({ active: true });
     worker.onmessage({ data: { type: "error", modeEpoch: tracker.modeEpoch, reason: "detect" } });
 
@@ -230,5 +242,26 @@ describe("MediaPipeHandTracker", () => {
     tracker.handleResult({ result, capturedAt: 1 });
 
     expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "left" }));
+  });
+
+  it("uses the main-thread fallback when worker construction lacks OffscreenCanvas", async () => {
+    const detectForVideo = vi.fn(() => handResult());
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const { tracker, callbacks } = setup({
+      workerFactory: () => worker,
+      OffscreenCanvas: undefined,
+      createImageBitmap: null,
+      loadModule: vi.fn(async () => ({
+        FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
+        HandLandmarker: { createFromOptions: vi.fn(async () => ({ detectForVideo, close: vi.fn() })) },
+      })),
+    });
+
+    await tracker.setTask({ active: true });
+    tracker.sample();
+
+    expect(worker.postMessage).not.toHaveBeenCalled();
+    expect(detectForVideo).toHaveBeenCalledOnce();
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "tracked" }));
   });
 });
