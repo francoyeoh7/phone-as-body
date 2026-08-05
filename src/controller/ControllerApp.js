@@ -330,7 +330,10 @@ export class ControllerApp {
     this.foreground = true;
     this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
     this.socket?.sendAction("resume");
-    if (this.cameraEnabled) this.cameraMotion?.resume?.();
+    if (this.cameraEnabled) {
+      this.cameraMotion?.resume?.();
+      Promise.resolve(this.handTracker?.setTask?.({ active: true })).catch(() => {});
+    }
     this.handTracker?.resume?.();
     this.calibrationTimer = window.setTimeout(() => {
       this.calibrationTimer = null;
@@ -409,8 +412,7 @@ export class ControllerApp {
   }
 
   handleCameraMotion() {
-    pulse([10, 24, 10]);
-    this.socket?.sendAction("interact");
+    // Pixel motion is diagnostic only. Semantic interactions come from hand poses or touch.
   }
 
   handleCameraPresence({ ready, active, context }) {
@@ -556,8 +558,7 @@ export class ControllerApp {
 
   handleDesktopEvent(event) {
     if (event.type === "hand-task") {
-      this.handTracker?.setTask?.(event);
-      if (this.playSurface) this.playSurface.dataset.hand = event.active ? "starting" : "off";
+      if (this.playSurface) this.playSurface.dataset.handTask = event.active ? event.context : "off";
       return;
     }
     if (event.type === "target-focus") {
