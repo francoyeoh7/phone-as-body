@@ -161,6 +161,16 @@ button {
   transform-origin: left center;
 }
 
+.door-defense[data-state="unstable"] .door-defense-track > span {
+  background: #c96d58;
+  animation: door-defense-unstable-pulse 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes door-defense-unstable-pulse {
+  from { opacity: 0.48; }
+  to { opacity: 1; }
+}
+
 .reticle {
   position: fixed;
   z-index: 4;

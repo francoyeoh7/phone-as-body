@@ -58,8 +58,7 @@ export class PhoneSession extends EventTarget {
   acceptHandFrame(frame) {
     if (!isHandFrame(frame)) return false;
     if (frame.modeEpoch < this.handEpoch
-      || (frame.modeEpoch === this.handEpoch && frame.seq <= this.handSeq)
-      || (frame.modeEpoch > this.handEpoch && frame.seq <= this.handSeq)) return false;
+      || (frame.modeEpoch === this.handEpoch && frame.seq <= this.handSeq)) return false;
     this.handEpoch = frame.modeEpoch;
     this.handSeq = frame.seq;
     this.dispatchEvent(new CustomEvent("hand", {

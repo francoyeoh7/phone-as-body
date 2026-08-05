@@ -60,6 +60,7 @@ export class DoorDefenseDirector {
     onThreatStart,
     reducedMotion = false,
     isReducedMotion,
+    handTracking = null,
   }) {
     this.experience = experience;
     this.player = player;
@@ -74,6 +75,9 @@ export class DoorDefenseDirector {
       : typeof reducedMotion === "function"
         ? reducedMotion
         : () => Boolean(reducedMotion);
+    this.handTracking = handTracking;
+    this.trackedBracing = false;
+    this.legacyPresenceStarted = false;
 
     this.phase = PHASE.dormant;
     this.phaseElapsed = 0;
@@ -114,6 +118,11 @@ export class DoorDefenseDirector {
   update(delta) {
     if (this.destroyed || this.phase === PHASE.complete) return;
     const seconds = Number.isFinite(delta) ? Math.max(0, delta) : 0;
+    if (this.handTracking?.usesFallback?.(DOOR_CONTEXT) && !this.legacyPresenceStarted
+      && [PHASE.calibrating, PHASE.awaiting, PHASE.bracing].includes(this.phase)) {
+      this.legacyPresenceStarted = true;
+      this.sendControllerEvent(PRESENCE_MODE_EVENT);
+    }
 
     if (this.phase === PHASE.dormant) {
       const withinTrigger = this.isWithinTriggerRange();
@@ -131,11 +140,22 @@ export class DoorDefenseDirector {
     if (this.phase === PHASE.intro) {
       this.updateIntro(seconds);
     } else if (this.phase === PHASE.calibrating) {
+      if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) {
+        const handState = this.handTracking.snapshot(DOOR_CONTEXT);
+        if (handState?.phase === "held") this.beginBracing();
+        else if (handState?.calibrated) {
+          this.phase = PHASE.awaiting;
+          this.phaseElapsed = 0;
+          this.ui?.setDoorDefense?.(UI_STATE.awaiting);
+        }
+      }
       this.phaseElapsed += seconds;
       this.applyDoorAnimation();
       this.updateCamera(1, this.doorImpact());
       if (this.phaseElapsed >= CALIBRATION_TIMEOUT_SECONDS) this.abort();
     } else if (this.phase === PHASE.awaiting) {
+      if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)
+        && this.handTracking.snapshot(DOOR_CONTEXT)?.phase === "held") this.beginBracing();
       this.phaseElapsed += seconds;
       this.applyDoorAnimation();
       this.updateCamera(1, this.doorImpact());
@@ -207,16 +227,23 @@ export class DoorDefenseDirector {
   }
 
   startPresenceAttempt(retryNeedsInactive = false) {
+    this.handTracking?.endTask?.(DOOR_CONTEXT);
     this.phase = PHASE.calibrating;
     this.phaseElapsed = 0;
     this.holdElapsed = 0;
     this.retryNeedsInactive = retryNeedsInactive;
+    this.trackedBracing = false;
+    this.legacyPresenceStarted = false;
     this.exitDoor.braceRig.visible = false;
     this.ui?.setDoorDefense?.(UI_STATE.calibrating);
-    this.sendControllerEvent(PRESENCE_MODE_EVENT);
+    if (!this.handTracking?.beginTask?.({ context: DOOR_CONTEXT, requiredAction: "brace" }) || this.handTracking.usesFallback(DOOR_CONTEXT)) {
+      this.legacyPresenceStarted = true;
+      this.sendControllerEvent(PRESENCE_MODE_EVENT);
+    }
   }
 
   handlePresence(event) {
+    if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) return false;
     if (
       this.destroyed
       || !this.cinematic
@@ -253,6 +280,7 @@ export class DoorDefenseDirector {
   }
 
   setFallbackHolding(active) {
+    if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) return false;
     this.fallbackPresenceEvent.active = Boolean(active);
     return this.handlePresence(this.fallbackPresenceEvent);
   }
@@ -261,7 +289,8 @@ export class DoorDefenseDirector {
     this.phase = PHASE.bracing;
     this.phaseElapsed = 0;
     this.holdElapsed = 0;
-    this.exitDoor.braceRig.visible = true;
+    this.trackedBracing = true;
+    this.exitDoor.braceRig.visible = Boolean(!this.handTracking || this.handTracking.hand?.fallback);
     this.ui?.setDoorDefense?.({ visible: true, progress: 0, status: "bracing" });
     this.setHaptics(true);
     this.audio?.cue?.("brace-strain");
@@ -269,6 +298,25 @@ export class DoorDefenseDirector {
   }
 
   updateBracing(delta) {
+    if (this.handTracking && !this.handTracking.usesFallback(DOOR_CONTEXT)) {
+      const handState = this.handTracking.snapshot(DOOR_CONTEXT);
+      if (handState?.phase === "unstable") {
+        this.holdElapsed = Math.max(0, this.holdElapsed - delta * 0.65);
+        this.setHaptics(false);
+        this.ui?.setDoorDefense?.({ visible: true, progress: this.holdElapsed / HOLD_SECONDS, status: "unstable" });
+        if (this.holdElapsed <= 0) this.startPresenceAttempt();
+        this.applyDoorAnimation();
+        this.updateCamera(1, this.doorImpact());
+        return;
+      }
+      if (handState?.phase !== "held") {
+        this.ui?.setDoorDefense?.({ visible: true, progress: this.holdElapsed / HOLD_SECONDS, status: "awaiting" });
+        this.applyDoorAnimation();
+        this.updateCamera(1, this.doorImpact());
+        return;
+      }
+      this.setHaptics(true);
+    }
     const remaining = HOLD_SECONDS - this.holdElapsed;
     const consumed = Math.min(delta, remaining);
     this.phaseElapsed += consumed;
@@ -350,6 +398,7 @@ export class DoorDefenseDirector {
     this.setSecuredVisuals();
     this.player.restorePose(pose);
     this.player.endCinematic();
+    this.handTracking?.endTask?.(DOOR_CONTEXT);
     this.savedPose = null;
     this.cinematic = false;
     this.phase = PHASE.complete;
@@ -465,6 +514,7 @@ export class DoorDefenseDirector {
       this.player.endCinematic();
     }
     this.savedPose = null;
+    this.handTracking?.endTask?.(DOOR_CONTEXT);
     this.cinematic = false;
     if (wasCinematic) this.acquisitionBlocked = true;
     this.phase = PHASE.dormant;

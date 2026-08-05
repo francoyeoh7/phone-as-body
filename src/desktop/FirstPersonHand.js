@@ -130,7 +130,7 @@ export class FirstPersonHand {
     this.root = new THREE.Group();
     this.root.name = "first-person-hand";
     this.root.visible = false;
-    this.camera?.add(this.root);
+    if (typeof this.camera?.add === "function") this.camera.add(this.root);
     this.models = {};
     this.boneSets = {};
     this.materialRoots = {};
@@ -253,7 +253,7 @@ export class FirstPersonHand {
   setFallbackPose(name = "open") { this.fallbackPose = name; return this; }
 
   destroy() {
-    this.camera?.remove(this.root);
+    if (typeof this.camera?.remove === "function") this.camera.remove(this.root);
     for (const model of Object.values(this.models)) disposeResources(model);
     this.root.clear();
     this.models = {};

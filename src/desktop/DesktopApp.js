@@ -4,6 +4,7 @@ import { HorrorDirector } from "./HorrorDirector.js";
 import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
+import { HandTrackingDirector } from "./HandTrackingDirector.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { createDesktopUI } from "./ui.js";
@@ -27,6 +28,7 @@ export class DesktopApp {
     this.foundPhone = null;
     this.doorDefense = null;
     this.shadowQuest = null;
+    this.handTracking = null;
     this.fallbackHolding = false;
     this.fallbackKeyDown = false;
     this.destroyed = false;
@@ -47,6 +49,7 @@ export class DesktopApp {
     this.handlePhoneRoom = this.handlePhoneRoom.bind(this);
     this.handlePhonePeer = this.handlePhonePeer.bind(this);
     this.handlePhoneActionEvent = this.handlePhoneActionEvent.bind(this);
+    this.handlePhoneHand = this.handlePhoneHand.bind(this);
   }
 
   mount() {
@@ -55,6 +58,7 @@ export class DesktopApp {
     this.phone.addEventListener("room", this.handlePhoneRoom);
     this.phone.addEventListener("peer", this.handlePhonePeer);
     this.phone.addEventListener("action", this.handlePhoneActionEvent);
+    this.phone.addEventListener("hand", this.handlePhoneHand);
     this.phone.start();
 
     this.ui.elements.startButton.addEventListener("click", this.handleStartClick);
@@ -80,6 +84,8 @@ export class DesktopApp {
         return;
       }
       this.experience = experience;
+      this.handTracking = new HandTrackingDirector({ camera: this.experience.camera, sendControllerEvent: (event) => this.phone?.send(event) });
+      await this.handTracking.load();
       this.player = new PlayerController({
         ...this.experience,
         onInteract: (id) => this.handleInteraction(id),
@@ -98,6 +104,7 @@ export class DesktopApp {
         player: this.player,
         audio: this.audio,
         sendControllerEvent: (event) => this.phone?.send(event),
+        handTracking: this.handTracking,
       });
       this.doorDefense = new DoorDefenseDirector({
         experience: this.experience,
@@ -106,6 +113,7 @@ export class DesktopApp {
         ui: this.ui,
         audio: this.audio,
         sendControllerEvent: (event) => this.phone?.send(event),
+        handTracking: this.handTracking,
         onThreatStart: () => this.director?.stopPursuit(),
         isReducedMotion: () => Boolean(
           this.director?.settings?.reducedMotion
@@ -206,6 +214,11 @@ export class DesktopApp {
     this.handlePhoneAction(detail);
   }
 
+  handlePhoneHand({ detail }) {
+    if (this.destroyed) return;
+    this.handTracking?.acceptFrame(detail);
+  }
+
   handlePeer(connected) {
     if (this.destroyed) return;
     if (connected) {
@@ -252,11 +265,13 @@ export class DesktopApp {
       }
     };
     if (paused) {
+      runPauseStep(() => this.handTracking?.setPaused(true));
       runPauseStep(() => this.releaseFallbackHold());
       runPauseStep(() => this.foundPhone?.release?.());
       runPauseStep(() => this.doorDefense?.abort?.());
       runPauseStep(() => this.shadowQuest?.abort?.());
     }
+    if (!paused) runPauseStep(() => this.handTracking?.setPaused(false));
     runPauseStep(() => this.player?.setPaused(paused));
     runPauseStep(() => this.audio.setPaused(paused));
     runPauseStep(() => this.ui.showPause(showOverlay && paused));
@@ -273,6 +288,7 @@ export class DesktopApp {
       const phoneInput = this.phone.currentInput();
       this.player.setControllerInput(phoneInput, this.phone.connected);
       this.player.update(delta);
+      this.handTracking?.update(delta);
       this.sendControlFeedback(phoneInput);
       this.experience.world.timestep = delta;
       this.experience.world.step();
@@ -385,11 +401,13 @@ export class DesktopApp {
     };
     runCleanup(() => this.foundPhone?.destroy());
     runCleanup(() => this.doorDefense?.destroy());
+    runCleanup(() => this.handTracking?.destroy());
     runCleanup(() => this.shadowQuest?.destroy());
     runCleanup(() => this.player?.destroy());
     runCleanup(() => this.experience?.dispose());
     this.foundPhone = null;
     this.doorDefense = null;
+    this.handTracking = null;
     this.shadowQuest = null;
     this.director = null;
     this.player = null;
@@ -421,6 +439,7 @@ export class DesktopApp {
     runCleanup(() => phone?.removeEventListener?.("room", this.handlePhoneRoom));
     runCleanup(() => phone?.removeEventListener?.("peer", this.handlePhonePeer));
     runCleanup(() => phone?.removeEventListener?.("action", this.handlePhoneActionEvent));
+    runCleanup(() => phone?.removeEventListener?.("hand", this.handlePhoneHand));
     runCleanup(() => this.disposeRuntime());
     runCleanup(() => this.audio.dispose());
     runCleanup(() => phone?.destroy());

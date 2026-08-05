@@ -7,6 +7,7 @@ const DOOR_DEFENSE_STATUS = Object.freeze({
   calibrating: "正在校准",
   awaiting: "抬起手机，抵住门",
   bracing: "坚持抵住门",
+  unstable: "追踪不稳定，保持抵住门",
   failed: "没抵住，再来",
   secured: "门已锁住",
 });
@@ -123,6 +124,8 @@ export function createDesktopUI(root) {
         ? Math.min(1, Math.max(0, progress))
         : 0;
       elements.doorDefense.hidden = !visible;
+      elements.doorDefense.dataset.state = status;
+      elements.doorDefenseTrack.dataset.state = status;
       elements.doorDefenseTrack.setAttribute("aria-valuenow", String(Math.round(normalizedProgress * 100)));
       elements.doorDefenseFill.style.transform = `scaleX(${normalizedProgress})`;
       elements.doorDefenseStatus.textContent = DOOR_DEFENSE_STATUS[status] ?? DOOR_DEFENSE_STATUS.dormant;
