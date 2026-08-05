@@ -9,6 +9,7 @@ function createHarness({
   storyState = "reach-door",
   distance = 1.4,
   reducedMotion = false,
+  handTracking = null,
 } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.copy(TRIGGER).add(new THREE.Vector3(0, 0, distance));
@@ -67,6 +68,7 @@ function createHarness({
     sendControllerEvent,
     onThreatStart,
     reducedMotion,
+    handTracking,
   });
 
   return {
@@ -236,6 +238,38 @@ describe("door defense director", () => {
     });
     expect(harness.exitDoor.braceRig.visible).toBe(false);
     expect(harness.sendControllerEvent).toHaveBeenLastCalledWith({
+      type: "haptics",
+      active: false,
+      pattern: "brace",
+    });
+  });
+
+  it("pauses progress and haptics during the held-state loss grace", () => {
+    const handState = { phase: "held", fresh: true };
+    const handTracking = {
+      usesFallback: vi.fn(() => false),
+      snapshot: vi.fn(() => ({ ...handState })),
+      beginTask: vi.fn(() => true),
+      endTask: vi.fn(),
+    };
+    const harness = createHarness({ handTracking });
+    harness.director.beginBracing();
+
+    harness.director.update(1);
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      progress: 0.25,
+      status: "bracing",
+    }));
+    harness.sendControllerEvent.mockClear();
+
+    handState.fresh = false;
+    harness.director.update(0.5);
+
+    expect(harness.ui.setDoorDefense).toHaveBeenLastCalledWith(expect.objectContaining({
+      progress: 0.25,
+      status: "unstable",
+    }));
+    expect(harness.sendControllerEvent).toHaveBeenCalledExactlyOnceWith({
       type: "haptics",
       active: false,
       pattern: "brace",

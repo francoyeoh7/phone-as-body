@@ -309,8 +309,22 @@ export class DoorDefenseDirector {
         this.updateCamera(1, this.doorImpact());
         return;
       }
-      if (handState?.phase !== "held") {
-        this.ui?.setDoorDefense?.({ visible: true, progress: this.holdElapsed / HOLD_SECONDS, status: "awaiting" });
+      const sampleState = handState?.sample?.state;
+      const sampleIsUnstable = sampleState === "lost"
+        || sampleState === "low-confidence"
+        || sampleState === "unavailable"
+        || handState?.sample?.fresh === false;
+      const heldObservationIsFresh = handState?.phase === "held"
+        && handState.fresh !== false
+        && !sampleIsUnstable
+        && handState.grace !== true;
+      if (!heldObservationIsFresh) {
+        this.setHaptics(false);
+        this.ui?.setDoorDefense?.({
+          visible: true,
+          progress: this.holdElapsed / HOLD_SECONDS,
+          status: handState?.phase === "held" ? "unstable" : "awaiting",
+        });
         this.applyDoorAnimation();
         this.updateCamera(1, this.doorImpact());
         return;

@@ -15,6 +15,7 @@ export class HandTrackingDirector {
     this.startedAt = 0;
     this.lastAcceptedAt = null;
     this.silenceElapsed = 0;
+    this.lastSample = null;
     this.fallback = false;
     this.destroyed = false;
     this.paused = false;
@@ -27,6 +28,7 @@ export class HandTrackingDirector {
     this.startedAt = this.now();
     this.lastAcceptedAt = null;
     this.silenceElapsed = 0;
+    this.lastSample = null;
     this.fallback = Boolean(this.hand?.fallback || this.hand?.loaded === false && this.hand?.error);
     this.stream.reset();
     this.machine.begin({ context, requiredAction, now: this.startedAt });
@@ -43,6 +45,7 @@ export class HandTrackingDirector {
     this.fallback = false;
     this.lastAcceptedAt = null;
     this.silenceElapsed = 0;
+    this.lastSample = null;
     this.stream.reset();
     this.machine.reset();
     this.hand?.setVisible?.(false);
@@ -67,13 +70,19 @@ export class HandTrackingDirector {
     const now = this.now();
     const seconds = Number.isFinite(delta) ? Math.max(0, delta) : 0;
     this.silenceElapsed += seconds * 1000;
+    const silenceSinceAccepted = this.lastAcceptedAt === null
+      ? now - this.startedAt
+      : now - this.lastAcceptedAt;
     if (!this.fallback && (this.hand?.fallback
-      || (this.lastAcceptedAt === null && (this.silenceElapsed >= NO_FRAME_FALLBACK_MS || now - this.startedAt >= NO_FRAME_FALLBACK_MS)))) {
+      || this.silenceElapsed >= NO_FRAME_FALLBACK_MS
+      || silenceSinceAccepted >= NO_FRAME_FALLBACK_MS)) {
       this.fallback = true;
+      this.lastSample = null;
       this.hand?.setVisible?.(false);
     }
     if (this.fallback) return this.snapshot(this.owner);
     const sample = this.stream.sample(now);
+    this.lastSample = sample;
     if (sample?.state === "unavailable") {
       this.fallback = true;
       this.hand?.setVisible?.(false);
@@ -81,12 +90,20 @@ export class HandTrackingDirector {
     }
     const state = this.machine.update(sample ?? { state: "lost", fresh: false }, now);
     if (sample?.pose) this.hand?.applyPose?.({ ...sample.pose, state: sample.state, opacity: sample.opacity }, delta);
-    return { ...state, sample };
+    return { ...state, sample, fresh: sample?.fresh === true };
   }
 
   snapshot(context) {
     if (!this.owner || (context && context !== this.owner)) return null;
-    return { ...this.machine.snapshot(), context: this.owner, fallback: this.fallback, unavailable: this.fallback };
+    const sample = this.lastSample;
+    return {
+      ...this.machine.snapshot(),
+      context: this.owner,
+      fallback: this.fallback,
+      unavailable: this.fallback,
+      sample,
+      fresh: sample?.fresh === true,
+    };
   }
 
   usesFallback(context) {

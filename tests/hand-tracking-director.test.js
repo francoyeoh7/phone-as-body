@@ -48,6 +48,43 @@ describe("HandTrackingDirector", () => {
     expect(director.usesFallback("door-defense")).toBe(true);
   });
 
+  it("enters fallback after the stream goes silent following an accepted frame", () => {
+    let now = 0;
+    const director = new HandTrackingDirector({
+      hand: { fallback: false, setContext() {}, setVisible() {}, applyPose() {}, destroy() {} },
+      now: () => now,
+      sendControllerEvent: vi.fn(),
+    });
+    director.beginTask({ context: "door-defense", requiredAction: "brace" });
+    expect(director.acceptFrame(frame({ receivedAt: 0 }))).toBe(true);
+
+    now = 1499;
+    director.update(1.499);
+    expect(director.usesFallback("door-defense")).toBe(false);
+
+    now = 1500;
+    director.update(0.001);
+    expect(director.usesFallback("door-defense")).toBe(true);
+  });
+
+  it("exposes whether the latest sampled held observation is fresh", () => {
+    let now = 0;
+    const director = new HandTrackingDirector({
+      hand: { fallback: false, setContext() {}, setVisible() {}, applyPose() {}, destroy() {} },
+      now: () => now,
+      sendControllerEvent: vi.fn(),
+    });
+    director.beginTask({ context: "door-defense", requiredAction: "brace" });
+    expect(director.acceptFrame(frame({ seq: 0, receivedAt: 0 }))).toBe(true);
+    director.update(0);
+    expect(director.snapshot("door-defense").fresh).toBe(true);
+
+    now = 1;
+    expect(director.acceptFrame(frame({ seq: 1, receivedAt: 1, trackingConfidence: 0.4 }))).toBe(true);
+    director.update(0);
+    expect(director.snapshot("door-defense").fresh).toBe(false);
+  });
+
   it("accepts sequence zero when the handset starts a newer mode epoch", () => {
     const session = new PhoneSession();
     const hand = vi.fn();

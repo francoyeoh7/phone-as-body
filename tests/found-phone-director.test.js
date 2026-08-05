@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FoundPhoneDirector } from "../src/desktop/FoundPhoneDirector.js";
 
-function createHarness({ foundPhone = { enabled: true, setHeld: vi.fn() } } = {}) {
+function createHarness({ foundPhone = { enabled: true, setHeld: vi.fn() }, handTracking = null } = {}) {
   const player = {
     beginCinematic: vi.fn(),
     endCinematic: vi.fn(),
@@ -9,7 +9,7 @@ function createHarness({ foundPhone = { enabled: true, setHeld: vi.fn() } } = {}
   const audio = { cue: vi.fn() };
   const sendControllerEvent = vi.fn();
   const experience = { objects: { foundPhone } };
-  const director = new FoundPhoneDirector({ experience, player, audio, sendControllerEvent });
+  const director = new FoundPhoneDirector({ experience, player, audio, sendControllerEvent, handTracking });
   return { director, foundPhone, player, audio, sendControllerEvent };
 }
 
@@ -48,6 +48,25 @@ describe("found phone director", () => {
     expect(available.player.beginCinematic).not.toHaveBeenCalled();
     expect(disabled.player.beginCinematic).not.toHaveBeenCalled();
     expect(missing.player.beginCinematic).not.toHaveBeenCalled();
+  });
+
+  it("rejects an interaction when hand ownership is already held by another context", () => {
+    const handTracking = {
+      beginTask: vi.fn(() => false),
+      usesFallback: vi.fn(() => false),
+      snapshot: vi.fn(() => null),
+      endTask: vi.fn(),
+    };
+    const { director, foundPhone, player, audio, sendControllerEvent } = createHarness({ handTracking });
+
+    expect(director.handleInteraction("found-phone")).toBe(false);
+    expect(director.isInspecting()).toBe(false);
+    expect(handTracking.beginTask).toHaveBeenCalledOnce();
+    expect(handTracking.endTask).not.toHaveBeenCalled();
+    expect(player.beginCinematic).not.toHaveBeenCalled();
+    expect(foundPhone.setHeld).not.toHaveBeenCalled();
+    expect(audio.cue).not.toHaveBeenCalled();
+    expect(sendControllerEvent).not.toHaveBeenCalled();
   });
 
   it("releases only on the first matching ready inactive presence sample", () => {

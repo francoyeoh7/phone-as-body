@@ -25,17 +25,17 @@ export class FoundPhoneDirector {
       typeof this.foundPhone.setHeld !== "function"
     ) return false;
 
+    const hasHandCoordinator = typeof this.handTracking?.beginTask === "function";
+    if (hasHandCoordinator
+      && !this.handTracking.beginTask({ context: PHONE_ID, requiredAction: "grab" })) return false;
+
     this.inspecting = true;
     this.presencePending = true;
     this.presenceWaitElapsed = 0;
     this.player.beginCinematic();
     this.heldConfirmed = false;
     this.handFallbackActivated = false;
-    if (this.handTracking?.beginTask?.({ context: PHONE_ID, requiredAction: "grab" })) {
-      if (this.handTracking.usesFallback(PHONE_ID)) this.activateFallback();
-    } else {
-      this.activateFallback();
-    }
+    if (!hasHandCoordinator || this.handTracking?.usesFallback?.(PHONE_ID)) this.activateFallback();
     return true;
   }
 

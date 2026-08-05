@@ -81,8 +81,7 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     if (room.controllerId !== controllerId) return { ok: false, reason: "not-controller" };
     if (!isHandFrame(frame)) return { ok: false, reason: "invalid-hand" };
     if (frame.modeEpoch < room.handEpoch
-      || (frame.modeEpoch === room.handEpoch && frame.seq <= room.handSeq)
-      || (frame.modeEpoch > room.handEpoch && frame.seq <= room.handSeq)) {
+      || (frame.modeEpoch === room.handEpoch && frame.seq <= room.handSeq)) {
       return { ok: false, reason: "stale-hand" };
     }
     room.handEpoch = frame.modeEpoch;

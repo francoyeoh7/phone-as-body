@@ -30,6 +30,16 @@ describe("session registry", () => {
     expect(registry.get("617042").hand).toBeUndefined();
   });
 
+  it("accepts a sequence reset when a newer mode epoch starts", () => {
+    const registry = createSessionRegistry({ randomCode: () => "617042" });
+    registry.createDesktop("desktop");
+    registry.attachController("617042", "phone");
+
+    expect(registry.acceptHand("617042", "phone", sampleHand({ seq: 4, modeEpoch: 7 })).ok).toBe(true);
+    expect(registry.acceptHand("617042", "phone", sampleHand({ seq: 0, modeEpoch: 8 }))).toMatchObject({ ok: true });
+    expect(registry.get("617042")).toMatchObject({ handSeq: 0, handEpoch: 8 });
+  });
+
   it("resets hand ordering on replacement and disconnect", () => {
     const registry = createSessionRegistry({ randomCode: () => "617042" });
     registry.createDesktop("desktop");
