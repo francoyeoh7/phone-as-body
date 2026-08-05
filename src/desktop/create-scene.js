@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { createExitDoor } from "./ExitDoor.js";
 import { createFoundPhoneProp } from "./FoundPhoneProp.js";
 import { createWashbasinState } from "./Washbasin.js";
+import { createCorridorLayout } from "./CorridorLayout.js";
 
 function seededRandom(seed) {
   let value = seed;
@@ -77,6 +78,19 @@ function box(scene, geometry, surface, position, rotation = null) {
 function addFixedCollider(world, x, y, z, hx, hy, hz) {
   const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z));
   return world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy, hz), body);
+}
+
+function addLayoutMesh(scene, volume, surface) {
+  const mesh = box(scene, new THREE.BoxGeometry(...volume.size), surface, volume.position, volume.rotation ?? null);
+  mesh.name = volume.id;
+  mesh.userData.corridorSegment = volume.segment;
+  return mesh;
+}
+
+function addLayoutCollider(world, collider) {
+  const fixed = addFixedCollider(world, ...collider.position, ...collider.halfExtents);
+  if (fixed) fixed.userData = { ...(fixed.userData ?? {}), corridorId: collider.id, corridorSegment: collider.segment };
+  return fixed;
 }
 
 function makeLabelTexture(label, background = "#bcb7a2", ink = "#21231f") {
@@ -422,9 +436,14 @@ function createFlashlightRig(camera, target) {
   return { group, core, spill, outerBeam, innerBeam, target: flashlightTarget };
 }
 
-function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial }) {
+function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial, layout = null }) {
+  const anchor = layout?.anchors?.shadowWindow ?? {
+    position: [-2.5, 1.9, -14.4],
+    taskPoint: [-2.38, 1.95, -13.92],
+    figure: [-6.62, 1.22, -16.4],
+  };
   const root = new THREE.Group();
-  root.position.set(-2.5, 1.9, -14.4);
+  root.position.set(...anchor.position);
   root.userData.interactableId = "shadow-window";
 
   const glass = new THREE.Mesh(
@@ -457,7 +476,11 @@ function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMater
   root.add(centerRail);
 
   const taskPoint = new THREE.Group();
-  taskPoint.position.set(0.12, 0.05, 0.48);
+  taskPoint.position.set(
+    anchor.taskPoint[0] - anchor.position[0],
+    anchor.taskPoint[1] - anchor.position[1],
+    anchor.taskPoint[2] - anchor.position[2],
+  );
   const reticleMaterial = new THREE.MeshBasicMaterial({
     color: 0xe7dfb7,
     transparent: true,
@@ -514,7 +537,7 @@ function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMater
     opacity: 0.9,
     depthWrite: false,
   }));
-  shadowFigure.position.set(-6.62, 1.22, -16.4);
+  shadowFigure.position.set(...anchor.figure);
   shadowFigure.scale.set(0.95, 2.42, 1);
   shadowFigure.visible = false;
   oppositeCorridor.add(shadowFigure);
@@ -532,8 +555,9 @@ function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMater
     mesh: glass,
     halo: null,
     enabled: false,
+    anchor,
   };
-  return { window, taskPoint, oppositeCorridor, operatingRoom, operatingDoor, shadowFigure };
+  return { window, taskPoint, oppositeCorridor, operatingRoom, operatingDoor, shadowFigure, anchors: anchor };
 }
 
 export function disposePhysicsWorld(world) {
@@ -579,79 +603,71 @@ export async function createScene(host) {
   const darkMetalMaterial = new THREE.MeshStandardMaterial({ color: 0x242827, roughness: 0.38, metalness: 0.85 });
   const paperMaterial = new THREE.MeshStandardMaterial({ map: makeLabelTexture("FUSE 12A"), roughness: 0.9 });
 
-  box(scene, new THREE.BoxGeometry(5.2, 0.3, 32), floorMaterial, [0, -0.15, -13]);
-  box(scene, new THREE.BoxGeometry(5.2, 0.3, 32), ceilingMaterial, [0, 3.55, -13]);
-  box(scene, new THREE.BoxGeometry(0.3, 3.6, 16.35), wallMaterial, [-2.65, 1.7, -5.075]);
-  box(scene, new THREE.BoxGeometry(0.3, 3.6, 13.55), wallMaterial, [-2.65, 1.7, -22.325]);
-  box(scene, new THREE.BoxGeometry(0.3, 1.225, 2.3), wallMaterial, [-2.65, 0.5125, -14.4]);
-  box(scene, new THREE.BoxGeometry(0.3, 0.825, 2.3), wallMaterial, [-2.65, 3.0875, -14.4]);
-  box(scene, new THREE.BoxGeometry(0.3, 3.6, 32), wallMaterial, [2.65, 1.7, -13]);
-  box(scene, new THREE.BoxGeometry(5.2, 3.6, 0.3), wallMaterial, [0, 1.7, 3.1]);
-  box(scene, new THREE.BoxGeometry(5.2, 3.6, 0.3), wallMaterial, [0, 1.7, -29.1]);
-  addFixedCollider(world, 0, -0.15, -13, 2.6, 0.15, 16.2);
-  addFixedCollider(world, 0, 3.55, -13, 2.6, 0.15, 16.2);
-  addFixedCollider(world, -2.65, 1.7, -5.075, 0.15, 1.8, 8.175);
-  addFixedCollider(world, -2.65, 1.7, -22.325, 0.15, 1.8, 6.775);
-  addFixedCollider(world, -2.65, 0.5125, -14.4, 0.15, 0.6125, 1.15);
-  addFixedCollider(world, -2.65, 3.0875, -14.4, 0.15, 0.4125, 1.15);
-  addFixedCollider(world, 2.65, 1.7, -13, 0.15, 1.8, 16.2);
-  addFixedCollider(world, 0, 1.7, 3.1, 2.6, 1.8, 0.15);
-  addFixedCollider(world, 0, 1.7, -29.1, 2.6, 1.8, 0.15);
+  const corridor = createCorridorLayout();
+  for (const floor of corridor.floors) addLayoutMesh(scene, floor, floorMaterial);
+  for (const ceiling of corridor.ceilings) addLayoutMesh(scene, ceiling, ceilingMaterial);
+  for (const wall of corridor.walls) {
+    if (wall.render !== false) addLayoutMesh(scene, wall, wallMaterial);
+  }
+  for (const collider of corridor.colliders) addLayoutCollider(world, collider);
 
-  for (const z of [-1.4, -6.6, -11.8, -17.1, -22.4, -27.3]) {
-    addDoor(scene, -2.47, z, 1, doorMaterial, trimMaterial);
-    addDoor(scene, 2.47, z - 2.2, -1, doorMaterial, trimMaterial);
+  const innerWallX = [corridor.main.bounds.minX + 0.18, corridor.main.bounds.maxX - 0.18];
+  for (const z of [-1.4, -6.6, -11.8, -17.1, -22.4]) {
+    addDoor(scene, innerWallX[0], z, 1, doorMaterial, trimMaterial);
+    addDoor(scene, innerWallX[1], z - 2.2, -1, doorMaterial, trimMaterial);
   }
 
   const wallSeamMaterial = new THREE.MeshStandardMaterial({ color: 0x272c29, roughness: 0.58, metalness: 0.32 });
   for (const side of [-1, 1]) {
     for (const z of [-3.95, -9.15, -14.4, -19.65, -24.85]) {
-      box(scene, new THREE.BoxGeometry(0.035, 2.88, 0.028), wallSeamMaterial, [side * 2.47, 1.7, z]);
+      box(scene, new THREE.BoxGeometry(0.035, 2.88, 0.028), wallSeamMaterial, [side * (corridor.width / 2 - 0.18), 1.7, z]);
     }
-    box(scene, new THREE.BoxGeometry(0.045, 0.12, 31.2), wallSeamMaterial, [side * 2.47, 0.16, -13]);
-    box(scene, new THREE.BoxGeometry(0.045, 0.08, 31.2), wallSeamMaterial, [side * 2.47, 3.2, -13]);
+    box(scene, new THREE.BoxGeometry(0.045, 0.12, 34.8), wallSeamMaterial, [side * (corridor.width / 2 - 0.18), 0.16, -14.8]);
+    box(scene, new THREE.BoxGeometry(0.045, 0.08, 34.8), wallSeamMaterial, [side * (corridor.width / 2 - 0.18), 3.2, -14.8]);
   }
+  box(scene, new THREE.BoxGeometry(19.4, 0.12, 0.045), wallSeamMaterial, [13.2, 0.16, -29.6]);
+  box(scene, new THREE.BoxGeometry(19.4, 0.08, 0.045), wallSeamMaterial, [13.2, 3.2, -29.6]);
 
   const windowGlass = new THREE.MeshStandardMaterial({ color: 0x172827, emissive: 0x0c2525, emissiveIntensity: 0.7, roughness: 0.28, metalness: 0.18 });
   for (const z of [-4.2, -24.6]) {
-    box(scene, new THREE.BoxGeometry(0.07, 1.25, 1.75), windowGlass, [-2.45, 1.9, z]);
-    for (const offset of [-0.78, 0.78]) box(scene, new THREE.BoxGeometry(0.09, 1.35, 0.06), trimMaterial, [-2.38, 1.9, z + offset]);
+    box(scene, new THREE.BoxGeometry(0.07, 1.25, 1.75), windowGlass, [corridor.main.bounds.minX + 0.2, 1.9, z]);
+    for (const offset of [-0.78, 0.78]) box(scene, new THREE.BoxGeometry(0.09, 1.35, 0.06), trimMaterial, [corridor.main.bounds.minX + 0.27, 1.9, z + offset]);
   }
 
-  const shadowQuest = createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial });
-  const washbasin = createWashbasin(scene, [1.75, 1.1, -5.2], darkMetalMaterial);
-  addFixedCollider(world, 2.1, 0.62, -5.2, 0.55, 0.62, 0.72);
+  const shadowQuest = createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial, layout: corridor });
+  const washbasin = createWashbasin(scene, corridor.anchors.washbasin.position, darkMetalMaterial);
 
   for (const side of [-1, 1]) {
-    box(scene, new THREE.BoxGeometry(0.08, 0.09, 30.8), darkMetalMaterial, [side * 2.46, 0.92, -13]);
+    box(scene, new THREE.BoxGeometry(0.08, 0.09, 34.6), darkMetalMaterial, [side * (corridor.width / 2 - 0.19), 0.92, -14.8]);
     const conduit = box(
       scene,
-      new THREE.CylinderGeometry(0.026, 0.026, 30.5, 10),
+      new THREE.CylinderGeometry(0.026, 0.026, 34.5, 10),
       darkMetalMaterial,
-      [side * 2.43, 3.02, -13],
+      [side * (corridor.width / 2 - 0.22), 3.02, -14.8],
       [Math.PI / 2, 0, 0],
     );
     conduit.castShadow = false;
   }
+  for (const x of [7.4, 13.2, 19]) {
+    box(scene, new THREE.BoxGeometry(0.09, 0.08, 5.3), darkMetalMaterial, [x, 0.92, -29.6]);
+  }
 
   const ceilingLights = [];
-  for (const z of [-1, -6, -11, -16, -21, -26]) {
-    box(
-      scene,
-      new THREE.BoxGeometry(0.7, 0.08, 1.6),
-      new THREE.MeshStandardMaterial({ color: 0x9b9f91, emissive: 0x7e8a73, emissiveIntensity: 1.1, roughness: 0.42 }),
-      [0, 3.37, z],
-    );
-    const light = new THREE.PointLight(0x9aa990, 0.8, 7, 2.1);
-    light.position.set(0, 3.05, z);
+  const ceilingFixtureMaterial = new THREE.MeshStandardMaterial({ color: 0x9b9f91, emissive: 0x7e8a73, emissiveIntensity: 1.1, roughness: 0.42 });
+  for (const definition of corridor.lights.filter((entry) => entry.kind === "ceiling")) {
+    box(scene, new THREE.BoxGeometry(0.7, 0.08, 1.6), ceilingFixtureMaterial, definition.fixturePosition ?? definition.position);
+    const light = new THREE.PointLight(definition.color, definition.intensity, definition.distance, definition.decay);
+    light.name = definition.id;
+    light.position.set(...definition.position);
     scene.add(light);
     ceilingLights.push(light);
   }
 
   const emergencyLights = [];
-  for (const z of [-3.2, -13.2, -23.2]) {
-    const light = new THREE.PointLight(0xb24c36, 0.86, 9, 2);
-    light.position.set(0, 2.6, z);
+  for (const definition of corridor.lights.filter((entry) => entry.kind === "emergency")) {
+    const light = new THREE.PointLight(definition.color, definition.intensity, definition.distance, definition.decay);
+    light.name = definition.id;
+    light.position.set(...definition.position);
     scene.add(light);
     emergencyLights.push(light);
   }
@@ -672,11 +688,12 @@ export async function createScene(host) {
 
   const fuse = addInteractable(scene, "fuse", "拾取备用保险丝", [-1.78, 1.25, -8.6], new THREE.BoxGeometry(0.16, 0.42, 0.16), new THREE.MeshStandardMaterial({ color: 0xe7d5a3, emissive: 0xa9813d, emissiveIntensity: 0.55, roughness: 0.44 }));
   fuse.root.rotation.z = -0.22;
-  box(scene, new THREE.BoxGeometry(0.52, 0.32, 0.14), paperMaterial, [-1.85, 1.07, -8.6], [0, 0.2, 0]);
+  fuse.root.position.fromArray(corridor.anchors.fuse.position);
+  box(scene, new THREE.BoxGeometry(0.52, 0.32, 0.14), paperMaterial, [corridor.anchors.fuse.position[0] - 0.07, 1.07, corridor.anchors.fuse.position[2]], [0, 0.2, 0]);
 
   const panelRoot = new THREE.Group();
-  panelRoot.position.set(2.35, 1.36, -15.6);
-  panelRoot.rotation.y = Math.PI / 2;
+  panelRoot.position.fromArray(corridor.anchors.panel.position);
+  panelRoot.rotation.y = corridor.anchors.panel.rotationY;
   panelRoot.userData.interactableId = "panel";
   const panelBody = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.15, 0.78), darkMetalMaterial);
   panelBody.castShadow = true;
@@ -695,9 +712,15 @@ export async function createScene(host) {
     camera,
     world,
     RAPIER,
+    position: corridor.door.position,
+    rotationY: corridor.door.rotationY,
+    inwardNormal: corridor.door.inwardNormal,
+    triggerPosition: corridor.door.triggerPosition,
+    colliderPosition: corridor.door.collider.position,
+    colliderHalfExtents: corridor.door.collider.halfExtents,
     materials: { door: doorMaterial, hardware: metalMaterial },
   });
-  const foundPhone = createFoundPhoneProp({ scene, camera });
+  const foundPhone = createFoundPhoneProp({ scene, camera, position: corridor.anchors.foundPhone.position });
 
   const silhouette = new THREE.Group();
   silhouette.position.set(0.3, 0, -2.8);
@@ -718,6 +741,16 @@ export async function createScene(host) {
   scene.add(silhouette);
 
   const interactables = [fuse, panel, foundPhone, washbasin, shadowQuest.window];
+  const corridorWorldAnchors = {
+    door: exitDoor.root,
+    triggerPosition: exitDoor.triggerPosition,
+    foundPhone: foundPhone.root,
+    washbasin: washbasin.root,
+    fuse: fuse.root,
+    panel: panel.root,
+    shadowWindow: shadowQuest.window.root,
+    shadowTaskPoint: shadowQuest.taskPoint,
+  };
   let disposed = false;
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -734,7 +767,29 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
-    objects: { flashlight: flashlightGroup, flashlightCore: flashlight, flashlightSpill, flashlightBeam: beam, ceilingLights, emergencyLights, stormLight, hemi, silhouette, exitDoor, foundPhone, panel, fuse, washbasin, shadowQuest },
+    objects: {
+      flashlight: flashlightGroup,
+      flashlightCore: flashlight,
+      flashlightSpill,
+      flashlightBeam: beam,
+      ceilingLights,
+      emergencyLights,
+      stormLight,
+      hemi,
+      silhouette,
+      exitDoor,
+      foundPhone,
+      panel,
+      fuse,
+      washbasin,
+      shadowQuest,
+      corridor: {
+        layout: corridor,
+        anchors: corridor.anchors,
+        worldAnchors: corridorWorldAnchors,
+        anchorObjects: corridorWorldAnchors,
+      },
+    },
     update(delta, elapsed) {
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
       for (const light of emergencyLights) light.intensity = pulse;

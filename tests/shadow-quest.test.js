@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { ShadowQuestDirector } from "../src/desktop/ShadowQuestDirector.js";
 
-function createHarness({ flashlightVisible = true, lookAtWindow = true } = {}) {
+function createHarness({ flashlightVisible = true, lookAtWindow = true, corridor = null } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, -14.4);
   camera.lookAt(lookAtWindow ? new THREE.Vector3(-2.5, 1.95, -13.92) : new THREE.Vector3(0, 1.6, -20));
@@ -44,6 +44,7 @@ function createHarness({ flashlightVisible = true, lookAtWindow = true } = {}) {
         shadowFigure,
         operatingDoor,
       },
+      ...(corridor ? { corridor } : {}),
     },
   };
   const director = new ShadowQuestDirector({ experience, player, ui, audio });
@@ -51,6 +52,21 @@ function createHarness({ flashlightVisible = true, lookAtWindow = true } = {}) {
 }
 
 describe("shadow side quest", () => {
+  it("uses the corridor shadow anchors for the cinematic peek when supplied", () => {
+    const corridor = {
+      anchors: {
+        shadowWindow: {
+          peekPosition: [-1.2, 1.92, -14.18],
+          peekTarget: [-5.7, 1.42, -13.45],
+        },
+      },
+    };
+    const harness = createHarness({ corridor });
+
+    expect(harness.director.peekPosition.toArray()).toEqual([-1.2, 1.92, -14.18]);
+    expect(harness.director.peekTarget.toArray()).toEqual([-5.7, 1.42, -13.45]);
+  });
+
   it("reveals the task point only near the window with flashlight aim", () => {
     const harness = createHarness();
 

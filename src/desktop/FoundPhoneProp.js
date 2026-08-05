@@ -46,7 +46,7 @@ function createPhoneModel({ bodySurface, screenSurface, hardwareSurface }) {
   return { model, body };
 }
 
-export function createFoundPhoneProp({ scene, camera }) {
+export function createFoundPhoneProp({ scene, camera, position = [-1.2, 0.07, -11.4] }) {
   const bodySurface = new THREE.MeshStandardMaterial({ color: 0x111614, roughness: 0.34, metalness: 0.62 });
   const screenSurface = new THREE.MeshStandardMaterial({
     color: 0x304b43,
@@ -58,7 +58,7 @@ export function createFoundPhoneProp({ scene, camera }) {
 
   const root = new THREE.Group();
   root.name = "found-phone-floor";
-  root.position.set(-1.2, 0.07, -11.4);
+  root.position.set(...position);
   root.rotation.set(-Math.PI / 2, 0, -0.34);
   root.userData.interactableId = "found-phone";
   const { model, body } = createPhoneModel({ bodySurface, screenSurface, hardwareSurface });

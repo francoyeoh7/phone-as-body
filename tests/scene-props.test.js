@@ -7,8 +7,13 @@ import * as sceneModule from "../src/desktop/create-scene.js";
 function createPhysicsHarness() {
   const bodyDescriptor = {
     translation: null,
+    rotation: null,
     setTranslation(x, y, z) {
       this.translation = [x, y, z];
+      return this;
+    },
+    setRotation(value) {
+      this.rotation = value;
       return this;
     },
   };
@@ -62,6 +67,32 @@ describe("exit door prop", () => {
     expect(physics.world.createCollider).toHaveBeenCalledWith(physics.colliderDescriptor, physics.body);
     expect(exitDoor.collider).toBe(physics.collider);
   });
+
+  it("transforms the trigger, inward normal, and fixed collider with arbitrary yaw", () => {
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    const physics = createPhysicsHarness();
+
+    const exitDoor = createExitDoor({
+      scene,
+      camera,
+      world: physics.world,
+      RAPIER: physics.RAPIER,
+      position: [23, 0, -29.6],
+      rotationY: -Math.PI / 2,
+    });
+
+    expect(exitDoor.root.position.toArray()).toEqual([23, 0, -29.6]);
+    expect(exitDoor.root.rotation.y).toBeCloseTo(-Math.PI / 2, 8);
+    expect(exitDoor.inwardNormal.toArray()).toEqual([-1, 0, 0]);
+    expect(exitDoor.triggerPosition.toArray()).toEqual([20.82, 1.05, -29.6]);
+    expect(exitDoor.colliderQuaternion.y).toBeCloseTo(-Math.sin(Math.PI / 4), 8);
+    expect(exitDoor.colliderQuaternion.w).toBeCloseTo(Math.cos(Math.PI / 4), 8);
+    expect(physics.bodyDescriptor.translation[0]).toBeCloseTo(22.82, 8);
+    expect(physics.bodyDescriptor.translation[2]).toBeCloseTo(-29.6, 8);
+    expect(physics.bodyDescriptor.rotation.y).toBeCloseTo(-Math.sin(Math.PI / 4), 8);
+    expect(physics.bodyDescriptor.rotation.w).toBeCloseTo(Math.cos(Math.PI / 4), 8);
+  });
 });
 
 describe("found phone prop", () => {
@@ -92,6 +123,16 @@ describe("found phone prop", () => {
     foundPhone.setHeld(false);
     expect(foundPhone.root.visible).toBe(true);
     expect(foundPhone.heldRig.visible).toBe(false);
+  });
+
+  it("accepts a layout-provided floor anchor without moving camera-local rigs", () => {
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    const foundPhone = createFoundPhoneProp({ scene, camera, position: [-1.2, 0.07, -11.4] });
+
+    expect(foundPhone.root.position.toArray()).toEqual([-1.2, 0.07, -11.4]);
+    expect(foundPhone.root.parent).toBe(scene);
+    expect(foundPhone.heldRig.parent).toBe(camera);
   });
 });
 

@@ -10,10 +10,13 @@ function createHarness({
   distance = 1.4,
   reducedMotion = false,
   handTracking = null,
+  doorPosition = [0, 0, -28.88],
+  triggerPosition = [0, 1.05, -26.7],
+  inwardNormal = [0, 0, 1],
 } = {}) {
   const camera = new THREE.PerspectiveCamera();
-  camera.position.copy(TRIGGER).add(new THREE.Vector3(0, 0, distance));
-  camera.lookAt(0, 1.45, -28.88);
+  camera.position.copy(new THREE.Vector3(...triggerPosition)).add(new THREE.Vector3(...inwardNormal).multiplyScalar(distance));
+  camera.lookAt(...doorPosition.map((value, index) => index === 1 ? value + 1.45 : value));
   camera.updateMatrixWorld(true);
 
   const savedPose = {
@@ -35,7 +38,7 @@ function createHarness({
     endCinematic: vi.fn(),
   };
   const root = new THREE.Group();
-  root.position.set(0, 0, -28.88);
+  root.position.set(...doorPosition);
   const leafPivot = new THREE.Group();
   const handlePivot = new THREE.Group();
   const lockBolt = new THREE.Object3D();
@@ -51,7 +54,8 @@ function createHarness({
     lockBolt,
     gapShadow,
     braceRig,
-    triggerPosition: TRIGGER.clone(),
+    triggerPosition: new THREE.Vector3(...triggerPosition),
+    inwardNormal: new THREE.Vector3(...inwardNormal),
   };
   const story = createObjectiveState(storyState);
   const ui = { setDoorDefense: vi.fn(), setPrompt: vi.fn(), setObjective: vi.fn() };
@@ -93,6 +97,22 @@ function startBracing(harness) {
 }
 
 describe("door defense director", () => {
+  it("derives the brace camera anchor from a rotated door inward normal", () => {
+    const harness = createHarness({
+      doorPosition: [23, 0, -29.6],
+      triggerPosition: [20.82, 1.05, -29.6],
+      inwardNormal: [-1, 0, 0],
+    });
+
+    harness.director.update(0.016);
+
+    expect(harness.director.bracePosition.x).toBeCloseTo(21.24, 8);
+    expect(harness.director.bracePosition.y).toBeCloseTo(1.6, 8);
+    expect(harness.director.bracePosition.z).toBeCloseTo(-29.6, 8);
+    expect(harness.director.braceTarget.x).toBeCloseTo(22.9, 8);
+    expect(harness.director.braceTarget.z).toBeCloseTo(-29.6, 8);
+  });
+
   it("acquires only for reach-door at the inclusive proximity boundary", () => {
     const wrongStory = createHarness({ storyState: "restore-power" });
     const tooFar = createHarness({ distance: 2.351 });

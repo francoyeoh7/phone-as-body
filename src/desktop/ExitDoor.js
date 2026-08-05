@@ -1,5 +1,24 @@
 import * as THREE from "three";
 
+const DEFAULT_POSITION = Object.freeze([0, 0, -28.88]);
+const DEFAULT_ROTATION_Y = 0;
+const TRIGGER_LOCAL_OFFSET = Object.freeze([0, 1.05, 2.18]);
+const COLLIDER_LOCAL_OFFSET = Object.freeze([0, 1.44, 0.18]);
+
+function asVector3(value, fallback) {
+  if (value?.isVector3) return value.clone();
+  if (Array.isArray(value) && value.length >= 3) return new THREE.Vector3(value[0], value[1], value[2]);
+  return new THREE.Vector3(...fallback);
+}
+
+function cleanVector(vector) {
+  for (const axis of ["x", "y", "z"]) {
+    const value = Math.abs(vector[axis]) < 1e-12 ? 0 : Number(vector[axis].toFixed(12));
+    vector[axis] = value;
+  }
+  return vector;
+}
+
 function addShadowed(parent, geometry, material, name, position) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = name;
@@ -10,7 +29,19 @@ function addShadowed(parent, geometry, material, name, position) {
   return mesh;
 }
 
-export function createExitDoor({ scene, camera, world, RAPIER, materials = {} }) {
+export function createExitDoor({
+  scene,
+  camera,
+  world,
+  RAPIER,
+  materials = {},
+  position = DEFAULT_POSITION,
+  rotationY = DEFAULT_ROTATION_Y,
+  triggerPosition = null,
+  inwardNormal = null,
+  colliderPosition = null,
+  colliderHalfExtents = [1.2, 1.44, 0.14],
+} = {}) {
   const doorSurface = materials.door ?? new THREE.MeshStandardMaterial({
     color: 0x303632,
     roughness: 0.5,
@@ -28,7 +59,9 @@ export function createExitDoor({ scene, camera, world, RAPIER, materials = {} })
 
   const root = new THREE.Group();
   root.name = "exit-door";
-  root.position.set(0, 0, -28.88);
+  const rootPosition = asVector3(position, DEFAULT_POSITION);
+  root.position.copy(rootPosition);
+  root.rotation.y = Number.isFinite(rotationY) ? rotationY : DEFAULT_ROTATION_Y;
 
   const gapShadow = new THREE.Mesh(new THREE.PlaneGeometry(2.42, 2.96), gapSurface);
   gapShadow.name = "door-gap-shadow";
@@ -99,8 +132,28 @@ export function createExitDoor({ scene, camera, world, RAPIER, materials = {} })
   braceRig.visible = false;
   camera.add(braceRig);
 
-  const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, 1.44, -28.7));
-  const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(1.2, 1.44, 0.14), body);
+  const doorQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), root.rotation.y);
+  const derivedInwardNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(doorQuaternion).normalize();
+  const normal = asVector3(inwardNormal, derivedInwardNormal.toArray());
+  if (normal.lengthSq() < 1e-12 || !Number.isFinite(normal.lengthSq())) normal.copy(derivedInwardNormal);
+  normal.normalize();
+  cleanVector(normal);
+  const trigger = triggerPosition
+    ? cleanVector(asVector3(triggerPosition, TRIGGER_LOCAL_OFFSET))
+    : cleanVector(new THREE.Vector3(...TRIGGER_LOCAL_OFFSET).applyQuaternion(doorQuaternion).add(root.position));
+  const colliderCenter = colliderPosition
+    ? cleanVector(asVector3(colliderPosition, COLLIDER_LOCAL_OFFSET))
+    : cleanVector(new THREE.Vector3(...COLLIDER_LOCAL_OFFSET).applyQuaternion(doorQuaternion).add(root.position));
+  const colliderQuaternion = {
+    x: doorQuaternion.x,
+    y: doorQuaternion.y,
+    z: doorQuaternion.z,
+    w: doorQuaternion.w,
+  };
+  const bodyDescription = RAPIER.RigidBodyDesc.fixed().setTranslation(...colliderCenter);
+  if (typeof bodyDescription.setRotation === "function") bodyDescription.setRotation(colliderQuaternion);
+  const body = world.createRigidBody(bodyDescription);
+  const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(...colliderHalfExtents), body);
 
   return {
     root,
@@ -109,7 +162,14 @@ export function createExitDoor({ scene, camera, world, RAPIER, materials = {} })
     lockBolt,
     gapShadow,
     braceRig,
-    triggerPosition: new THREE.Vector3(0, 1.05, -26.7),
+    position: root.position.clone(),
+    rotationY: root.rotation.y,
+    inwardNormal: normal,
+    triggerPosition: trigger,
+    colliderBody: body,
+    colliderPosition: colliderCenter.clone(),
+    colliderQuaternion,
+    colliderRotation: doorQuaternion.clone(),
     collider,
   };
 }

@@ -20,6 +20,7 @@ const FAILURE_SECONDS = 0.7;
 const RETURN_SECONDS = 1;
 const CALIBRATION_TIMEOUT_SECONDS = 3;
 const DOOR_CONTEXT = "door-defense";
+const BRACE_DISTANCE = 0.42;
 const PRESENCE_MODE_EVENT = Object.freeze({
   type: "gesture-mode",
   mode: "presence",
@@ -99,7 +100,10 @@ export class DoorDefenseDirector {
     this.cameraDirection = new THREE.Vector3();
     this.toTrigger = new THREE.Vector3();
     this.doorWorldPosition = new THREE.Vector3();
+    this.inwardNormal = new THREE.Vector3(0, 0, 1);
     this.fallbackPresenceEvent = { context: DOOR_CONTEXT, ready: true, active: false };
+
+    this.syncDoorAnchors();
 
     this.handleStartZ = this.exitDoor?.handlePivot?.rotation?.z ?? 0;
     this.leafStartY = this.exitDoor?.leafPivot?.rotation?.y ?? 0;
@@ -183,7 +187,18 @@ export class DoorDefenseDirector {
     return withinTrigger;
   }
 
+  syncDoorAnchors() {
+    const layoutAnchor = this.experience?.objects?.corridor?.anchors?.exitDoor;
+    if (this.exitDoor && layoutAnchor?.triggerPosition && !this.exitDoor.triggerPosition) {
+      this.exitDoor.triggerPosition = new THREE.Vector3(...layoutAnchor.triggerPosition);
+    }
+    const source = this.exitDoor?.inwardNormal ?? layoutAnchor?.inwardNormal;
+    if (source?.isVector3) this.inwardNormal.copy(source).normalize();
+    else if (Array.isArray(source) && source.length >= 3) this.inwardNormal.fromArray(source).normalize();
+  }
+
   acquire() {
+    this.syncDoorAnchors();
     this.savedPose = this.player.snapshotPose();
     this.originalPosition.set(
       this.savedPose.camera.x,
@@ -195,11 +210,11 @@ export class DoorDefenseDirector {
 
     this.bracePosition.copy(this.exitDoor.triggerPosition);
     this.bracePosition.y += 0.55;
-    this.bracePosition.z -= 0.42;
+    this.bracePosition.addScaledVector(this.inwardNormal, -BRACE_DISTANCE);
     this.exitDoor.root.getWorldPosition(this.doorWorldPosition);
     this.braceTarget.copy(this.doorWorldPosition);
     this.braceTarget.y += 1.45;
-    this.braceTarget.z += 0.1;
+    this.braceTarget.addScaledVector(this.inwardNormal, 0.1);
 
     this.phase = PHASE.intro;
     this.phaseElapsed = 0;

@@ -30,8 +30,18 @@ export class ShadowQuestDirector {
     this.direction = new THREE.Vector3();
     this.toTarget = new THREE.Vector3();
     this.taskWorld = new THREE.Vector3();
-    this.peekPosition = new THREE.Vector3(-2.08, 1.92, -14.18);
-    this.peekTarget = new THREE.Vector3(-6.6, 1.42, -13.45);
+    const shadowAnchor = experience?.objects?.corridor?.anchors?.shadowWindow
+      ?? this.objects?.anchors
+      ?? null;
+    this.peekPosition = new THREE.Vector3(...(
+      shadowAnchor?.peekPosition ?? [-2.08, 1.92, -14.18]
+    ));
+    this.peekTarget = new THREE.Vector3(...(
+      shadowAnchor?.peekTarget ?? [-6.6, 1.42, -13.45]
+    ));
+    this.figureStartPosition = new THREE.Vector3(...(
+      shadowAnchor?.figure ?? [-6.62, 1.22, -16.4]
+    ));
     this.originalPosition = new THREE.Vector3();
     this.originalTarget = new THREE.Vector3();
     this.cameraPosition = new THREE.Vector3();
@@ -101,7 +111,7 @@ export class ShadowQuestDirector {
     this.available = false;
     this.objects.window.enabled = false;
     this.objects.taskPoint.visible = false;
-    this.objects.shadowFigure.position.z = -16.4;
+    this.objects.shadowFigure.position.copy(this.figureStartPosition);
     this.objects.shadowFigure.material.opacity = 0.9;
     this.objects.shadowFigure.visible = false;
     this.objects.operatingDoor.position.z = 0;
@@ -137,7 +147,8 @@ export class ShadowQuestDirector {
     if (time < FIGURE_START) return;
     figure.visible = true;
     const progress = smoothstep((time - FIGURE_START) / (FIGURE_END - FIGURE_START));
-    figure.position.z = -16.4 + progress * 3.68;
+    figure.position.copy(this.figureStartPosition);
+    figure.position.z += progress * 3.68;
     if (time >= 2.55 && time < 3.45) {
       this.objects.operatingDoor.position.z = smoothstep((time - 2.55) / 0.9) * 0.86;
     } else if (time >= 3.45) {
