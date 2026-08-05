@@ -83,6 +83,13 @@ export function createFoundPhoneProp({ scene, camera, position = [-1.2, 0.07, -1
   heldRig.visible = false;
   camera.add(heldRig);
 
+  const floorPosition = root.position.clone();
+  const floorRotation = root.rotation.clone();
+  let held = false;
+  let dropping = false;
+  let dropElapsed = 0;
+  const dropSeconds = 0.36;
+
   return {
     id: "found-phone",
     label: "拿起手机",
@@ -92,8 +99,38 @@ export function createFoundPhoneProp({ scene, camera, position = [-1.2, 0.07, -1
     heldRig,
     enabled: true,
     setHeld(active) {
-      root.visible = !active;
-      heldRig.visible = Boolean(active);
+      const nextHeld = Boolean(active);
+      if (nextHeld) {
+        held = true;
+        dropping = false;
+        dropElapsed = 0;
+        root.visible = false;
+        heldRig.visible = true;
+        return;
+      }
+      heldRig.visible = false;
+      root.visible = true;
+      if (held) {
+        dropping = true;
+        dropElapsed = 0;
+        root.position.copy(floorPosition).add(new THREE.Vector3(0, 0.34, 0));
+        root.rotation.copy(floorRotation);
+        root.rotation.z += 0.24;
+      }
+      held = false;
+    },
+    update(delta = 0) {
+      if (!dropping || held || dropElapsed >= dropSeconds) return;
+      dropElapsed = Math.min(dropSeconds, dropElapsed + Math.max(0, delta));
+      const progress = dropElapsed / dropSeconds;
+      root.position.lerpVectors(
+        floorPosition.clone().add(new THREE.Vector3(0, 0.34, 0)),
+        floorPosition,
+        progress * progress,
+      );
+      root.rotation.copy(floorRotation);
+      root.rotation.z += 0.24 * (1 - progress);
+      if (dropElapsed >= dropSeconds) dropping = false;
     },
   };
 }

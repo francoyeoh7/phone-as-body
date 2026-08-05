@@ -294,14 +294,21 @@ describe("desktop director routing", () => {
     expect(foundPhone.handlePresence).toHaveBeenCalledOnce();
   });
 
-  it("produces and closes the controller found-phone UI through DesktopApp routing", () => {
+  it("produces and closes the controller found-phone UI through held hand-task state", () => {
     const phone = { send: vi.fn() };
     const player = { beginCinematic: vi.fn(), endCinematic: vi.fn() };
+    let handState = { phase: "tracking", fresh: true };
+    const handTracking = {
+      beginTask: vi.fn(() => true),
+      snapshot: vi.fn(() => handState),
+      endTask: vi.fn(),
+    };
     const foundPhone = new FoundPhoneDirector({
       experience: { objects: { foundPhone: { enabled: true, setHeld: vi.fn() } } },
       player,
       audio: { cue: vi.fn() },
       sendControllerEvent: (event) => phone.send(event),
+      handTracking,
     });
     const app = Object.assign(Object.create(DesktopApp.prototype), {
       phone,
@@ -311,16 +318,14 @@ describe("desktop director routing", () => {
       director: { handleInteraction: vi.fn(() => false) },
     });
 
-    expect(app.handleInteraction("found-phone")).toBe(true);
+    expect(app.handleInteraction("found-phone", { source: "hand" })).toBe(true);
+    expect(phone.send).not.toHaveBeenCalledWith({ type: "found-phone-ui", active: true });
+    handState = { phase: "held", fresh: true };
+    foundPhone.update(0.016);
     expect(phone.send).toHaveBeenCalledWith({ type: "found-phone-ui", active: true });
 
-    app.handlePhoneAction({
-      action: "gesture-presence",
-      context: "found-phone",
-      ready: true,
-      active: false,
-      sentAt: 789,
-    });
+    handState = { phase: "success", fresh: true };
+    foundPhone.update(0.016);
     expect(phone.send).toHaveBeenCalledWith({ type: "found-phone-ui", active: false });
     expect(player.endCinematic).toHaveBeenCalledOnce();
   });

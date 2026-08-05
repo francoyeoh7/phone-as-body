@@ -794,6 +794,7 @@ export async function createScene(host) {
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
       for (const light of emergencyLights) light.intensity = pulse;
       washbasin.update(delta, elapsed);
+      foundPhone.update(delta);
     },
     dispose() {
       if (disposed) return;

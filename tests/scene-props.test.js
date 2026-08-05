@@ -134,6 +134,21 @@ describe("found phone prop", () => {
     expect(foundPhone.root.parent).toBe(scene);
     expect(foundPhone.heldRig.parent).toBe(camera);
   });
+
+  it("animates a released held phone back onto its floor anchor", () => {
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    const foundPhone = createFoundPhoneProp({ scene, camera });
+    const floorY = foundPhone.root.position.y;
+
+    foundPhone.setHeld(true);
+    foundPhone.setHeld(false);
+    expect(foundPhone.root.visible).toBe(true);
+    expect(foundPhone.root.position.y).toBeGreaterThan(floorY);
+    foundPhone.update(0.36);
+    expect(foundPhone.root.position.y).toBeCloseTo(floorY, 6);
+    expect(foundPhone.heldRig.visible).toBe(false);
+  });
 });
 
 describe("scene resource state", () => {

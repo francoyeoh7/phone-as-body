@@ -19,6 +19,18 @@ describe("hand action scoring", () => {
 });
 
 describe("HandTaskStateMachine", () => {
+  it("can start a grab task pre-calibrated from a globally confirmed grab", () => {
+    const machine = new HandTaskStateMachine({ candidateMs: 0 });
+    machine.begin({ context: "found-phone", requiredAction: "grab", preCalibrated: true, now: 0 });
+
+    const held = machine.update({
+      state: "tracked", fresh: true, trackingConfidence: 0.95,
+      pose: { trackingConfidence: 0.95, grabStrength: 0.95, openness: 0 },
+    }, 1);
+    expect(held.calibrated).toBe(true);
+    expect(held.phase).not.toBe("untracked");
+  });
+
   it("requires continuous tracking, calibration, candidate, confirmation, and hold", () => {
     const machine = new HandTaskStateMachine();
     machine.begin({ context: "door-defense", requiredAction: "grab", now: 0 });

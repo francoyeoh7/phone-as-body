@@ -52,11 +52,17 @@ export class HandTaskStateMachine {
     this.lossAt = null;
   }
 
-  begin({ context = null, requiredAction = null, now = 0 } = {}) {
+  begin({ context = null, requiredAction = null, preCalibrated = false, now = 0 } = {}) {
     this.reset();
     this.state.context = context;
     this.state.requiredAction = requiredAction;
     this.state.enteredAt = now;
+    if (preCalibrated) {
+      this.state.phase = "candidate";
+      this.state.calibrated = true;
+      this.state.calibrationProgress = 1;
+      this.candidateAt = now;
+    }
     return this.snapshot();
   }
 
