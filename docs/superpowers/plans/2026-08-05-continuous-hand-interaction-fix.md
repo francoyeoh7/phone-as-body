@@ -10,7 +10,8 @@
 
 ## Global Constraints
 
-- Do not change the gyroscope view algorithm, joystick movement, flashlight, or full-screen touch controls.
+- Do not change the gyroscope view algorithm or joystick movement, and do not break the flashlight toggle or full-screen touch controls.
+- Motion/orientation permission is mandatory for gameplay.
 - Use only the rear camera and never transmit raw video.
 - Keep screen tap as the no-camera fallback.
 - Never let pixel-difference motion complete an interaction or task.
@@ -65,23 +66,38 @@
 - [ ] Route a pulse through `DesktopApp` to `player.interact()` only when a target is focused and no hand task/cinematic owns input.
 - [ ] Run both focused test files and commit the green change.
 
-### Task 4: Door task and fallback cleanup
+### Task 4: Door and sustained found-phone tasks
 
 **Files:**
 - Modify: `src/desktop/DoorDefenseDirector.js`
 - Modify: `src/desktop/FoundPhoneDirector.js`
+- Modify: `src/desktop/FoundPhoneProp.js`
 - Test: `tests/door-defense-director.test.js`
 - Test: `tests/found-phone-director.test.js`
 
 **Interfaces:**
 - Consumes: `HandTrackingDirector.snapshot(context)` and explicit `usesFallback(context)`.
-- Produces: task progress only from fresh confirmed poses; unavailable tracking falls back to screen touch without pixel presence.
+- Produces: door progress only from fresh confirmed poses; phone content exists only during a sustained grab and the dropped phone has a three-second pickup cooldown.
 
-- [ ] Add failing tests proving pixel presence cannot start/advance a tracked task and delayed tracked poses can still enter/hold brace.
-- [ ] Remove legacy presence-mode completion from task fallback and keep progress paused during lost/unstable observations.
+- [ ] Add failing tests proving pixel presence cannot start/advance a tracked task, delayed tracked poses can still enter/hold brace, and phone release/loss drops the prop and starts a three-second cooldown.
+- [ ] Remove legacy presence-mode completion, keep door progress paused during lost/unstable observations, and require a pre-calibrated sustained grab for phone inspection.
 - [ ] Run focused task tests and commit the green change.
 
-### Task 5: Integration and deployment
+### Task 5: Flashlight range and inertial follow
+
+**Files:**
+- Modify: `src/desktop/create-scene.js`
+- Test: `tests/scene-props.test.js`
+
+**Interfaces:**
+- Consumes: the final rendered camera quaternion and frame delta.
+- Produces: a brighter long-range flashlight rig with short frame-rate-independent follow lag.
+
+- [ ] Add failing tests for the new light profile and follow interpolation without changing `PlayerController.applyPhoneViewDelta()`.
+- [ ] Move the flashlight rig to a scene-space follow pivot, raise core/spill intensity and range, and update it each scene frame.
+- [ ] Run focused scene/player tests and commit the green change.
+
+### Task 6: Integration and deployment
 
 **Files:**
 - Verify all modified files and production assets.

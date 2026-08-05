@@ -13,12 +13,21 @@ The current build has two competing camera input sources. Pixel-difference motio
 - Door defense continues to require a stable open-palm brace for four seconds. Low confidence pauses or reduces progress; a single bad frame never completes or immediately fails the task.
 - Pixel-difference motion has no authority to trigger an interaction or advance a task. It may remain as local diagnostics only.
 - If tracking is unavailable, existing screen tap interaction remains available. Gyroscope, joystick, flashlight, and full-screen touch behavior are unchanged.
+- Motion/orientation permission remains mandatory for starting gameplay; there is no gyroscope-denied play mode.
+
+## Found Phone Hold
+
+The floor phone can only be acquired by a confirmed hand-grab while the reticle is focused on it. The phone is readable only while the grab remains held. A confirmed release or sustained tracking loss closes the phone UI, ends the cinematic, and animates the prop back to the floor. The prop is disabled for three seconds after release before it can be grabbed again. Touch tap and pixel motion cannot pick it up.
+
+## Flashlight Presentation
+
+The established gyroscope input and camera-target math remain unchanged. The rendered flashlight beam follows the final camera pose with a short frame-rate-independent inertial lag, creating weight without adding controller latency. The core and spill lights use a brighter, longer profile so corridor targets remain readable at greater distance.
 
 ## Architecture
 
 `ControllerApp` owns the persistent tracker lifecycle. `MediaPipeHandTracker` emits pose/status frames continuously after permission, and task messages no longer restart the model. `HandTrackingDirector` always consumes those frames and always drives `FirstPersonHand`; its task state machine remains optional and is only enabled while a semantic task owns the hand.
 
-A small hysteresis gate converts a stable grab pose into a one-shot ordinary interaction. `DesktopApp` applies that pulse only when `currentTargetId` is non-null and no cinematic task owns input. Door and found-phone directors continue to interpret poses through `HandTaskStateMachine`. They never receive pixel-presence success events when MediaPipe is available, and pixel motion is not used as a fallback completion source.
+A small hysteresis gate converts a stable grab pose into a one-shot ordinary interaction. `DesktopApp` applies that pulse only when `currentTargetId` is non-null and no cinematic task owns input. Door and found-phone directors continue to interpret poses through `HandTaskStateMachine`; found-phone starts pre-calibrated because the same confirmed grab acquired it, then requires the held pose continuously. They never receive pixel-presence success events, and pixel motion is not used as a fallback completion source.
 
 ## Failure Handling
 

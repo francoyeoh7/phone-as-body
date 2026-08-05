@@ -150,17 +150,6 @@ describe("controller app lifecycle", () => {
     expect(app.permissionCopy.textContent).toContain("后置摄像头未启用");
   });
 
-  it("starts rear-camera hand tracking even when motion permission is denied", async () => {
-    const { app, motion } = createApp({ motionEnabled: false });
-    motion.requestPermission.mockResolvedValue({ motionGranted: false });
-
-    await app.enableSensors();
-
-    expect(app.cameraEnabled).toBe(true);
-    expect(app.handTracker.setTask).toHaveBeenCalledExactlyOnceWith({ active: true });
-    expect(app.handTracker.suspend).not.toHaveBeenCalled();
-  });
-
   it("describes rear-camera fallback when camera access becomes unavailable", () => {
     const { app } = createApp();
 
