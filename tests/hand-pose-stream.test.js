@@ -63,4 +63,17 @@ describe("HandPoseStream", () => {
     expect(stream.accept(pose({ seq: 4, modeEpoch: 1, receivedAt: 1000, handedness: "left" }))).toBe(true);
     expect(stream.sample(1000).pose.handedness).toBe("left");
   });
+
+  it("resets competing-handedness evidence when a stale sequence interrupts it", () => {
+    const stream = new HandPoseStream();
+    stream.accept(pose({ seq: 1, receivedAt: 0, handedness: "right" }));
+    stream.accept(pose({ seq: 2, receivedAt: 100, handedness: "left" }));
+    expect(stream.accept(pose({ seq: 2, receivedAt: 200, handedness: "left" }))).toBe(false);
+    stream.accept(pose({ seq: 3, receivedAt: 600, handedness: "left" }));
+    expect(stream.sample(600).pose.handedness).toBe("right");
+    stream.accept(pose({ seq: 4, receivedAt: 1099, handedness: "left" }));
+    expect(stream.sample(1099).pose.handedness).toBe("right");
+    stream.accept(pose({ seq: 5, receivedAt: 1100, handedness: "left" }));
+    expect(stream.sample(1100).pose.handedness).toBe("left");
+  });
 });

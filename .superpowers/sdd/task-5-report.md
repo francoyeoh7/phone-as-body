@@ -8,13 +8,15 @@ Status: DONE_WITH_CONCERNS
 
 ## GREEN
 
-The focused suite now passes: 2 files, 11 tests.
+The focused suite now passes: 2 files, 12 tests.
 
 Coverage includes tracking/calibration/action/release/loss hysteresis, action score mapping, reset ownership, stale ordering, receive-time smoothing, nested landmarks/curls, quaternion conversion and slerp sign canonicalization, render-sample idempotence, freeze/fade, silence/lost/unavailable, epoch reset, reacquisition, and handedness evidence.
 
+Review regression: a same-epoch stale/non-increasing sequence now resets competing-handedness evidence without changing pose or `lastSeq`; a fresh 500 ms interval is required before switching labels.
+
 ## Verification
 
-- `npm test`: 28 files, 334 tests passed.
+- `npm test`: 28 files, 335 tests passed.
 - `npm run build`: successful production build.
 - `git diff --check`: clean.
 

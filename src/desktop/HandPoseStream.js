@@ -78,7 +78,11 @@ export class HandPoseStream {
     if (!frame || !Number.isFinite(frame.receivedAt) || frame.receivedAt < 0
       || !Number.isInteger(frame.seq) || frame.seq < 0 || !Number.isInteger(frame.modeEpoch) || frame.modeEpoch < 0) return false;
     if (this.modeEpoch !== null && frame.modeEpoch < this.modeEpoch) return false;
-    if (this.modeEpoch !== null && frame.modeEpoch === this.modeEpoch && frame.seq <= this.lastSeq) return false;
+    if (this.modeEpoch !== null && frame.modeEpoch === this.modeEpoch && frame.seq <= this.lastSeq) {
+      this.competingHandedness = null;
+      this.competingAt = null;
+      return false;
+    }
     if (this.modeEpoch !== null && frame.modeEpoch > this.modeEpoch) this.resetEpoch(frame.modeEpoch);
     this.modeEpoch = frame.modeEpoch;
     this.lastSeq = frame.seq;
