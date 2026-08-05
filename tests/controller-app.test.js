@@ -150,6 +150,17 @@ describe("controller app lifecycle", () => {
     expect(app.permissionCopy.textContent).toContain("后置摄像头未启用");
   });
 
+  it("starts rear-camera hand tracking even when motion permission is denied", async () => {
+    const { app, motion } = createApp({ motionEnabled: false });
+    motion.requestPermission.mockResolvedValue({ motionGranted: false });
+
+    await app.enableSensors();
+
+    expect(app.cameraEnabled).toBe(true);
+    expect(app.handTracker.setTask).toHaveBeenCalledExactlyOnceWith({ active: true });
+    expect(app.handTracker.suspend).not.toHaveBeenCalled();
+  });
+
   it("describes rear-camera fallback when camera access becomes unavailable", () => {
     const { app } = createApp();
 
@@ -317,14 +328,14 @@ describe("controller app lifecycle", () => {
     expect(actions).not.toHaveBeenCalledWith("interact");
   });
 
-  it("routes desktop gesture modes and sustained camera presence", () => {
+  it("keeps legacy pixel-presence events from reaching gameplay", () => {
     const { app, cameraMotion, actions } = createApp();
 
     app.handleDesktopEvent({ type: "gesture-mode", mode: "presence", context: "door-defense", baseline: "fresh" });
     app.handleCameraPresence({ ready: true, active: true, context: "door-defense" });
 
-    expect(cameraMotion.setMode).toHaveBeenCalledWith({ mode: "presence", context: "door-defense", baseline: "fresh" });
-    expect(actions).toHaveBeenCalledWith("gesture-presence", { ready: true, active: true, context: "door-defense" });
+    expect(cameraMotion.setMode).toHaveBeenCalledWith({ mode: "pulse", context: null, baseline: "fresh" });
+    expect(actions).not.toHaveBeenCalledWith("gesture-presence", expect.anything());
   });
 
   it("starts brace haptics from desktop events and stops them when paused", async () => {

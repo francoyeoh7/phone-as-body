@@ -317,9 +317,18 @@ export class ControllerApp {
       return;
     }
     this.cameraEnabled = Boolean(cameraResult?.cameraGranted);
+    if (this.cameraEnabled) {
+      this.cameraMotion?.resume?.();
+      this.handTracker?.resume?.();
+      Promise.resolve(this.handTracker?.setTask?.({ active: true })).catch(() => {});
+    } else {
+      Promise.resolve(this.handTracker?.setTask?.({ active: false })).catch(() => {});
+    }
     if (!motionGranted) {
-      this.cameraMotion?.suspend?.();
-      this.handTracker?.suspend?.();
+      if (!this.cameraEnabled) {
+        this.cameraMotion?.suspend?.();
+        this.handTracker?.suspend?.();
+      }
       this.enableMotion.disabled = false;
       return;
     }
@@ -330,11 +339,6 @@ export class ControllerApp {
     this.foreground = true;
     this.hapticsActive = this.connectionState === "joined" && !this.destroyed;
     this.socket?.sendAction("resume");
-    if (this.cameraEnabled) {
-      this.cameraMotion?.resume?.();
-      Promise.resolve(this.handTracker?.setTask?.({ active: true })).catch(() => {});
-    }
-    this.handTracker?.resume?.();
     this.calibrationTimer = window.setTimeout(() => {
       this.calibrationTimer = null;
       this.motion.reset();
@@ -415,9 +419,7 @@ export class ControllerApp {
     // Pixel motion is diagnostic only. Semantic interactions come from hand poses or touch.
   }
 
-  handleCameraPresence({ ready, active, context }) {
-    this.socket?.sendAction("gesture-presence", { ready, active, context });
-  }
+  handleCameraPresence() {}
 
   handleVisibility() {
     if (document.hidden) {
@@ -570,7 +572,7 @@ export class ControllerApp {
       return;
     }
     if (event.type === "gesture-mode") {
-      this.cameraMotion?.setMode({ mode: event.mode, context: event.context, baseline: event.baseline });
+      this.cameraMotion?.setMode({ mode: "pulse", context: null, baseline: "fresh" });
       return;
     }
     if (event.type === "haptics") {
