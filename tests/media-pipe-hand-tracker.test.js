@@ -17,6 +17,12 @@ function setup(options = {}) {
   return { tracker, video, callbacks, scheduler };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((nextResolve) => { resolve = nextResolve; });
+  return { promise, resolve };
+}
+
 describe("MediaPipeHandTracker", () => {
   it("never requests a camera and reads the existing video", async () => {
     const getUserMedia = vi.fn();
@@ -75,5 +81,101 @@ describe("MediaPipeHandTracker", () => {
     tracker.emitLostIfDue(750);
     expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.state)).toEqual(["lost", "lost"]);
     expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250, 750]);
+  });
+
+  it("emits one lost transition then suppresses no-hand inference until the heartbeat", () => {
+    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 0) };
+    const { tracker, callbacks } = setup({ scheduler });
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+    tracker.lastResultAt = 0;
+
+    tracker.handleResult({ result: { landmarks: [] }, capturedAt: 250 });
+    tracker.handleResult({ result: { landmarks: [] }, capturedAt: 316 });
+    tracker.handleResult({ result: { landmarks: [] }, capturedAt: 382 });
+    tracker.handleResult({ result: { landmarks: [] }, capturedAt: 750 });
+
+    expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250, 750]);
+  });
+
+  it("drops and closes a bitmap that resolves after suspension or an epoch change", async () => {
+    const pending = deferred();
+    const bitmap = { close: vi.fn() };
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const { tracker } = setup({ workerFactory: () => worker, createImageBitmap: vi.fn(() => pending.promise), OffscreenCanvas: class {} });
+    await tracker.setTask({ active: true });
+    worker.onmessage({ data: { type: "ready", modeEpoch: tracker.modeEpoch } });
+    const sampling = tracker.sample();
+    tracker.suspend();
+    await tracker.setTask({ active: false });
+    await tracker.setTask({ active: true });
+    pending.resolve(bitmap);
+    await sampling;
+
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(worker.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "detect" }));
+    expect(tracker.inferencePending).toBe(false);
+  });
+
+  it("closes fallback task creation that resolves after destroy", async () => {
+    const pendingLandmarker = deferred();
+    const landmarker = { close: vi.fn(), detectForVideo: vi.fn() };
+    const createFromOptions = vi.fn(() => pendingLandmarker.promise);
+    const forVisionTasks = vi.fn(async () => ({}));
+    const { tracker } = setup({
+      worker: false,
+      loadModule: vi.fn(async () => ({ FilesetResolver: { forVisionTasks }, HandLandmarker: { createFromOptions } })),
+    });
+    const activating = tracker.setTask({ active: true });
+    await vi.waitFor(() => expect(createFromOptions).toHaveBeenCalledOnce());
+    tracker.destroy();
+    pendingLandmarker.resolve(landmarker);
+    await activating;
+
+    expect(landmarker.close).toHaveBeenCalledOnce();
+    expect(tracker.landmarker).toBeNull();
+  });
+
+  it("closes the previous fallback landmarker before repeated task activation", async () => {
+    const first = { close: vi.fn(), detectForVideo: vi.fn() };
+    const second = { close: vi.fn(), detectForVideo: vi.fn() };
+    const createFromOptions = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second);
+    const { tracker } = setup({
+      worker: false,
+      loadModule: vi.fn(async () => ({ FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) }, HandLandmarker: { createFromOptions } })),
+    });
+
+    await tracker.setTask({ active: true });
+    await tracker.setTask({ active: true });
+
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(tracker.landmarker).toBe(second);
+  });
+
+  it("stops after an explicit worker inference error instead of rescheduling at 15Hz", async () => {
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const { tracker, scheduler, callbacks } = setup({ workerFactory: () => worker, OffscreenCanvas: class {} });
+    await tracker.setTask({ active: true });
+    worker.onmessage({ data: { type: "error", modeEpoch: tracker.modeEpoch, reason: "detect" } });
+
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "unavailable" }));
+    expect(scheduler.setTimeout).not.toHaveBeenCalledWith(expect.any(Function), tracker.sampleIntervalMs);
+  });
+
+  it("selects the highest-confidence handed candidate when continuity is absent", () => {
+    const { tracker, callbacks } = setup();
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+    const result = handResult({ label: "Left" });
+    result.landmarks.push(result.landmarks[0]);
+    result.worldLandmarks.push(result.worldLandmarks[0]);
+    result.handedness.push([{ categoryName: "Right", score: 0.99 }]);
+    result.handedness[0][0].score = 0.2;
+
+    tracker.handleResult({ result, capturedAt: 1 });
+
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "left" }));
   });
 });

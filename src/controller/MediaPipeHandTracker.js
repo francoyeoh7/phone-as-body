@@ -31,7 +31,8 @@ function pickCandidate(result, previous) {
     const prior = previous?.center;
     const distance = prior ? Math.hypot(center[0] - prior[0], center[1] - prior[1]) : 0;
     const labelBonus = previous?.handedness === label ? 1 : 0;
-    const score = labelBonus * 2 - distance;
+    const confidence = Number.isFinite(category?.score) ? category.score : 0;
+    const score = previous ? labelBonus * 2 - distance + confidence * 0.01 : confidence;
     if (score > bestScore) {
       bestScore = score;
       best = { index, label };
@@ -73,12 +74,14 @@ export class MediaPipeHandTracker {
     this.destroyed = false;
     this.suspended = false;
     this.inferencePending = false;
+    this.inferenceEpoch = null;
     this.initializing = false;
     this.landmarker = null;
     this.timer = null;
     this.statusTimer = null;
     this.lastResultAt = -Infinity;
     this.lastState = null;
+    this.lastLostAt = -Infinity;
     this.previous = null;
     this.unavailableEpoch = null;
     if (this.worker) this.bindWorker(this.worker);
@@ -101,14 +104,32 @@ export class MediaPipeHandTracker {
     return this.worker;
   }
 
+  isEpochActive(epoch) {
+    return epoch === this.modeEpoch && this.active && !this.destroyed;
+  }
+
+  closeLandmarker() {
+    this.landmarker?.close?.();
+    this.landmarker = null;
+  }
+
+  finishInference(epoch) {
+    if (this.inferenceEpoch !== epoch) return;
+    this.inferencePending = false;
+    this.inferenceEpoch = null;
+    this.schedule();
+  }
+
   async setTask(task = {}) {
+    if (this.destroyed) return;
     this.modeEpoch += 1;
     const epoch = this.modeEpoch;
     this.clearTimers();
+    this.closeLandmarker();
     this.active = Boolean(task.active);
     this.previous = null;
     this.lastResultAt = this.scheduler.now();
-    this.inferencePending = false;
+    this.lastLostAt = -Infinity;
     this.unavailableEpoch = null;
     if (!this.active) return;
     this.emitState("starting");
@@ -126,20 +147,29 @@ export class MediaPipeHandTracker {
       }
       return;
     }
+    this.initializing = true;
     try {
       const module = await this.loadModule();
-      if (epoch !== this.modeEpoch || !this.active) return;
+      if (!this.isEpochActive(epoch)) return;
       const fileset = await module.FilesetResolver.forVisionTasks("/assets/mediapipe/wasm");
+      if (!this.isEpochActive(epoch)) return;
       const create = this.landmarkerFactory ?? module.HandLandmarker.createFromOptions.bind(module.HandLandmarker);
-      this.landmarker = await create(fileset, {
+      const landmarker = await create(fileset, {
         baseOptions: { modelAssetPath: "/assets/mediapipe/hand_landmarker.task" },
         runningMode: "VIDEO", numHands: 2,
         minHandDetectionConfidence: 0.62, minHandPresenceConfidence: 0.58, minTrackingConfidence: 0.58,
       });
+      if (!this.isEpochActive(epoch)) {
+        landmarker?.close?.();
+        return;
+      }
+      this.landmarker = landmarker;
       this.emitState("calibrating");
       this.schedule(0);
     } catch (error) {
-      this.emitUnavailable(error?.message ?? "init-failed");
+      if (this.isEpochActive(epoch)) this.emitUnavailable(error?.message ?? "init-failed");
+    } finally {
+      if (this.modeEpoch === epoch) this.initializing = false;
     }
   }
 
@@ -153,15 +183,17 @@ export class MediaPipeHandTracker {
     const video = this.getVideo();
     if (!video || frontFacing(video) || video.readyState < 2) { this.schedule(); return; }
     const capturedAt = this.scheduler.now();
+    const epoch = this.modeEpoch;
     this.inferencePending = true;
+    this.inferenceEpoch = epoch;
     let awaitingWorkerResult = false;
     try {
       if (this.worker) {
         const bitmap = await this.bitmapFactory(video);
         if (!bitmap) throw new Error("bitmap-unavailable");
-        if (!this.active || this.modeEpoch < 1) { bitmap.close?.(); return; }
+        if (!this.isEpochActive(epoch) || this.suspended) { bitmap.close?.(); return; }
         try {
-          this.worker.postMessage({ type: "detect", bitmap, capturedAt, modeEpoch: this.modeEpoch }, [bitmap]);
+          this.worker.postMessage({ type: "detect", bitmap, capturedAt, modeEpoch: epoch }, [bitmap]);
           awaitingWorkerResult = true;
         }
         catch (error) { bitmap.close?.(); throw error; }
@@ -172,20 +204,30 @@ export class MediaPipeHandTracker {
     } catch (error) {
       this.emitUnavailable(error?.message ?? "detect-failed");
     } finally {
-      if (!awaitingWorkerResult) {
-        this.inferencePending = false;
-        this.schedule();
-      }
+      if (!awaitingWorkerResult) this.finishInference(epoch);
     }
   }
 
   handleWorkerMessage(data) {
-    if (!data || data.modeEpoch !== this.modeEpoch || !this.active) return;
-    if (data.type === "ready") { this.emitState("calibrating"); this.schedule(0); return; }
-    if (data.type === "unavailable") { this.emitUnavailable(data.reason); return; }
+    if (!data) return;
+    if (data.type === "ready") {
+      if (this.isEpochActive(data.modeEpoch) && !this.suspended) {
+        this.emitState("calibrating");
+        this.schedule(0);
+      }
+      return;
+    }
+    if (!this.isEpochActive(data.modeEpoch) || this.suspended) {
+      this.finishInference(data.modeEpoch);
+      return;
+    }
+    if (data.type === "unavailable" || data.type === "error") {
+      this.finishInference(data.modeEpoch);
+      this.emitUnavailable(data.reason ?? "worker-error");
+      return;
+    }
     if (data.type === "result") this.handleResult(data);
-    this.inferencePending = false;
-    this.schedule();
+    this.finishInference(data.modeEpoch);
   }
 
   handleResult({ result, capturedAt }) {
@@ -209,6 +251,7 @@ export class MediaPipeHandTracker {
       const frame = createTrackedHandFrame({ seq: this.seq++, capturedAt, modeEpoch: this.modeEpoch, sample, previous: this.previous });
       this.previous = frame;
       this.lastResultAt = capturedAt;
+      this.lastLostAt = -Infinity;
       this.emitState("tracked");
       this.onFrame?.(frame);
       this.clearStatusTimer();
@@ -217,19 +260,25 @@ export class MediaPipeHandTracker {
   }
 
   emitLostIfDue(now) {
-    if (now - this.lastResultAt < LOST_AFTER_MS) { this.scheduleStatus(); return; }
+    if (now - this.lastResultAt < LOST_AFTER_MS) { this.scheduleStatus(now); return; }
+    if (now - this.lastLostAt < STATUS_HEARTBEAT_MS) { this.scheduleStatus(now); return; }
     this.emitStatusFrame("lost", "no-hand", now);
-    this.scheduleStatus();
+    this.lastLostAt = now;
+    this.scheduleStatus(now);
   }
 
-  scheduleStatus() {
-    this.clearStatusTimer();
+  scheduleStatus(now = this.scheduler.now()) {
+    if (this.statusTimer != null || !this.active || this.suspended || this.destroyed) return;
+    const dueAt = Number.isFinite(this.lastLostAt)
+      ? this.lastLostAt + STATUS_HEARTBEAT_MS
+      : this.lastResultAt + LOST_AFTER_MS;
     this.statusTimer = this.scheduler.setTimeout(() => {
+      this.statusTimer = null;
       if (!this.active || this.suspended || this.destroyed) return;
-      const now = this.scheduler.now();
-      if (now - this.lastResultAt >= LOST_AFTER_MS) this.emitStatusFrame("lost", "no-hand", now);
-      this.scheduleStatus();
-    }, this.lastState === "lost" ? STATUS_HEARTBEAT_MS : LOST_AFTER_MS);
+      const heartbeatAt = this.scheduler.now();
+      this.emitLostIfDue(heartbeatAt);
+      this.scheduleStatus(heartbeatAt);
+    }, Math.max(0, dueAt - now));
   }
 
   emitStatusFrame(state, reason, capturedAt) {
@@ -252,5 +301,5 @@ export class MediaPipeHandTracker {
   clearTimers() { if (this.timer != null) this.scheduler.clearTimeout(this.timer); this.timer = null; this.clearStatusTimer(); }
   suspend() { this.suspended = true; this.clearTimers(); }
   resume() { this.suspended = false; if (this.active) this.schedule(0); }
-  destroy() { this.destroyed = true; this.active = false; this.clearTimers(); this.landmarker?.close?.(); this.landmarker = null; this.worker?.terminate?.(); this.worker = null; }
+  destroy() { this.destroyed = true; this.active = false; this.clearTimers(); this.closeLandmarker(); this.worker?.terminate?.(); this.worker = null; }
 }
