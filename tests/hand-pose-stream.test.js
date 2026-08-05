@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HandPoseStream } from "../src/desktop/HandPoseStream.js";
+import { basisQuaternion, HandPoseStream } from "../src/desktop/HandPoseStream.js";
 
 const pose = (overrides = {}) => ({
   state: "tracked", seq: 1, modeEpoch: 0, receivedAt: 0, handedness: "right", handConfidence: 0.9,
@@ -43,6 +43,14 @@ describe("HandPoseStream", () => {
     expect(low.pose.center[0]).toBe(before);
   });
 
+  it("uses every accepted receive timestamp as the smoothing interval anchor", () => {
+    const stream = new HandPoseStream();
+    stream.accept(pose({ seq: 1, receivedAt: 0, center: [0, 0, 0] }));
+    stream.accept(pose({ seq: 2, receivedAt: 100, trackingConfidence: 0.61, center: [50, 0, 0] }));
+    stream.accept(pose({ seq: 3, receivedAt: 185, center: [1, 0, 0] }));
+    expect(stream.sample(185).pose.center[0]).toBeCloseTo(1 - Math.exp(-1), 6);
+  });
+
   it("freezes and fades, detects silence, handles explicit statuses, epochs, and handedness evidence", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0 }));
@@ -75,5 +83,32 @@ describe("HandPoseStream", () => {
     expect(stream.sample(1099).pose.handedness).toBe("right");
     stream.accept(pose({ seq: 5, receivedAt: 1100, handedness: "left" }));
     expect(stream.sample(1100).pose.handedness).toBe("left");
+  });
+
+  it("resets competing-handedness evidence for a rejected lower epoch", () => {
+    const stream = new HandPoseStream();
+    stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 0, handedness: "right" }));
+    stream.accept(pose({ seq: 2, modeEpoch: 1, receivedAt: 100, handedness: "left" }));
+    expect(stream.accept(pose({ seq: 99, modeEpoch: 0, receivedAt: 200, handedness: "left" }))).toBe(false);
+    stream.accept(pose({ seq: 3, modeEpoch: 1, receivedAt: 600, handedness: "left" }));
+    expect(stream.sample(600).pose.handedness).toBe("right");
+    stream.accept(pose({ seq: 4, modeEpoch: 1, receivedAt: 1100, handedness: "left" }));
+    expect(stream.sample(1100).pose.handedness).toBe("left");
+  });
+
+  it("requires both confidence signals for handedness competition", () => {
+    const stream = new HandPoseStream();
+    stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 0, handedness: "right" }));
+    stream.accept(pose({ seq: 2, modeEpoch: 1, receivedAt: 100, handedness: "left" }));
+    stream.accept(pose({ seq: 3, modeEpoch: 1, receivedAt: 200, handedness: "left", handConfidence: 0.61 }));
+    stream.accept(pose({ seq: 4, modeEpoch: 1, receivedAt: 600, handedness: "left" }));
+    expect(stream.sample(600).pose.handedness).toBe("right");
+  });
+
+  it("converts identity and quarter-turn wrist bases to canonical quaternions", () => {
+    expect(basisQuaternion({ right: [1, 0, 0], up: [0, 1, 0], forward: [0, 0, 1] })).toEqual([0, 0, 0, 1]);
+    expect(basisQuaternion({ right: [0, 1, 0], up: [-1, 0, 0], forward: [0, 0, 1] })).toEqual([
+      0, 0, expect.closeTo(Math.SQRT1_2, 6), expect.closeTo(Math.SQRT1_2, 6),
+    ]);
   });
 });

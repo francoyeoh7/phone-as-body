@@ -84,7 +84,7 @@ export class HandTaskStateMachine {
     this.state.trackingConfidence = confidence;
     this.state.actionScore = score;
 
-    if (this.state.phase === "untracked") return this.updateUntracked(fresh, confidence, now);
+    if (this.state.phase === "untracked") return this.updateUntracked(fresh, confidence, pose, now);
     if (this.state.phase === "failed") {
       if (fresh && confidence >= this.defaults.trackingExit) {
         this.state.phase = "tracking";
@@ -109,13 +109,15 @@ export class HandTaskStateMachine {
     return this.snapshot();
   }
 
-  updateUntracked(fresh, confidence, now) {
+  updateUntracked(fresh, confidence, pose, now) {
     if (fresh && confidence >= this.defaults.trackingEnter) {
       this.trackingCandidateAt ??= now;
       if (now - this.trackingCandidateAt >= this.defaults.trackingMs) {
         this.state.phase = "tracking";
         this.state.enteredAt = now;
-        this.calibrationAt = now;
+        if (confidence >= 0.65 && clamp(pose.openness) >= 0.72 && clamp(pose.palmFacing) >= 0.45) {
+          this.calibrationAt = now;
+        }
       }
     } else {
       this.trackingCandidateAt = null;

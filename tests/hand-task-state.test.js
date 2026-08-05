@@ -103,6 +103,22 @@ describe("HandTaskStateMachine", () => {
     expect(machine.snapshot().phase).toBe("tracking");
   });
 
+  it("starts calibration only when the first valid open-palm sample arrives", () => {
+    const machine = new HandTaskStateMachine();
+    machine.begin({ context: "found-phone", requiredAction: "grab", now: 0 });
+    const closed = obs({ pose: { ...obs().pose, openness: 0.1, palmFacing: 0.2 } });
+    machine.update(closed, 0);
+    machine.update(closed, 120);
+    expect(machine.snapshot()).toMatchObject({ phase: "tracking", calibrated: false, calibrationProgress: 0 });
+    const open = obs();
+    machine.update(open, 1020);
+    expect(machine.snapshot().calibrated).toBe(false);
+    machine.update(open, 1919);
+    expect(machine.snapshot().calibrated).toBe(false);
+    machine.update(open, 1920);
+    expect(machine.snapshot().calibrated).toBe(true);
+  });
+
   it("resets task-owned calibration and ownership", () => {
     const machine = new HandTaskStateMachine();
     machine.begin({ context: "x", requiredAction: "open", now: 0 });

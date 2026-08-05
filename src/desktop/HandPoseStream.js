@@ -66,6 +66,7 @@ export class HandPoseStream {
     this.modeEpoch = null;
     this.lastSeq = -1;
     this.lastReceivedAt = null;
+    this.previousAcceptedAt = null;
     this.lastStableAt = null;
     this.lastFrame = null;
     this.pose = null;
@@ -77,7 +78,11 @@ export class HandPoseStream {
   accept(frame) {
     if (!frame || !Number.isFinite(frame.receivedAt) || frame.receivedAt < 0
       || !Number.isInteger(frame.seq) || frame.seq < 0 || !Number.isInteger(frame.modeEpoch) || frame.modeEpoch < 0) return false;
-    if (this.modeEpoch !== null && frame.modeEpoch < this.modeEpoch) return false;
+    if (this.modeEpoch !== null && frame.modeEpoch < this.modeEpoch) {
+      this.competingHandedness = null;
+      this.competingAt = null;
+      return false;
+    }
     if (this.modeEpoch !== null && frame.modeEpoch === this.modeEpoch && frame.seq <= this.lastSeq) {
       this.competingHandedness = null;
       this.competingAt = null;
@@ -90,6 +95,7 @@ export class HandPoseStream {
     this.lastFrame = clone(frame);
     if (frame.state === "tracked" && frame.trackingConfidence >= 0.62) this.acceptTracked(frame);
     this.updateHandedness(frame);
+    this.previousAcceptedAt = frame.receivedAt;
     return true;
   }
 
@@ -97,6 +103,7 @@ export class HandPoseStream {
     this.modeEpoch = epoch;
     this.lastSeq = -1;
     this.lastReceivedAt = null;
+    this.previousAcceptedAt = null;
     this.lastStableAt = null;
     this.lastFrame = null;
     this.pose = null;
@@ -111,7 +118,8 @@ export class HandPoseStream {
     target.wristQuaternion = Array.isArray(frame.wristQuaternion)
       ? canonicalize(frame.wristQuaternion) : basisQuaternion(frame.wrist);
     const prior = this.pose;
-    const interval = prior && Number.isFinite(this.lastStableAt) ? Math.max(0, frame.receivedAt - this.lastStableAt) : 0;
+    const interval = prior && Number.isFinite(this.previousAcceptedAt)
+      ? Math.max(0, frame.receivedAt - this.previousAcceptedAt) : 0;
     let alpha = prior ? 1 - Math.exp(-interval / this.options.smoothingMs) : 1;
     if (this.lastStableAt !== null && frame.receivedAt - this.lastStableAt >= this.options.silenceMs) alpha = Math.min(alpha, 0.25);
     if (!prior || alpha >= 1) this.pose = target;
