@@ -25,3 +25,5 @@ Concern is limited to pre-existing build warnings about missing Tailwind content
 ## Re-review RED/GREEN
 
 The added accepted-receipt smoothing, lower-epoch stale reset, and invalid-entry calibration regressions failed against the prior implementation. After the targeted fixes, the focused suite passes 17/17 and the full suite passes 340/340.
+
+Final-gate regression: tracked observations now return the computed freeze/fade opacity while retaining `state: "tracked"` and `fresh: true` through the silence boundary.

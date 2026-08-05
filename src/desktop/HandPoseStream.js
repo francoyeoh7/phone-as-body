@@ -178,7 +178,7 @@ export class HandPoseStream {
     if (this.lastFrame.state === "tracked" && this.lastFrame.trackingConfidence < 0.62) {
       return { state: "low-confidence", pose: this.pose ? clone(this.pose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
     }
-    return { state: "tracked", pose: this.pose ? clone(this.pose) : null, opacity: 1, fresh: true, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+    return { state: "tracked", pose: this.pose ? clone(this.pose) : null, opacity, fresh: true, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
   }
 
   visualOpacity(now) {

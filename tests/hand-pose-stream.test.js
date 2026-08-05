@@ -55,6 +55,8 @@ describe("HandPoseStream", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0 }));
     expect(stream.sample(250).opacity).toBe(1);
+    expect(stream.sample(300)).toMatchObject({ state: "tracked", fresh: true });
+    expect(stream.sample(300).opacity).toBeCloseTo(1 - (300 - 250) / 350, 8);
     expect(stream.sample(600).opacity).toBeCloseTo(0, 8);
     expect(stream.sample(349).state).toBe("tracked");
     expect(stream.sample(350).state).toBe("lost");
