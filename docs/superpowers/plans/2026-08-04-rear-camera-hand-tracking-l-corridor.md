@@ -140,7 +140,7 @@ git commit -m "build: ship local hand tracking assets"
 
 **Interfaces:**
 - Produces: `HAND_LANDMARK_COUNT`, `normalizeHandedness(value)`, `deriveHandFeatures(sample, previous, calibration)`, `createTrackedHandFrame(input)`, and `createHandStatusFrame(input)`.
-- Consumes: MediaPipe normalized landmarks, world landmarks, handedness category, capture timestamp, and the previous derived pose.
+- Consumes: MediaPipe normalized landmarks, world landmarks, raw handedness category, explicit input-mirror convention, capture timestamp, and the previous derived pose.
 
 - [ ] **Step 1: Write failing tests for open, fist, orientation, continuity, and malformed data**
 
@@ -160,7 +160,7 @@ describe("hand pose features", () => {
   });
 
   it("returns a finite handedness-corrected palm basis", () => {
-    const pose = deriveHandFeatures(openHand({ handedness: "Left" }));
+    const pose = deriveHandFeatures(openHand({ physicalHandedness: "Left", inputMirrored: false }));
     for (const axis of [pose.wrist.right, pose.wrist.up, pose.wrist.forward]) {
       expect(axis).toHaveLength(3);
       expect(axis.every(Number.isFinite)).toBe(true);
@@ -204,8 +204,16 @@ export function normalizeHandedness(value) {
   return label === "left" || label === "right" ? label : null;
 }
 
+export function normalizeMediaPipeHandedness(value, inputMirrored) {
+  if (typeof inputMirrored !== "boolean") throw new RangeError("inputMirrored must be boolean");
+  const label = normalizeHandedness(value);
+  if (!label) return null;
+  return inputMirrored ? label : label === "left" ? "right" : "left";
+}
+
 export function deriveHandFeatures(sample, previous = null, calibration = null) {
-  // Validate exactly 21 finite normalized and world landmarks; compute center,
+  // Require sample.inputMirrored, normalize raw handedness, validate exactly
+  // 21 finite normalized and world landmarks; compute center,
   // palm basis, five joint-angle curls, openness, grabStrength, palmFacing,
   // relativeScale, velocity, and a 0..1 continuity confidence.
   // Throw RangeError for malformed or degenerate geometry.
@@ -328,6 +336,7 @@ Cover these exact behaviors:
 
 - tracker never calls `getUserMedia`;
 - tracker reads the video returned by `getVideo`;
+- every derived sample passes `inputMirrored: false`, and raw MediaPipe handedness is converted to physical handedness in the shared extractor;
 - `setTask({ active: true })` initializes once and samples no faster than 15 Hz;
 - a busy inference drops the next capture rather than queuing;
 - `numHands` is 2 internally, running mode is `VIDEO`, and only one continuity-selected hand is emitted;
@@ -366,7 +375,7 @@ It receives `{ type: "detect", bitmap, capturedAt }`, calls `detectForVideo(bitm
 
 - [ ] **Step 4: Implement the task-scoped tracker client**
 
-Use a module worker when `Worker` and `createImageBitmap` are available. Use a rate-limited main-thread Hand Landmarker only when the worker primitives are absent but the MediaPipe module can load. Set `sampleIntervalMs = 1000 / 15`, keep an `inferencePending` guard, select one candidate using handedness plus nearest prior center, retain the prior hand across brief label flips, and derive Task 2 frames. Increment `modeEpoch` on every task change and include it in every result so late worker/network frames are ignored. `setTask({ active: false })` stops sampling but leaves the camera stream under `CameraMotionDetector` ownership.
+Use a module worker only when `Worker`, `createImageBitmap`, and `OffscreenCanvas` are all available. Construct and pass an `OffscreenCanvas` to both worker GPU and CPU initialization attempts; otherwise use a rate-limited main-thread Hand Landmarker when the MediaPipe module can load. Set `sampleIntervalMs = 1000 / 15`, keep an `inferencePending` guard, select one candidate using handedness plus nearest prior center, retain the prior hand across brief label flips, and derive Task 2 frames with `inputMirrored: false`. Increment `modeEpoch` on every task change and include it in every result so late worker/network frames are ignored. `setTask({ active: false })` stops sampling but leaves the camera stream under `CameraMotionDetector` ownership.
 
 - [ ] **Step 5: Integrate without changing stable input code**
 

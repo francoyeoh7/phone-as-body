@@ -43,7 +43,7 @@ The existing motion detector continues in its current pulse/presence modes. Duri
 2. It verifies that the rear video is live.
 3. It dynamically initializes Hand Landmarker with the local model and WASM files.
 4. It transfers `ImageBitmap` frames to a dedicated Worker at a maximum of 15 Hz with a one-frame-in-flight guard so inference cannot block gyro/touch handlers or queue stale frames.
-5. It selects one hand deterministically: retain the previously tracked handedness/center when possible, otherwise choose the highest handedness score.
+5. It marks the rear-camera input as explicitly unmirrored, swaps MediaPipe's raw handedness label into physical left/right semantics, then selects one hand deterministically: retain the previously tracked handedness/center when possible, otherwise choose the highest handedness score.
 6. It emits a compact derived frame or a rate-limited lost frame.
 7. It stops inference immediately when the task ends, the page backgrounds, the camera ends, the controller disconnects, or the app is destroyed.
 
@@ -90,6 +90,8 @@ Pure shared math derives:
 - grab strength from finger curls and thumb opposition;
 - palm-facing score from the palm normal;
 - temporal continuity confidence from in-frame coverage, scale continuity, center velocity, and handedness continuity.
+
+Every MediaPipe sample carries an explicit `inputMirrored` boolean. The rear-camera paths always pass `false`; a dedicated MediaPipe-label adapter swaps the raw left/right label for unmirrored input before constructing the handedness-corrected palm basis. The existing one-argument `normalizeHandedness(value)` helper keeps its public semantics; only the adapter requires the mirror flag. Missing or non-boolean mirror metadata is rejected so worker and main-thread fallback cannot silently disagree about physical handedness.
 
 MediaPipe directly supplies the handedness category score, landmarks, and world landmarks. `handConfidence` and `trackingConfidence` are explicitly derived quality scores; they are never represented as raw model confidence outputs.
 
