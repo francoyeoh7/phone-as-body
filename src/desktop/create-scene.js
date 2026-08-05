@@ -384,27 +384,36 @@ function makeFlashlightCookie() {
   return texture;
 }
 
-function createFlashlightRig(camera, target) {
+const FLASHLIGHT_FOLLOW_SECONDS = 0.045;
+
+export function updateFlashlightRig(rig, camera, delta) {
+  camera.getWorldPosition(rig.group.position);
+  camera.getWorldQuaternion(rig.targetQuaternion);
+  const elapsed = Number.isFinite(delta) ? Math.max(0, delta) : Infinity;
+  const blend = elapsed === Infinity ? 1 : 1 - Math.exp(-elapsed / rig.followSeconds);
+  rig.group.quaternion.slerp(rig.targetQuaternion, blend);
+}
+
+export function createFlashlightRig(camera, target, { cookieFactory = makeFlashlightCookie } = {}) {
   const group = new THREE.Group();
   group.name = "flashlight";
 
   const flashlightTarget = new THREE.Object3D();
   flashlightTarget.position.copy(target);
-  camera.add(flashlightTarget);
-  const core = new THREE.SpotLight(0xfff0c9, 26, 34, Math.PI / 6.8, 0.74, 1.7);
+  const core = new THREE.SpotLight(0xfff0c9, 42, 52, Math.PI / 7.2, 0.7, 1.55);
   core.position.set(0, -0.05, 0);
   core.target = flashlightTarget;
   core.castShadow = true;
   core.shadow.mapSize.set(512, 512);
   core.shadow.bias = -0.00018;
   core.shadow.normalBias = 0.024;
-  core.map = makeFlashlightCookie();
-  const spill = new THREE.SpotLight(0xffd6a0, 4.2, 18, Math.PI / 2.7, 0.98, 1.6);
+  core.map = cookieFactory();
+  const spill = new THREE.SpotLight(0xffd6a0, 8.4, 30, Math.PI / 2.8, 0.96, 1.45);
   spill.position.set(0, -0.04, 0);
   spill.target = flashlightTarget;
 
   const outerBeam = new THREE.Mesh(
-    new THREE.ConeGeometry(1.7, 8.2, 48, 1, true),
+    new THREE.ConeGeometry(2.55, 15.4, 48, 1, true),
     new THREE.MeshBasicMaterial({
       color: 0xffd7a1,
       transparent: true,
@@ -416,9 +425,9 @@ function createFlashlightRig(camera, target) {
     }),
   );
   outerBeam.rotation.x = -Math.PI / 2;
-  outerBeam.position.set(0, -0.05, -4.45);
+  outerBeam.position.set(0, -0.05, -8.05);
   const innerBeam = new THREE.Mesh(
-    new THREE.ConeGeometry(0.76, 6.1, 40, 1, true),
+    new THREE.ConeGeometry(1.08, 11.8, 40, 1, true),
     new THREE.MeshBasicMaterial({
       color: 0xffedc4,
       transparent: true,
@@ -430,10 +439,20 @@ function createFlashlightRig(camera, target) {
     }),
   );
   innerBeam.rotation.x = -Math.PI / 2;
-  innerBeam.position.set(0, -0.05, -3.15);
-  group.add(core, spill, outerBeam, innerBeam);
-  camera.add(group);
-  return { group, core, spill, outerBeam, innerBeam, target: flashlightTarget };
+  innerBeam.position.set(0, -0.05, -6.05);
+  group.add(core, spill, outerBeam, innerBeam, flashlightTarget);
+  const rig = {
+    group,
+    core,
+    spill,
+    outerBeam,
+    innerBeam,
+    target: flashlightTarget,
+    followSeconds: FLASHLIGHT_FOLLOW_SECONDS,
+    targetQuaternion: new THREE.Quaternion(),
+  };
+  updateFlashlightRig(rig, camera, Infinity);
+  return rig;
 }
 
 function createObservationWindow(scene, { trimMaterial, metalMaterial, wallMaterial, layout = null }) {
@@ -685,6 +704,7 @@ export async function createScene(host) {
   const flashlightSpill = flashlightRig.spill;
   const beam = flashlightRig.outerBeam;
   scene.add(camera);
+  scene.add(flashlightGroup);
 
   const fuse = addInteractable(scene, "fuse", "拾取备用保险丝", [-1.78, 1.25, -8.6], new THREE.BoxGeometry(0.16, 0.42, 0.16), new THREE.MeshStandardMaterial({ color: 0xe7d5a3, emissive: 0xa9813d, emissiveIntensity: 0.55, roughness: 0.44 }));
   fuse.root.rotation.z = -0.22;
@@ -793,6 +813,7 @@ export async function createScene(host) {
     update(delta, elapsed) {
       const pulse = 0.56 + Math.sin(elapsed * 7.4) * 0.045;
       for (const light of emergencyLights) light.intensity = pulse;
+      updateFlashlightRig(flashlightRig, camera, delta);
       washbasin.update(delta, elapsed);
       foundPhone.update(delta);
     },
