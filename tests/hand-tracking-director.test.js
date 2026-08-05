@@ -19,6 +19,26 @@ function frame(overrides = {}) {
 }
 
 describe("HandTrackingDirector", () => {
+  it("accepts and renders tracked poses during ordinary exploration", () => {
+    let now = 10;
+    const hand = {
+      fallback: false,
+      loaded: true,
+      setContext: vi.fn(),
+      setVisible: vi.fn(),
+      applyPose: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const director = new HandTrackingDirector({ hand, now: () => now, sendControllerEvent: vi.fn() });
+
+    expect(director.acceptFrame(frame({ receivedAt: now }))).toBe(true);
+    director.update(1 / 60);
+
+    expect(hand.applyPose).toHaveBeenCalledWith(expect.objectContaining({ handedness: "right" }), 1 / 60);
+    expect(hand.setVisible).toHaveBeenCalledWith(true);
+    expect(director.owner).toBeNull();
+  });
+
   it("owns one context and emits exactly-once task lifecycle events", () => {
     let now = 0;
     const hand = { fallback: false, load: vi.fn(async () => true), setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
@@ -34,21 +54,23 @@ describe("HandTrackingDirector", () => {
     expect(director.endTask("found-phone")).toBe(true);
     expect(director.endTask("found-phone")).toBe(false);
     expect(send).toHaveBeenCalledWith({ type: "hand-task", active: false, context: "found-phone" });
+    expect(hand.setVisible).not.toHaveBeenCalledWith(false);
   });
 
-  it("enters fallback after 1.5 seconds without accepted frames", () => {
+  it("keeps waiting for persistent tracking instead of permanently falling back after 1.5 seconds", () => {
     let now = 0;
     const director = new HandTrackingDirector({ hand: { fallback: false, setContext() {}, setVisible() {}, applyPose() {}, destroy() {} }, now: () => now, sendControllerEvent: vi.fn() });
     director.beginTask({ context: "door-defense", requiredAction: "brace" });
-    now = 1499;
-    director.update(1.499);
+    now = 1600;
+    director.update(1.6);
     expect(director.usesFallback("door-defense")).toBe(false);
-    now = 1500;
-    director.update(0.001);
-    expect(director.usesFallback("door-defense")).toBe(true);
+
+    expect(director.acceptFrame(frame({ receivedAt: now }))).toBe(true);
+    director.update(0);
+    expect(director.snapshot("door-defense").sample).toMatchObject({ state: "tracked", fresh: true });
   });
 
-  it("enters fallback after the stream goes silent following an accepted frame", () => {
+  it("fades a silent visual stream without converting task input to pixel fallback", () => {
     let now = 0;
     const director = new HandTrackingDirector({
       hand: { fallback: false, setContext() {}, setVisible() {}, applyPose() {}, destroy() {} },
@@ -64,7 +86,25 @@ describe("HandTrackingDirector", () => {
 
     now = 1500;
     director.update(0.001);
+    expect(director.usesFallback("door-defense")).toBe(false);
+    expect(director.snapshot("door-defense").sample).toMatchObject({ state: "lost", fresh: false });
+  });
+
+  it("recovers from an unavailable status when a newer tracked epoch arrives", () => {
+    let now = 0;
+    const hand = { fallback: false, setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
+    const director = new HandTrackingDirector({ hand, now: () => now, sendControllerEvent: vi.fn() });
+    director.beginTask({ context: "door-defense", requiredAction: "brace" });
+    expect(director.acceptFrame({ version: 1, modeEpoch: 1, seq: 0, state: "unavailable", reason: "init", receivedAt: 0 })).toBe(true);
+    director.update(0);
     expect(director.usesFallback("door-defense")).toBe(true);
+
+    now = 10;
+    expect(director.acceptFrame(frame({ modeEpoch: 2, seq: 0, receivedAt: now }))).toBe(true);
+    director.update(0);
+
+    expect(director.usesFallback("door-defense")).toBe(false);
+    expect(hand.applyPose).toHaveBeenCalled();
   });
 
   it("exposes whether the latest sampled held observation is fresh", () => {
