@@ -41,7 +41,9 @@ const CURLED_POINTS = [
 ];
 
 function makeSample(points, {
-  handedness = "Right",
+  physicalHandedness = "Right",
+  rawHandedness,
+  inputMirrored = false,
   handednessScore = 0.96,
   capturedAt = 100,
   translate = [0, 0, 0],
@@ -51,9 +53,14 @@ function makeSample(points, {
   degenerate = false,
   ...extra
 } = {}) {
-  const isLeft = String(handedness).toLowerCase() === "left";
+  const isPhysicalLeft = String(physicalHandedness).toLowerCase() === "left";
+  const mirrorGeometry = isPhysicalLeft !== (inputMirrored === true);
+  const semanticLabel = isPhysicalLeft ? "Left" : "Right";
+  const modelLabel = rawHandedness ?? (
+    inputMirrored ? semanticLabel : isPhysicalLeft ? "Right" : "Left"
+  );
   const transformed = points.map(([sourceX, sourceY, sourceZ]) => {
-    const mirroredX = isLeft ? 1 - sourceX : sourceX;
+    const mirroredX = mirrorGeometry ? 1 - sourceX : sourceX;
     return [
       0.5 + (mirroredX - 0.5) * scale + translate[0],
       0.82 + (sourceY - 0.82) * scale + translate[1],
@@ -77,12 +84,13 @@ function makeSample(points, {
   }));
 
   return {
+    ...extra,
     landmarks,
     worldLandmarks,
-    handedness,
+    handedness: modelLabel,
+    inputMirrored,
     handednessScore,
     capturedAt,
-    ...extra,
   };
 }
 

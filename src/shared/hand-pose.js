@@ -71,7 +71,7 @@ function palmScale(landmarks) {
   ) / 2;
 }
 
-function palmBasis(worldLandmarks, handedness) {
+function palmBasis(worldLandmarks, handedness, inputMirrored) {
   const upRaw = subtract(worldLandmarks[9], worldLandmarks[0]);
   const acrossPalm = subtract(worldLandmarks[17], worldLandmarks[5]);
   if (length(cross(acrossPalm, upRaw)) < PALM_EPSILON) {
@@ -79,7 +79,7 @@ function palmBasis(worldLandmarks, handedness) {
   }
   const upSeed = normalize(upRaw, "degenerate palm basis");
   let right = subtract(acrossPalm, scale(upSeed, dot(acrossPalm, upSeed)));
-  if (handedness === "left") right = scale(right, -1);
+  if ((handedness === "left") !== inputMirrored) right = scale(right, -1);
   right = normalize(right, "degenerate palm basis");
 
   const forwardRaw = cross(right, upSeed);
@@ -110,6 +110,7 @@ function readHandedness(sample) {
     typeof category === "object" && category !== null
       ? category.categoryName ?? category.displayName ?? category.label
       : category,
+    sample?.inputMirrored,
   );
   if (!label) throw new RangeError("invalid handedness category");
 
@@ -162,20 +163,43 @@ function scaleContinuity(currentScale, previous, relativeScale) {
 }
 
 function motionContinuity(center, capturedAt, previous) {
-  if (!previous) return { velocity: 0, confidence: 1 };
+  if (!previous) return { velocity: 0, confidence: 1, valid: true };
   const priorCenter = previousCenter(previous);
   const priorTimestamp = previous.capturedAt;
   if (!priorCenter || !Number.isFinite(capturedAt) || !Number.isFinite(priorTimestamp) || capturedAt <= priorTimestamp) {
-    return { velocity: 0, confidence: 0.5 };
+    return { velocity: 0, confidence: 0, valid: false };
   }
   const velocity = distance(center, priorCenter) / ((capturedAt - priorTimestamp) / 1000);
-  if (!Number.isFinite(velocity)) return { velocity: 0, confidence: 0 };
-  return { velocity, confidence: Math.exp(-velocity * 2.5) };
+  if (!Number.isFinite(velocity)) return { velocity: 0, confidence: 0, valid: false };
+  return { velocity, confidence: Math.exp(-velocity * 2.5), valid: true };
 }
 
-export function normalizeHandedness(value) {
+function assertFiniteDerivedFeatures(pose) {
+  const scalars = [
+    pose.handConfidence,
+    pose.trackingConfidence,
+    pose.openness,
+    pose.grabStrength,
+    pose.palmFacing,
+    pose.relativeScale,
+    pose.velocity,
+  ];
+  const vectors = [pose.center, pose.wrist.right, pose.wrist.up, pose.wrist.forward, pose.curls];
+  if (!scalars.every(Number.isFinite)
+    || !vectors.every((vector) => vector.every(Number.isFinite))) {
+    throw new RangeError("derived hand features must be finite");
+  }
+  return pose;
+}
+
+export function normalizeHandedness(value, inputMirrored) {
+  if (typeof inputMirrored !== "boolean") {
+    throw new RangeError("inputMirrored must be boolean");
+  }
   const label = String(value ?? "").toLowerCase();
-  return label === "left" || label === "right" ? label : null;
+  if (label !== "left" && label !== "right") return null;
+  if (inputMirrored) return label;
+  return label === "left" ? "right" : "left";
 }
 
 export function deriveHandFeatures(sample, previous = null, calibration = null) {
@@ -188,7 +212,7 @@ export function deriveHandFeatures(sample, previous = null, calibration = null) 
     throw new RangeError("degenerate palm geometry");
   }
 
-  const wrist = palmBasis(worldLandmarks, handedness.label);
+  const wrist = palmBasis(worldLandmarks, handedness.label, sample.inputMirrored);
   const curls = DIGIT_CHAINS.map((chain) => digitCurl(worldLandmarks, chain));
   const thumbCurl = curls[0];
   const fingerCurl = (curls[1] + curls[2] + curls[3] + curls[4]) / 4;
@@ -214,9 +238,9 @@ export function deriveHandFeatures(sample, previous = null, calibration = null) 
     0,
     1,
   );
-  const trackingConfidence = clamp(continuity * handConfidence, 0, 1);
+  const trackingConfidence = motion.valid ? clamp(continuity * handConfidence, 0, 1) : 0;
 
-  return {
+  return assertFiniteDerivedFeatures({
     ...(Number.isFinite(sample?.capturedAt) ? { capturedAt: sample.capturedAt } : {}),
     handedness: handedness.label,
     handConfidence,
@@ -231,7 +255,7 @@ export function deriveHandFeatures(sample, previous = null, calibration = null) 
     palmFacing,
     relativeScale,
     velocity: motion.velocity,
-  };
+  });
 }
 
 export function createTrackedHandFrame({

@@ -37,11 +37,15 @@ describe("hand pose features", () => {
     });
   });
 
-  it("normalizes only MediaPipe left and right labels", () => {
-    expect(normalizeHandedness("Left")).toBe("left");
-    expect(normalizeHandedness("RIGHT")).toBe("right");
-    expect(normalizeHandedness("unknown")).toBeNull();
-    expect(normalizeHandedness(null)).toBeNull();
+  it("normalizes MediaPipe labels from an explicit input mirror convention", () => {
+    expect(normalizeHandedness("Left", false)).toBe("right");
+    expect(normalizeHandedness("RIGHT", false)).toBe("left");
+    expect(normalizeHandedness("Left", true)).toBe("left");
+    expect(normalizeHandedness("RIGHT", true)).toBe("right");
+    expect(normalizeHandedness("unknown", false)).toBeNull();
+    expect(normalizeHandedness(null, true)).toBeNull();
+    expect(() => normalizeHandedness("Left")).toThrow(/inputMirrored/);
+    expect(() => normalizeHandedness("Left", "false")).toThrow(/inputMirrored/);
   });
 
   it("separates a naturally open hand from a fist", () => {
@@ -70,11 +74,29 @@ describe("hand pose features", () => {
     }
   });
 
-  it("returns matching finite orthonormal palm bases for mirrored hands", () => {
-    const right = deriveHandFeatures(openHand({ handedness: "Right" }));
-    const left = deriveHandFeatures(openHand({ handedness: "Left" }));
+  it.each([
+    { physicalHandedness: "Right", unmirroredRaw: "Left", mirroredRaw: "Right", expected: "right" },
+    { physicalHandedness: "Left", unmirroredRaw: "Right", mirroredRaw: "Left", expected: "left" },
+  ])("keeps a physical $expected palm equivalent across raw input conventions", ({
+    physicalHandedness,
+    unmirroredRaw,
+    mirroredRaw,
+    expected,
+  }) => {
+    const unmirrored = deriveHandFeatures(openHand({
+      physicalHandedness,
+      rawHandedness: unmirroredRaw,
+      inputMirrored: false,
+    }));
+    const mirrored = deriveHandFeatures(openHand({
+      physicalHandedness,
+      rawHandedness: mirroredRaw,
+      inputMirrored: true,
+    }));
 
-    for (const pose of [right, left]) {
+    expect(unmirrored.handedness).toBe(expected);
+    expect(mirrored.handedness).toBe(expected);
+    for (const pose of [unmirrored, mirrored]) {
       const axes = [pose.wrist.right, pose.wrist.up, pose.wrist.forward];
       for (const axis of axes) {
         expect(axis).toHaveLength(3);
@@ -87,10 +109,19 @@ describe("hand pose features", () => {
     }
 
     for (const axis of ["right", "up", "forward"]) {
-      left.wrist[axis].forEach((value, index) => {
-        expect(value).toBeCloseTo(right.wrist[axis][index], 8);
+      mirrored.wrist[axis].forEach((value, index) => {
+        expect(value).toBeCloseTo(unmirrored.wrist[axis][index], 8);
       });
     }
+    expect(mirrored.palmFacing).toBeCloseTo(unmirrored.palmFacing, 8);
+  });
+
+  it("rejects samples without an explicit boolean input mirror convention", () => {
+    const missing = openHand();
+    delete missing.inputMirrored;
+
+    expect(() => deriveHandFeatures(missing)).toThrow(/inputMirrored/);
+    expect(() => deriveHandFeatures(openHand({ inputMirrored: "false" }))).toThrow(/inputMirrored/);
   });
 
   it("derives velocity only from forward sender capture timestamps", () => {
@@ -125,7 +156,24 @@ describe("hand pose features", () => {
     expect(moved.velocity).toBeCloseTo(0.2, 8);
     expect(repeated.velocity).toBe(0);
     expect(backwards.velocity).toBe(0);
-    expect([moved, repeated, backwards].every((pose) => Number.isFinite(pose.trackingConfidence))).toBe(true);
+    expect(repeated.trackingConfidence).toBe(0);
+    expect(backwards.trackingConfidence).toBe(0);
+  });
+
+  it("invalidates continuity when either sender capture timestamp is missing", () => {
+    const missingPreviousTimestamp = openHand();
+    delete missingPreviousTimestamp.capturedAt;
+    const previous = deriveHandFeatures(missingPreviousTimestamp);
+    const current = deriveHandFeatures(openHand({ capturedAt: 200 }), previous);
+
+    const missingCurrentTimestamp = openHand();
+    delete missingCurrentTimestamp.capturedAt;
+    const missingCurrent = deriveHandFeatures(missingCurrentTimestamp, deriveHandFeatures(openHand()));
+
+    expect(current.velocity).toBe(0);
+    expect(current.trackingConfidence).toBe(0);
+    expect(missingCurrent.velocity).toBe(0);
+    expect(missingCurrent.trackingConfidence).toBe(0);
   });
 
   it("retains sender capture time when chaining direct derived poses", () => {
@@ -158,7 +206,7 @@ describe("hand pose features", () => {
       seq: 3,
       capturedAt: 200,
       modeEpoch: 1,
-      sample: openHand({ handedness: "Left", translate: [0.8, 0, 0], scale: 1.7 }),
+      sample: openHand({ physicalHandedness: "Left", translate: [0.8, 0, 0], scale: 1.7 }),
       previous,
     });
 
@@ -177,6 +225,12 @@ describe("hand pose features", () => {
     expect(larger.relativeScale).toBeCloseTo(1.25, 8);
   });
 
+  it("rejects finite geometry when derived feature arithmetic overflows", () => {
+    expect(() => deriveHandFeatures(openHand({ scale: 1e303 }), null, {
+      palmSpan: 1.000001e-6,
+    })).toThrow(/finite/);
+  });
+
   it("rejects missing, degenerate, and non-finite landmarks", () => {
     const extraCoordinate = openHand();
     extraCoordinate.landmarks[0] = [0.5, 0.82, 0, 1];
@@ -187,7 +241,7 @@ describe("hand pose features", () => {
     expect(() => deriveHandFeatures(openHand({ x: Number.NaN }))).toThrow(/finite/);
     expect(() => deriveHandFeatures(openHand({ degenerate: true }))).toThrow(/palm/);
     expect(() => deriveHandFeatures(openHand({ worldScale: 0.001 }))).toThrow(/palm/);
-    expect(() => deriveHandFeatures(openHand({ handedness: "Unknown" }))).toThrow(/handedness/);
+    expect(() => deriveHandFeatures(openHand({ rawHandedness: "Unknown" }))).toThrow(/handedness/);
   });
 
   it("creates a task-scoped tracked frame with no raw-media fields", () => {
