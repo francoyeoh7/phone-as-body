@@ -293,4 +293,39 @@ describe("MediaPipeHandTracker", () => {
     expect(detectForVideo).toHaveBeenCalledOnce();
     expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "tracked" }));
   });
+
+  it("defaults to the compatible main-thread runtime even when Worker APIs exist", async () => {
+    const workerPostMessage = vi.fn();
+    const createdWorkers = [];
+    class WorkerStub {
+      constructor() {
+        this.postMessage = workerPostMessage;
+        this.terminate = vi.fn();
+        createdWorkers.push(this);
+      }
+    }
+    vi.stubGlobal("Worker", WorkerStub);
+    const detectForVideo = vi.fn(() => handResult());
+    const createFromOptions = vi.fn(async () => ({ detectForVideo, close: vi.fn() }));
+    const { tracker, callbacks } = setup({
+      OffscreenCanvas: class {},
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
+      loadModule: vi.fn(async () => ({
+        FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
+        HandLandmarker: { createFromOptions },
+      })),
+    });
+
+    try {
+      await tracker.setTask({ active: true });
+      await tracker.sample();
+
+      expect(createdWorkers).toHaveLength(0);
+      expect(workerPostMessage).not.toHaveBeenCalled();
+      expect(createFromOptions).toHaveBeenCalledOnce();
+      expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "tracked" }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

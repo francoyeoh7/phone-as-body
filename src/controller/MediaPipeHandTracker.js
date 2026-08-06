@@ -19,13 +19,6 @@ function frontFacing(video) {
   return video?.srcObject?.getTracks?.()?.some((track) => track?.getSettings?.()?.facingMode === "user");
 }
 
-function createBundledWorker() {
-  return new Worker(
-    new URL("./hand-tracking.worker.js", import.meta.url),
-    { type: "module" },
-  );
-}
-
 function pickCandidate(result, previous) {
   const landmarks = result?.landmarks ?? [];
   if (!landmarks.length) return null;
@@ -67,8 +60,10 @@ export class MediaPipeHandTracker {
     this.onFrame = onFrame;
     this.onState = onState;
     this.scheduler = { ...defaultScheduler, ...scheduler };
-    this.workerFactory = workerFactory
-      ?? (typeof Worker !== "undefined" ? createBundledWorker : null);
+    // MediaPipe Tasks Vision 1.0.1 needs a main-thread ModuleFactory in this
+    // deployment. Keep workerFactory injectable for future compatible builds,
+    // but use the proven main-thread runtime by default.
+    this.workerFactory = workerFactory ?? null;
     this.worker = worker ?? null;
     this.bitmapFactory = bitmapFactory;
     this.OffscreenCanvas = OffscreenCanvasCtor;
