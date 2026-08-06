@@ -91,16 +91,21 @@ The confirmed gesture carries the focused target ID, and `PlayerController` veri
 - Hand lost: retract/fade over a short interval; never teleport to a default center pose.
 - Permission denied, unsupported device, or model failure: hide the tracked hand and preserve the existing touch fallback. These states do not alter gyro requirements.
 
-The checked-in MIT WebXR hand remains the functional fallback because it matches the runtime skeleton exactly. The visible forearm upgrade must use a source with explicit redistribution rights. Current candidates are CC0 FPS arm packages; a candidate is accepted only after its downloaded GLB hierarchy, normals, skin weights, and license are inspected. Assets with missing Fab license terms or unclear provenance are rejected.
+The checked-in MIT WebXR hand remains the functional fallback because it matches the runtime skeleton exactly. The primary presentation asset is Drillimpact's PSX First Person Arms v1.1.0 from `https://drillimpact.itch.io/psx-first-person-arms-free`. Its source page declares CC0/Public Domain and the inspected GLB contains both forearms, a 52-joint skinned hierarchy, a hand-painted embedded texture, and separate left/right joint weights. The project records the source URL, version, license statement, and asset hash. The runtime adapter treats its hierarchical bones differently from the flat WebXR fallback; it is not renamed and dropped into the old transform loop.
+
+Assets with missing Fab license terms or unclear provenance are rejected.
 
 ## Components
 
 - `src/shared/hand-reach.js`: pure reach-region eligibility, hysteresis, and normalized entry progress.
 - `src/shared/hand-pose.js`: canonical camera-space pose and handedness; adds reach data without changing raw transport.
-- `src/desktop/FirstPersonHand.js`: rest-referenced skeleton retargeting, lower-edge arm anchor, target contact interpolation, and loss fade.
+- `src/controller/MediaPipeHandTracker.js`: rear-camera single-hand inference, rotation-normalized output, and stable palm-span calibration.
+- `src/desktop/FirstPersonHand.js`: rest-referenced flat-rig fallback and hierarchical arm retargeting, lower-edge arm anchor, target contact interpolation, and loss fade.
 - `src/desktop/HandTrackingDirector.js`: target/contact context, stable pose ownership, and reach-aware gesture/task routing.
+- `src/desktop/HandGestureGate.js`: target-bound grab hysteresis and cooldown.
 - `src/desktop/PlayerController.js`: reports focused target and its world contact point.
 - `src/desktop/DesktopApp.js`: connects focus/contact data to the hand director without changing existing control paths.
+- `src/shared/hand-task-state.js`: brief candidate/hold loss grace so one bad frame cannot fail sustained interaction.
 
 ## Reusable Prior Art Reviewed
 
