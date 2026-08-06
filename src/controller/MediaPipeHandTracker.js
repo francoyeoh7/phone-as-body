@@ -19,6 +19,13 @@ function frontFacing(video) {
   return video?.srcObject?.getTracks?.()?.some((track) => track?.getSettings?.()?.facingMode === "user");
 }
 
+function createBundledWorker() {
+  return new Worker(
+    new URL("./hand-tracking.worker.js", import.meta.url),
+    { type: "module" },
+  );
+}
+
 function pickCandidate(result, previous) {
   const landmarks = result?.landmarks ?? [];
   if (!landmarks.length) return null;
@@ -52,7 +59,6 @@ export class MediaPipeHandTracker {
     worker,
     createImageBitmap: bitmapFactory = globalThis.createImageBitmap,
     OffscreenCanvas: OffscreenCanvasCtor = globalThis.OffscreenCanvas,
-    Worker: WorkerCtor = globalThis.Worker,
     loadModule = () => import("@mediapipe/tasks-vision"),
     landmarkerFactory = null,
     sampleIntervalMs = SAMPLE_INTERVAL_MS,
@@ -61,11 +67,11 @@ export class MediaPipeHandTracker {
     this.onFrame = onFrame;
     this.onState = onState;
     this.scheduler = { ...defaultScheduler, ...scheduler };
-    this.workerFactory = workerFactory;
+    this.workerFactory = workerFactory
+      ?? (typeof Worker !== "undefined" ? createBundledWorker : null);
     this.worker = worker ?? null;
     this.bitmapFactory = bitmapFactory;
     this.OffscreenCanvas = OffscreenCanvasCtor;
-    this.Worker = WorkerCtor;
     this.loadModule = loadModule;
     this.landmarkerFactory = landmarkerFactory;
     this.sampleIntervalMs = sampleIntervalMs;
@@ -99,14 +105,13 @@ export class MediaPipeHandTracker {
     return Boolean(
       this.bitmapFactory
       && this.OffscreenCanvas
-      && (this.worker || this.workerFactory || this.Worker),
+      && (this.worker || this.workerFactory),
     );
   }
 
   createWorker() {
     if (this.worker) return this.worker;
-    if (this.workerFactory) this.worker = this.workerFactory();
-    else this.worker = new this.Worker(new URL("./hand-tracking.worker.js", import.meta.url), { type: "module" });
+    this.worker = this.workerFactory();
     this.bindWorker(this.worker);
     return this.worker;
   }
