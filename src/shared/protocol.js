@@ -28,7 +28,8 @@ const HAND_TRACKED_KEYS = new Set([
   "version", "seq", "capturedAt", "modeEpoch", "state", "handedness",
   "handConfidence", "trackingConfidence", "landmarks", "worldLandmarks",
   "center", "wrist", "curls", "openness", "grabStrength", "palmFacing",
-  "relativeScale", "velocity",
+  "relativeScale", "velocity", "pinchStrength", "reachEligible", "reachProgress",
+  "depth", "palmSpan",
 ]);
 const HAND_STATUS_KEYS = new Set(["version", "seq", "capturedAt", "modeEpoch", "state", "reason"]);
 
@@ -127,7 +128,10 @@ export function isHandFrame(value) {
       && !Object.prototype.hasOwnProperty.call(value, "landmarks")
       && !Object.prototype.hasOwnProperty.call(value, "worldLandmarks");
   }
-  const bounded = [value.handConfidence, value.trackingConfidence, value.openness, value.grabStrength, value.palmFacing];
+  const bounded = [
+    value.handConfidence, value.trackingConfidence, value.openness, value.grabStrength,
+    value.pinchStrength, value.reachProgress, value.palmFacing,
+  ];
   return value.handedness === "left" || value.handedness === "right"
     ? bounded.every((score) => isFiniteNumber(score) && score >= 0 && score <= 1)
       && isLandmarkArray(value.landmarks)
@@ -138,6 +142,9 @@ export function isHandFrame(value) {
       && value.curls.every((score) => isFiniteNumber(score) && score >= 0 && score <= 1)
       && isFiniteNumber(value.relativeScale) && value.relativeScale > 0
       && isFiniteNumber(value.velocity) && value.velocity >= 0
+      && typeof value.reachEligible === "boolean"
+      && isFiniteNumber(value.depth)
+      && isFiniteNumber(value.palmSpan) && value.palmSpan > 0
     : false;
 }
 

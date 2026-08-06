@@ -6,6 +6,7 @@ import {
   deriveHandFeatures,
   normalizeHandedness,
   normalizeMediaPipeHandedness,
+  normalizeCameraLandmarks,
 } from "../src/shared/hand-pose.js";
 import {
   MEDIAPIPE_HAND_LANDMARKS,
@@ -67,6 +68,27 @@ describe("hand pose features", () => {
     expect(fist.grabStrength).toBeGreaterThan(0.68);
     expect(open.curls).toHaveLength(5);
     expect(fist.curls).toHaveLength(5);
+  });
+
+  it("normalizes a 90-degree camera frame before pose derivation", () => {
+    const [rotated] = normalizeCameraLandmarks([{ x: 0.2, y: 0.8, z: -0.1 }], 90);
+    expect(rotated).toMatchObject({ z: -0.1 });
+    expect(rotated.x).toBeCloseTo(0.2, 8);
+    expect(rotated.y).toBeCloseTo(0.2, 8);
+  });
+
+  it("derives pinch strength from thumb/index distance and carries canonical reach fields", () => {
+    const pinched = openHand();
+    pinched.landmarks[8] = { ...pinched.landmarks[4] };
+    const pose = deriveHandFeatures(pinched);
+    const open = deriveHandFeatures(openHand());
+    const frame = createTrackedHandFrame({ seq: 1, capturedAt: 100, modeEpoch: 1, sample: pinched });
+
+    expect(pose.pinchStrength).toBeGreaterThan(0.95);
+    expect(pose.grabStrength).toBeGreaterThan(open.grabStrength);
+    expect(pose.palmSpan).toBeGreaterThan(0);
+    expect(Number.isFinite(pose.depth)).toBe(true);
+    expect(frame).toMatchObject({ pinchStrength: expect.any(Number), reachEligible: false, reachProgress: 0 });
   });
 
   it("bounds every score for in-frame and out-of-frame poses", () => {

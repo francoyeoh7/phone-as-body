@@ -71,6 +71,17 @@ function palmScale(landmarks) {
   ) / 2;
 }
 
+function rotateNormalizedPoint(point, rotation) {
+  const { x, y, z } = point;
+  switch (rotation) {
+    case 0: return { x, y, z };
+    case 90: return { x: 1 - y, y: x, z };
+    case 180: return { x: 1 - x, y: 1 - y, z };
+    case 270: return { x: y, y: 1 - x, z };
+    default: throw new RangeError("camera rotation must be 0, 90, 180, or 270 degrees");
+  }
+}
+
 function palmBasis(worldLandmarks, handedness, inputMirrored) {
   const upRaw = subtract(worldLandmarks[9], worldLandmarks[0]);
   const acrossPalm = subtract(worldLandmarks[17], worldLandmarks[5]);
@@ -183,6 +194,10 @@ function assertFiniteDerivedFeatures(pose) {
     pose.palmFacing,
     pose.relativeScale,
     pose.velocity,
+    pose.pinchStrength,
+    pose.depth,
+    pose.palmSpan,
+    pose.reachProgress,
   ];
   const vectors = [pose.center, pose.wrist.right, pose.wrist.up, pose.wrist.forward, pose.curls];
   if (!scalars.every(Number.isFinite)
@@ -208,6 +223,14 @@ export function normalizeMediaPipeHandedness(value, inputMirrored) {
   return label === "left" ? "right" : "left";
 }
 
+export function normalizeCameraLandmarks(points, rotation = 0) {
+  if (![0, 90, 180, 270].includes(rotation)) {
+    throw new RangeError("camera rotation must be 0, 90, 180, or 270 degrees");
+  }
+  if (!Array.isArray(points)) throw new RangeError("camera landmarks must be an array");
+  return points.map((point) => rotateNormalizedPoint(point, rotation));
+}
+
 export function deriveHandFeatures(sample, previous = null, calibration = null) {
   const landmarks = validateLandmarks(sample?.landmarks, "landmarks");
   const worldLandmarks = validateLandmarks(sample?.worldLandmarks, "world landmarks");
@@ -224,8 +247,9 @@ export function deriveHandFeatures(sample, previous = null, calibration = null) 
   const fingerCurl = (curls[1] + curls[2] + curls[3] + curls[4]) / 4;
   const thumbTarget = average([landmarks[5], landmarks[9]]);
   const thumbOpposition = clamp(1 - distance(landmarks[4], thumbTarget) / (measuredPalmScale * 1.2), 0, 1);
+  const pinchStrength = clamp(1 - distance(landmarks[4], landmarks[8]) / (measuredPalmScale * 0.8), 0, 1);
   const openness = clamp(1 - (fingerCurl * 0.85 + thumbCurl * 0.15), 0, 1);
-  const grabStrength = clamp(fingerCurl * 0.8 + Math.max(thumbCurl, thumbOpposition) * 0.2, 0, 1);
+  const grabStrength = clamp(fingerCurl * 0.7 + Math.max(thumbCurl, thumbOpposition, pinchStrength) * 0.3, 0, 1);
   const palmFacing = clamp(-wrist.forward[2], 0, 1);
 
   const calibratedPalmSpan = Number.isFinite(calibration?.palmSpan) && calibration.palmSpan > PALM_EPSILON
@@ -258,9 +282,14 @@ export function deriveHandFeatures(sample, previous = null, calibration = null) 
     curls,
     openness,
     grabStrength,
+    pinchStrength,
     palmFacing,
     relativeScale,
     velocity: motion.velocity,
+    depth: center[2],
+    palmSpan: measuredPalmScale,
+    reachEligible: false,
+    reachProgress: 0,
   });
 }
 
@@ -271,9 +300,15 @@ export function createTrackedHandFrame({
   sample,
   previous,
   calibration,
+  pose: suppliedPose,
+  reach,
 }) {
-  const pose = deriveHandFeatures({ ...sample, capturedAt }, previous, calibration);
-  return { version: 1, seq, capturedAt, modeEpoch, state: "tracked", ...pose };
+  const pose = suppliedPose ?? deriveHandFeatures({ ...sample, capturedAt }, previous, calibration);
+  const reachFeatures = reach ? {
+    reachEligible: Boolean(reach.eligible),
+    reachProgress: clamp(Number(reach.progress) || 0, 0, 1),
+  } : {};
+  return { version: 1, seq, capturedAt, modeEpoch, state: "tracked", ...pose, ...reachFeatures };
 }
 
 export function createHandStatusFrame({ seq, capturedAt, modeEpoch, state, reason }) {

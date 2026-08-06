@@ -1,8 +1,11 @@
 import {
   createTrackedHandFrame,
   createHandStatusFrame,
+  deriveHandFeatures,
   normalizeMediaPipeHandedness,
+  normalizeCameraLandmarks,
 } from "../shared/hand-pose.js";
+import { createReachState, updateReachState } from "../shared/hand-reach.js";
 
 const SAMPLE_INTERVAL_MS = 1000 / 15;
 const LOST_AFTER_MS = 250;
@@ -17,6 +20,14 @@ const defaultScheduler = {
 
 function frontFacing(video) {
   return video?.srcObject?.getTracks?.()?.some((track) => track?.getSettings?.()?.facingMode === "user");
+}
+
+function videoRotation(video) {
+  const trackRotation = video?.srcObject?.getTracks?.()
+    ?.map((track) => track?.getSettings?.()?.rotation)
+    .find(Number.isFinite);
+  const rotation = video?.cameraRotation ?? video?.videoRotation ?? trackRotation ?? 0;
+  return [0, 90, 180, 270].includes(rotation) ? rotation : 0;
 }
 
 function pickCandidate(result, previous) {
@@ -86,6 +97,8 @@ export class MediaPipeHandTracker {
     this.lastState = null;
     this.lastLostAt = -Infinity;
     this.previous = null;
+    this.reachState = createReachState();
+    this.calibration = null;
     this.unavailableEpoch = null;
     this.videoUnavailableSince = null;
     if (this.worker) this.bindWorker(this.worker);
@@ -136,6 +149,8 @@ export class MediaPipeHandTracker {
     this.workerReadyEpoch = null;
     this.active = Boolean(task.active);
     this.previous = null;
+    this.reachState = createReachState();
+    this.calibration = null;
     this.lastResultAt = this.scheduler.now();
     this.lastLostAt = -Infinity;
     this.unavailableEpoch = null;
@@ -165,7 +180,7 @@ export class MediaPipeHandTracker {
       const create = this.landmarkerFactory ?? module.HandLandmarker.createFromOptions.bind(module.HandLandmarker);
       const landmarker = await create(fileset, {
         baseOptions: { modelAssetPath: "/assets/mediapipe/hand_landmarker.task" },
-        runningMode: "VIDEO", numHands: 2,
+        runningMode: "VIDEO", numHands: 1,
         minHandDetectionConfidence: 0.62, minHandPresenceConfidence: 0.58, minTrackingConfidence: 0.58,
       });
       if (!this.isEpochActive(epoch)) {
@@ -262,15 +277,25 @@ export class MediaPipeHandTracker {
     const retainedLabel = nearPrevious && this.previous.handedness !== candidate.label
       ? (this.previous.handedness === "left" ? "Right" : "Left")
       : rawHandedness?.categoryName;
+    const rotation = videoRotation(this.getVideo());
     const sample = {
-      landmarks: result.landmarks[candidate.index],
-      worldLandmarks: result.worldLandmarks?.[candidate.index] ?? result.landmarks[candidate.index],
+      landmarks: normalizeCameraLandmarks(result.landmarks[candidate.index], rotation),
+      worldLandmarks: normalizeCameraLandmarks(result.worldLandmarks?.[candidate.index] ?? result.landmarks[candidate.index], rotation),
       handedness: { ...rawHandedness, categoryName: retainedLabel },
       capturedAt,
       inputMirrored: false,
     };
     try {
-      const frame = createTrackedHandFrame({ seq: this.seq++, capturedAt, modeEpoch: this.modeEpoch, sample, previous: this.previous });
+      const pose = deriveHandFeatures(sample, this.previous, this.calibration);
+      const reach = updateReachState(this.reachState, pose, capturedAt);
+      this.reachState = reach.state;
+      if (reach.entered && !this.calibration && pose.palmSpan > 0) {
+        this.calibration = { palmSpan: pose.palmSpan };
+      }
+      const frame = createTrackedHandFrame({
+        seq: this.seq++, capturedAt, modeEpoch: this.modeEpoch, sample, previous: this.previous,
+        calibration: this.calibration, pose, reach,
+      });
       this.previous = frame;
       this.lastResultAt = capturedAt;
       this.lastLostAt = -Infinity;

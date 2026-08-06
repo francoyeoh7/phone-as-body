@@ -52,14 +52,14 @@ describe("MediaPipeHandTracker", () => {
     expect(worker.postMessage).toHaveBeenCalledOnce();
   });
 
-  it("uses VIDEO mode, numHands 2, emits one frame and inputMirrored false", async () => {
+  it("uses VIDEO mode with one hand, emits a calibrated frame and inputMirrored false", async () => {
     const createFromOptions = vi.fn(async (_fileset, options) => ({ detectForVideo: vi.fn(() => handResult()), close: vi.fn(), options }));
     const { tracker, callbacks } = setup({ worker: false, loadModule: vi.fn(async () => ({ FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) }, HandLandmarker: { createFromOptions } })) });
     await tracker.setTask({ active: true });
     tracker.sample();
     await Promise.resolve();
-    expect(createFromOptions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ runningMode: "VIDEO", numHands: 2 }));
-    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "right" }));
+    expect(createFromOptions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ runningMode: "VIDEO", numHands: 1 }));
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "right", palmSpan: expect.any(Number) }));
   });
 
   it("rejects an explicitly front-facing stream before bitmap creation", async () => {
