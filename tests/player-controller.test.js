@@ -31,6 +31,9 @@ describe("player phone view deltas", () => {
 
   it("softly attracts the camera and reports a newly focused assisted target", () => {
     const focused = [];
+    const interactionAnchor = {
+      getWorldPosition: (target) => target.set(0.1, 0.2, -0.9),
+    };
     const targetRoot = {
       visible: true,
       getWorldPosition: (target) => target.set(0, 0, -1),
@@ -53,12 +56,67 @@ describe("player phone view deltas", () => {
       onTarget: (event) => focused.push(event),
     });
 
+    player.interactables[0].interactionAnchor = interactionAnchor;
     player.updateInteraction();
 
     expect(player.selected.id).toBe("fuse");
-    expect(player.aimAssist.target).toEqual(new THREE.Vector3(0, 0, -1));
+    expect(player.aimAssist.target).toEqual(new THREE.Vector3(0.1, 0.2, -0.9));
     expect(player.aimAssist.strength).toBe(0.28);
-    expect(focused).toEqual([{ id: "fuse", focused: true }]);
+    expect(focused).toEqual([expect.objectContaining({
+      id: "fuse",
+      focused: true,
+      contactPoint: { x: 0.1, y: 0.2, z: -0.9 },
+    })]);
+    expect(focused[0].contactNormal.x).toBeCloseTo(0, 8);
+    expect(focused[0].contactNormal.y).toBeCloseTo(0, 8);
+    expect(focused[0].contactNormal.z).toBeCloseTo(1, 8);
+    expect(focused[0].focusedAt).toEqual(expect.any(Number));
+  });
+
+  it("reports the actual raycast hit point and world-space surface normal", () => {
+    const focused = [];
+    const targetObject = {
+      userData: { interactableId: "faucet" },
+      matrixWorld: new THREE.Matrix4().makeRotationY(Math.PI / 2),
+    };
+    const targetRoot = { visible: true };
+    const hit = {
+      distance: 1.1,
+      object: targetObject,
+      point: new THREE.Vector3(0.25, 1.2, -1.4),
+      face: { normal: new THREE.Vector3(0, 0, 1) },
+    };
+    const player = Object.assign(Object.create(PlayerController.prototype), {
+      camera: {
+        position: new THREE.Vector3(0, 0, 0),
+        getWorldDirection: (target) => target.set(0, 0, -1),
+      },
+      raycaster: {
+        setFromCamera: () => {},
+        intersectObjects: () => [hit],
+      },
+      interactables: [{ id: "faucet", label: "水龙头", enabled: true, root: targetRoot, halo: { visible: false } }],
+      targetPosition: new THREE.Vector3(),
+      forward: new THREE.Vector3(),
+      selected: null,
+      aimAssist: null,
+      onPrompt: () => {},
+      onTarget: (event) => focused.push(event),
+    });
+    targetObject.parent = targetRoot;
+
+    player.updateInteraction();
+
+    expect(focused).toHaveLength(1);
+    expect(focused[0]).toEqual(expect.objectContaining({
+      id: "faucet",
+      focused: true,
+      contactPoint: { x: 0.25, y: 1.2, z: -1.4 },
+    }));
+    expect(focused[0].contactNormal.x).toBeCloseTo(1, 8);
+    expect(focused[0].contactNormal.y).toBeCloseTo(0, 8);
+    expect(focused[0].contactNormal.z).toBeCloseTo(0, 8);
+    expect(focused[0].focusedAt).toEqual(expect.any(Number));
   });
 
   it("switches to keyboard fallback without applying a stale phone delta", () => {

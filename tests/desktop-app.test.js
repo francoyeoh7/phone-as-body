@@ -221,15 +221,27 @@ describe("desktop control feedback", () => {
       currentTargetId: null,
       phone: { send: vi.fn() },
       ui: { setTargetFocused: vi.fn() },
+      handTracking: { setTarget: vi.fn() },
     });
 
-    app.handleTargetFocus({ id: "fuse", focused: true });
-    app.handleTargetFocus({ id: null, focused: false });
+    app.handleTargetFocus({
+      id: "fuse",
+      focused: true,
+      contactPoint: { x: 0.1, y: 0.2, z: -0.9 },
+      contactNormal: { x: 0, y: 0, z: 1 },
+      focusedAt: 12,
+    });
+    app.handleTargetFocus({ id: null, focused: false, focusedAt: 30 });
 
     expect(app.phone.send).toHaveBeenNthCalledWith(1, { type: "target-focus", id: "fuse" });
     expect(app.phone.send).toHaveBeenNthCalledWith(2, { type: "target-focus", id: null });
     expect(app.ui.setTargetFocused).toHaveBeenNthCalledWith(1, true);
     expect(app.ui.setTargetFocused).toHaveBeenNthCalledWith(2, false);
+    expect(app.handTracking.setTarget).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      id: "fuse",
+      contactPoint: { x: 0.1, y: 0.2, z: -0.9 },
+    }));
+    expect(app.handTracking.setTarget).toHaveBeenNthCalledWith(2, null);
   });
 });
 

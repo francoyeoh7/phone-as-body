@@ -3,6 +3,13 @@ import { HandPoseStream } from "./HandPoseStream.js";
 import { HandGestureGate } from "./HandGestureGate.js";
 import { HandTaskStateMachine } from "../shared/hand-task-state.js";
 
+const finitePoint = (value) => {
+  const point = Array.isArray(value)
+    ? value.slice(0, 3)
+    : [value?.x, value?.y, value?.z];
+  return point.length === 3 && point.every(Number.isFinite) ? point : null;
+};
+
 export class HandTrackingDirector {
   constructor(options = {}) {
     this.hand = options.hand ?? new FirstPersonHand({ camera: options.camera });
@@ -18,6 +25,24 @@ export class HandTrackingDirector {
     this.fallback = false;
     this.destroyed = false;
     this.paused = false;
+    this.target = null;
+  }
+
+  setTarget(target = null) {
+    const next = target?.id ? {
+      id: target.id,
+      contactPoint: finitePoint(target.contactPoint),
+      contactNormal: finitePoint(target.contactNormal),
+      focusedAt: Number.isFinite(target.focusedAt) ? target.focusedAt : null,
+    } : null;
+    const changed = (this.target?.id ?? null) !== (next?.id ?? null);
+    this.target = next;
+    this.hand?.setTargetContact?.(next ? {
+      point: next.contactPoint,
+      normal: next.contactNormal,
+    } : null);
+    if (changed) this.gestureGate.reset({ requireRelease: true });
+    return this.target;
   }
 
   beginTask({ context, requiredAction, preCalibrated = false, skipCalibration = false } = {}) {
@@ -76,8 +101,16 @@ export class HandTrackingDirector {
       this.hand?.applyPose?.({ state: sample.state, opacity: 0 }, delta);
     }
     if (!this.owner) {
+      if (!this.target?.id) {
+        return sample ? { sample, fallback: this.fallback } : null;
+      }
       if (this.gestureGate.update(sample, now)) {
-        this.onGesture({ type: "grab", at: now, pose: sample?.pose ?? null });
+        this.onGesture({
+          type: "grab",
+          at: now,
+          pose: sample?.pose ?? null,
+          targetId: this.target.id,
+        });
       }
       return sample ? { sample, fallback: this.fallback } : null;
     }
@@ -95,6 +128,7 @@ export class HandTrackingDirector {
       unavailable: this.fallback,
       sample,
       fresh: sample?.fresh === true,
+      target: this.target,
     };
   }
 

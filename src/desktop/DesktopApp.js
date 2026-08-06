@@ -207,6 +207,7 @@ export class DesktopApp {
       || !this.currentTargetId
       || this.destroyed
       || this.paused
+      || (event?.targetId && event.targetId !== this.currentTargetId)
       || this.doorDefense?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
@@ -215,10 +216,20 @@ export class DesktopApp {
     return true;
   }
 
-  handleTargetFocus({ id, focused }) {
+  handleTargetFocus(target = {}) {
+    const { id, focused } = target;
+    const previousTargetId = this.currentTargetId;
     this.currentTargetId = focused ? id : null;
     this.ui?.setTargetFocused(Boolean(this.currentTargetId));
-    this.phone?.send({ type: "target-focus", id: this.currentTargetId });
+    this.handTracking?.setTarget?.(this.currentTargetId ? {
+      id: this.currentTargetId,
+      contactPoint: target.contactPoint ?? null,
+      contactNormal: target.contactNormal ?? null,
+      focusedAt: target.focusedAt ?? null,
+    } : null);
+    if (previousTargetId !== this.currentTargetId) {
+      this.phone?.send({ type: "target-focus", id: this.currentTargetId });
+    }
   }
 
   handlePhoneRoom({ detail }) {

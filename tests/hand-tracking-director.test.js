@@ -45,10 +45,20 @@ describe("HandTrackingDirector", () => {
     const gestureGate = { update: vi.fn(() => true), reset: vi.fn() };
     const hand = { fallback: false, setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
     const director = new HandTrackingDirector({ hand, gestureGate, onGesture, now: () => now, sendControllerEvent: vi.fn() });
+    director.setTarget({
+      id: "washbasin",
+      contactPoint: { x: 0.2, y: 1, z: -1 },
+      contactNormal: { x: 0, y: 0, z: 1 },
+      focusedAt: 4,
+    });
     director.acceptFrame(frame({ receivedAt: now }));
 
     director.update(0);
-    expect(onGesture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: "grab", at: now }));
+    expect(onGesture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "grab",
+      at: now,
+      targetId: "washbasin",
+    }));
 
     director.beginTask({ context: "door-defense", requiredAction: "brace" });
     now = 20;
@@ -56,6 +66,61 @@ describe("HandTrackingDirector", () => {
     director.update(0);
     expect(onGesture).toHaveBeenCalledOnce();
     expect(gestureGate.reset).toHaveBeenCalledWith({ requireRelease: true });
+  });
+
+  it("propagates target contact to the hand and rearms the gate on focus loss or change", () => {
+    const gestureGate = { update: vi.fn(() => false), reset: vi.fn() };
+    const hand = {
+      fallback: false,
+      setContext: vi.fn(),
+      setVisible: vi.fn(),
+      setTargetContact: vi.fn(),
+      applyPose: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const director = new HandTrackingDirector({ hand, gestureGate, now: () => 100, sendControllerEvent: vi.fn() });
+
+    const target = {
+      id: "faucet",
+      contactPoint: { x: 0.25, y: 1.2, z: -1.4 },
+      contactNormal: { x: 1, y: 0, z: 0 },
+      focusedAt: 75,
+    };
+    expect(director.setTarget(target)).toEqual({
+      id: "faucet",
+      contactPoint: [0.25, 1.2, -1.4],
+      contactNormal: [1, 0, 0],
+      focusedAt: 75,
+    });
+    expect(hand.setTargetContact).toHaveBeenLastCalledWith({
+      point: [0.25, 1.2, -1.4],
+      normal: [1, 0, 0],
+    });
+    expect(gestureGate.reset).toHaveBeenLastCalledWith({ requireRelease: true });
+
+    director.setTarget({ ...target, contactPoint: { x: 0.3, y: 1.2, z: -1.4 } });
+    expect(gestureGate.reset).toHaveBeenCalledTimes(1);
+    expect(hand.setTargetContact).toHaveBeenLastCalledWith({
+      point: [0.3, 1.2, -1.4],
+      normal: [1, 0, 0],
+    });
+
+    director.setTarget(null);
+    expect(hand.setTargetContact).toHaveBeenLastCalledWith(null);
+    expect(gestureGate.reset).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not consume a grab while the reticle has no focused target", () => {
+    const gestureGate = { update: vi.fn(() => true), reset: vi.fn() };
+    const onGesture = vi.fn();
+    const hand = { fallback: false, setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
+    const director = new HandTrackingDirector({ hand, gestureGate, onGesture, now: () => 10, sendControllerEvent: vi.fn() });
+
+    director.acceptFrame(frame({ receivedAt: 10 }));
+    director.update(0);
+
+    expect(gestureGate.update).not.toHaveBeenCalled();
+    expect(onGesture).not.toHaveBeenCalled();
   });
 
   it("owns one context and emits exactly-once task lifecycle events", () => {

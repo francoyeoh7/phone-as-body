@@ -2,8 +2,27 @@ import * as THREE from "three";
 import { cameraRelativeMovement, dampVector } from "../shared/movement.js";
 import { chooseAssistedTarget } from "../shared/interaction.js";
 
+const cloneVector = (value) => {
+  if (value?.isVector3) return value.clone();
+  if (Array.isArray(value) && value.length >= 3 && value.slice(0, 3).every(Number.isFinite)) {
+    return new THREE.Vector3(value[0], value[1], value[2]);
+  }
+  if (value && [value.x, value.y, value.z].every(Number.isFinite)) {
+    return new THREE.Vector3(value.x, value.y, value.z);
+  }
+  return null;
+};
+
+const serializeVector = (value) => (value?.isVector3
+  ? { x: value.x, y: value.y, z: value.z }
+  : null);
+
+const readClock = () => (typeof performance !== "undefined" && typeof performance.now === "function"
+  ? performance.now()
+  : Date.now());
+
 export class PlayerController {
-  constructor({ RAPIER, world, camera, renderer, interactables, onInteract, onAction, onPrompt, onTarget }) {
+  constructor({ RAPIER, world, camera, renderer, interactables, onInteract, onAction, onPrompt, onTarget, now }) {
     this.world = world;
     this.camera = camera;
     this.renderer = renderer;
@@ -12,6 +31,7 @@ export class PlayerController {
     this.onAction = onAction;
     this.onPrompt = onPrompt;
     this.onTarget = onTarget;
+    this.now = typeof now === "function" ? now : readClock;
     this.keys = new Set();
     this.phoneInput = {
       seq: -1,
@@ -35,6 +55,9 @@ export class PlayerController {
     this.raycaster = new THREE.Raycaster();
     this.pointerLocked = false;
     this.selected = null;
+    this.focusedAt = null;
+    this.lastTargetContact = null;
+    this.lastTargetNormal = null;
     this.forward = new THREE.Vector3();
     this.targetPosition = new THREE.Vector3();
 
@@ -224,8 +247,17 @@ export class PlayerController {
     this.clearAimAssist();
     if (this.selected?.halo) this.selected.halo.visible = false;
     this.selected = null;
+    this.focusedAt = null;
+    this.lastTargetContact = null;
+    this.lastTargetNormal = null;
     this.onPrompt?.(null);
-    this.onTarget?.({ id: null, focused: false });
+    this.onTarget?.({
+      id: null,
+      focused: false,
+      contactPoint: null,
+      contactNormal: null,
+      focusedAt: null,
+    });
   }
 
   setCinematicCamera(position, target) {
@@ -267,10 +299,23 @@ export class PlayerController {
       .map((entry) => entry.root);
     const hits = this.raycaster.intersectObjects(enabledRoots, true);
     let selected = null;
+    let contactPoint = null;
+    let contactNormal = null;
     if (hits.length > 0 && hits[0].distance <= 2.35) {
-      let object = hits[0].object;
+      const hit = hits[0];
+      let object = hit.object;
       while (object && !object.userData.interactableId) object = object.parent;
       selected = this.interactables.find((entry) => entry.id === object?.userData.interactableId) ?? null;
+      if (selected) {
+        contactPoint = cloneVector(hit.point);
+        contactNormal = cloneVector(hit.face?.normal);
+        if (contactNormal && hit.object?.matrixWorld) {
+          contactNormal.applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
+        }
+        if (!contactNormal) {
+          contactNormal = this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1).normalize();
+        }
+      }
     }
     if (!selected) {
       this.camera.getWorldDirection(this.forward);
@@ -284,19 +329,43 @@ export class PlayerController {
         this.forward,
       );
       selected = assisted ? this.interactables.find((entry) => entry.id === assisted.id) : null;
+      if (selected) {
+        const anchor = selected.interactionAnchor ?? selected.root;
+        contactPoint = anchor?.getWorldPosition?.(this.targetPosition.clone()) ?? null;
+        contactNormal = this.forward.clone().multiplyScalar(-1).normalize();
+      }
     }
     if (selected) {
-      const targetPosition = selected.root.getWorldPosition(this.targetPosition.clone());
-      this.setAimAssist(targetPosition, 0.28);
+      if (!contactPoint) {
+        const anchor = selected.interactionAnchor ?? selected.root;
+        contactPoint = anchor?.getWorldPosition?.(this.targetPosition.clone()) ?? null;
+      }
+      this.setAimAssist(contactPoint ?? selected.root.getWorldPosition(this.targetPosition.clone()), 0.28);
     } else {
       this.clearAimAssist();
     }
-    if (selected !== this.selected) {
+    const selectionChanged = selected !== this.selected;
+    const contactChanged = Boolean(contactPoint && (!this.lastTargetContact
+      || this.lastTargetContact.distanceTo(contactPoint) > 0.002));
+    const normalChanged = Boolean(contactNormal && (!this.lastTargetNormal
+      || this.lastTargetNormal.angleTo(contactNormal) > 0.015));
+    if (selectionChanged || contactChanged || normalChanged) {
       if (this.selected?.halo) this.selected.halo.visible = false;
       if (selected?.halo) selected.halo.visible = true;
+      if (selectionChanged) this.focusedAt = selected
+        ? (typeof this.now === "function" ? this.now() : readClock())
+        : null;
       this.selected = selected;
+      this.lastTargetContact = contactPoint?.clone?.() ?? null;
+      this.lastTargetNormal = contactNormal?.clone?.() ?? null;
       this.onPrompt?.(selected?.label ?? null);
-      this.onTarget?.({ id: selected?.id ?? null, focused: Boolean(selected) });
+      this.onTarget?.({
+        id: selected?.id ?? null,
+        focused: Boolean(selected),
+        contactPoint: serializeVector(contactPoint),
+        contactNormal: serializeVector(contactNormal),
+        focusedAt: selected ? this.focusedAt : null,
+      });
     }
   }
 
