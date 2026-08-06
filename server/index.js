@@ -5,6 +5,7 @@ import express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import { createSessionRegistry } from "./session-registry.js";
 import { createUeBridge } from "./ue-bridge.js";
+import { shouldServeSpaShell } from "./spa-fallback.js";
 import { EVENTS, isDesktopEvent, isRoomCode } from "../src/shared/protocol.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -125,7 +126,8 @@ io.on("connection", (socket) => {
 
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(root, "dist")));
-  app.get(/.*/, (_request, response) => {
+  app.use((request, response, next) => {
+    if (!shouldServeSpaShell(request)) return next();
     response.sendFile(path.join(root, "dist", "index.html"));
   });
 } else {
