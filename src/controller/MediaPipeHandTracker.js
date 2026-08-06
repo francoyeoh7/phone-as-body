@@ -4,6 +4,7 @@ import {
   deriveHandFeatures,
   normalizeMediaPipeHandedness,
   normalizeCameraLandmarks,
+  normalizeCameraWorldLandmarks,
 } from "../shared/hand-pose.js";
 import { createReachState, updateReachState } from "../shared/hand-reach.js";
 
@@ -278,9 +279,13 @@ export class MediaPipeHandTracker {
       ? (this.previous.handedness === "left" ? "Right" : "Left")
       : rawHandedness?.categoryName;
     const rotation = videoRotation(this.getVideo());
+    const rawLandmarks = result.landmarks[candidate.index];
+    const rawWorldLandmarks = result.worldLandmarks?.[candidate.index];
     const sample = {
-      landmarks: normalizeCameraLandmarks(result.landmarks[candidate.index], rotation),
-      worldLandmarks: normalizeCameraLandmarks(result.worldLandmarks?.[candidate.index] ?? result.landmarks[candidate.index], rotation),
+      landmarks: normalizeCameraLandmarks(rawLandmarks, rotation),
+      worldLandmarks: rawWorldLandmarks
+        ? normalizeCameraWorldLandmarks(rawWorldLandmarks, rotation)
+        : normalizeCameraLandmarks(rawLandmarks, rotation),
       handedness: { ...rawHandedness, categoryName: retainedLabel },
       capturedAt,
       inputMirrored: false,
@@ -310,6 +315,9 @@ export class MediaPipeHandTracker {
     if (now - this.lastResultAt < LOST_AFTER_MS) { this.scheduleStatus(now); return; }
     if (now - this.lastLostAt < STATUS_HEARTBEAT_MS) { this.scheduleStatus(now); return; }
     this.emitStatusFrame("lost", "no-hand", now);
+    this.reachState = createReachState();
+    this.calibration = null;
+    this.previous = null;
     this.lastLostAt = now;
     this.scheduleStatus(now);
   }

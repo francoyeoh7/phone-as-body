@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createReachState, updateReachState } from "../src/shared/hand-reach.js";
 
-function pose({ wristY = 0.8, palmY = 0.65, coverage = 21 } = {}) {
+function pose({ wristY = 0.8, palmY = 0.65, palmX = 0.5, coverage = 21 } = {}) {
   return {
-    center: [0.5, palmY, 0],
-    landmarks: Array.from({ length: 21 }, (_, index) => ({
-      x: index < coverage ? 0.5 : 1.2,
-      y: index === 0 ? wristY : palmY,
-      z: 0,
-    })),
+    center: [palmX, palmY, 0],
+    landmarks: Array.from({ length: 21 }, (_, index) => [
+      index < coverage ? palmX : 1.2,
+      index === 0 ? wristY : palmY,
+      0,
+    ]),
   };
 }
 
@@ -36,9 +36,12 @@ describe("hand reach state", () => {
 
     result = updateReachState(createReachState(), pose({ coverage: 15 }), 0);
     expect(result).toMatchObject({ eligible: false, progress: 0 });
+
+    result = updateReachState(createReachState(), pose({ palmX: 0.04 }), 0);
+    expect(result).toMatchObject({ eligible: false, progress: 0 });
   });
 
-  it("keeps acquired reach through entry hysteresis but resets after 120ms above the corridor", () => {
+  it("keeps acquired reach through entry hysteresis but resets after the wrist exits the top for 120ms", () => {
     let state = createReachState();
     for (const now of [0, 70, 140]) state = updateReachState(state, pose(), now).state;
 
@@ -46,10 +49,22 @@ describe("hand reach state", () => {
     state = result.state;
     expect(result).toMatchObject({ eligible: true, entered: false });
 
-    result = updateReachState(state, pose({ wristY: 0.2, palmY: 0.14 }), 240);
+    result = updateReachState(state, pose({ wristY: 0.2, palmY: 0.3 }), 240);
     state = result.state;
     expect(result.eligible).toBe(true);
-    result = updateReachState(state, pose({ wristY: 0.2, palmY: 0.14 }), 360);
+    result = updateReachState(state, pose({ wristY: 0.2, palmY: 0.3 }), 360);
     expect(result).toMatchObject({ eligible: false, progress: 0 });
+  });
+
+  it("uses a wider outer horizontal margin before resetting an acquired hand", () => {
+    let state = createReachState();
+    for (const now of [0, 70, 140]) state = updateReachState(state, pose(), now).state;
+
+    let result = updateReachState(state, pose({ palmX: 0.02 }), 180);
+    expect(result.eligible).toBe(true);
+    result = updateReachState(result.state, pose({ palmX: -0.01 }), 240);
+    expect(result.eligible).toBe(true);
+    result = updateReachState(result.state, pose({ palmX: -0.01 }), 360);
+    expect(result.eligible).toBe(false);
   });
 });

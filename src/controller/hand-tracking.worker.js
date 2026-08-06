@@ -19,7 +19,7 @@ export function createWorkerHandler({
       },
       canvas,
       runningMode: "VIDEO",
-      numHands: 2,
+      numHands: 1,
       minHandDetectionConfidence: 0.62,
       minHandPresenceConfidence: 0.58,
       minTrackingConfidence: 0.58,

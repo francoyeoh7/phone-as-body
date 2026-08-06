@@ -173,6 +173,21 @@ describe("MediaPipeHandTracker", () => {
     expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250, 750]);
   });
 
+  it("clears reach acquisition and depth calibration after sustained hand loss", () => {
+    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 250) };
+    const { tracker } = setup({ scheduler });
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+    tracker.lastResultAt = 0;
+    tracker.reachState = { ...tracker.reachState, acquired: true };
+    tracker.calibration = { palmSpan: 0.2 };
+
+    tracker.emitLostIfDue(250);
+
+    expect(tracker.reachState.acquired).toBe(false);
+    expect(tracker.calibration).toBeNull();
+  });
+
   it("emits one lost transition then suppresses no-hand inference until the heartbeat", () => {
     const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 0) };
     const { tracker, callbacks } = setup({ scheduler });

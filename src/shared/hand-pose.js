@@ -82,6 +82,19 @@ function rotateNormalizedPoint(point, rotation) {
   }
 }
 
+function rotateWorldPoint(point, rotation) {
+  const x = Array.isArray(point) ? point[0] : point?.x;
+  const y = Array.isArray(point) ? point[1] : point?.y;
+  const z = Array.isArray(point) ? point[2] : point?.z;
+  switch (rotation) {
+    case 0: return { x, y, z };
+    case 90: return { x: -y, y: x, z };
+    case 180: return { x: -x, y: -y, z };
+    case 270: return { x: y, y: -x, z };
+    default: throw new RangeError("camera rotation must be 0, 90, 180, or 270 degrees");
+  }
+}
+
 function palmBasis(worldLandmarks, handedness, inputMirrored) {
   const upRaw = subtract(worldLandmarks[9], worldLandmarks[0]);
   const acrossPalm = subtract(worldLandmarks[17], worldLandmarks[5]);
@@ -229,6 +242,14 @@ export function normalizeCameraLandmarks(points, rotation = 0) {
   }
   if (!Array.isArray(points)) throw new RangeError("camera landmarks must be an array");
   return points.map((point) => rotateNormalizedPoint(point, rotation));
+}
+
+export function normalizeCameraWorldLandmarks(points, rotation = 0) {
+  if (![0, 90, 180, 270].includes(rotation)) {
+    throw new RangeError("camera rotation must be 0, 90, 180, or 270 degrees");
+  }
+  if (!Array.isArray(points)) throw new RangeError("world landmarks must be an array");
+  return points.map((point) => rotateWorldPoint(point, rotation));
 }
 
 export function deriveHandFeatures(sample, previous = null, calibration = null) {

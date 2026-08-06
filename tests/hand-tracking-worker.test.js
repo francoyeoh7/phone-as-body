@@ -2,6 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkerHandler } from "../src/controller/hand-tracking.worker.js";
 
 describe("hand tracking worker initialization", () => {
+  it("configures worker inference for one hand", async () => {
+    const createFromOptions = vi.fn(async () => ({ close: vi.fn(), detectForVideo: vi.fn() }));
+    const handler = createWorkerHandler({
+      FilesetResolverImpl: { forVisionTasks: vi.fn(async () => ({})) },
+      HandLandmarkerImpl: { createFromOptions },
+      OffscreenCanvasCtor: class {},
+      postMessage: vi.fn(),
+    });
+
+    await handler({ data: { type: "init", modeEpoch: 1, canvas: {} } });
+
+    expect(createFromOptions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ numHands: 1 }));
+  });
+
   it("retries GPU with CPU using a fresh canvas and emits unavailable once per epoch", async () => {
     const canvases = [];
     class TestCanvas { constructor() { canvases.push(this); } }

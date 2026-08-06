@@ -7,6 +7,7 @@ import {
   normalizeHandedness,
   normalizeMediaPipeHandedness,
   normalizeCameraLandmarks,
+  normalizeCameraWorldLandmarks,
 } from "../src/shared/hand-pose.js";
 import {
   MEDIAPIPE_HAND_LANDMARKS,
@@ -23,6 +24,11 @@ const palmSpan = (sample) => (
 ) / 2;
 
 describe("hand pose features", () => {
+  it("rotates metric world landmarks around their origin", () => {
+    const [point] = normalizeCameraWorldLandmarks([{ x: 0.2, y: 0.3, z: 0.4 }], 90);
+    expect(point).toEqual({ x: -0.3, y: 0.2, z: 0.4 });
+  });
+
   it("uses the MediaPipe 21-landmark order", () => {
     expect(HAND_LANDMARK_COUNT).toBe(21);
     expect(MEDIAPIPE_HAND_LANDMARKS).toMatchObject({
