@@ -35,13 +35,14 @@ export class HandTrackingDirector {
       contactNormal: finitePoint(target.contactNormal),
       focusedAt: Number.isFinite(target.focusedAt) ? target.focusedAt : null,
     } : null;
+    const hadTarget = this.target !== null;
     const changed = (this.target?.id ?? null) !== (next?.id ?? null);
     this.target = next;
     this.hand?.setTargetContact?.(next ? {
       point: next.contactPoint,
       normal: next.contactNormal,
     } : null);
-    if (changed) this.gestureGate.reset({ requireRelease: true });
+    if (changed) this.gestureGate.reset({ requireRelease: hadTarget });
     return this.target;
   }
 
@@ -104,7 +105,7 @@ export class HandTrackingDirector {
       if (!this.target?.id) {
         return sample ? { sample, fallback: this.fallback } : null;
       }
-      if (this.gestureGate.update(sample, now)) {
+      if (this.gestureGate.update(sample, now, this.target)) {
         this.onGesture({
           type: "grab",
           at: now,

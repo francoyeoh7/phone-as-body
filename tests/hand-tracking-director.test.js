@@ -54,6 +54,10 @@ describe("HandTrackingDirector", () => {
     director.acceptFrame(frame({ receivedAt: now }));
 
     director.update(0);
+    expect(gestureGate.update).toHaveBeenCalledWith(expect.anything(), now, expect.objectContaining({
+      id: "washbasin",
+      focusedAt: 4,
+    }));
     expect(onGesture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       type: "grab",
       at: now,
@@ -96,7 +100,7 @@ describe("HandTrackingDirector", () => {
       point: [0.25, 1.2, -1.4],
       normal: [1, 0, 0],
     });
-    expect(gestureGate.reset).toHaveBeenLastCalledWith({ requireRelease: true });
+    expect(gestureGate.reset).toHaveBeenLastCalledWith({ requireRelease: false });
 
     director.setTarget({ ...target, contactPoint: { x: 0.3, y: 1.2, z: -1.4 } });
     expect(gestureGate.reset).toHaveBeenCalledTimes(1);
