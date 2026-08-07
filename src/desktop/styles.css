@@ -105,6 +105,75 @@ button {
   color: #86ae75;
 }
 
+.inventory-bar {
+  position: fixed;
+  z-index: 7;
+  top: 20px;
+  left: 50%;
+  width: min(360px, calc(100vw - 32px));
+  height: 72px;
+  overflow: hidden;
+  border: 1px solid rgba(190, 191, 183, 0.28);
+  border-radius: 4px;
+  background: rgba(9, 12, 11, 0.9);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.inventory-items {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.inventory-slot {
+  display: grid;
+  flex: 0 0 52px;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid rgba(217, 217, 207, 0.2);
+  border-radius: 3px;
+  color: #bfc2ba;
+  background: rgba(27, 31, 29, 0.9);
+}
+
+.inventory-slot svg {
+  width: 23px;
+  height: 23px;
+}
+
+.inventory-slot[data-equipped="true"] {
+  border-color: rgba(208, 169, 88, 0.72);
+  color: #e4c780;
+}
+
+.inventory-slot[data-hovered="true"] {
+  outline: 1px solid rgba(235, 237, 224, 0.78);
+  outline-offset: 2px;
+}
+
+.inventory-slot[data-enabled="false"] {
+  opacity: 0.42;
+}
+
+.inventory-cursor {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #f0efe7;
+  border-radius: 50%;
+  background: #ad514c;
+  box-shadow: 0 0 0 2px rgba(7, 9, 9, 0.72);
+  will-change: transform;
+}
+
 .objective {
   position: fixed;
   z-index: 4;

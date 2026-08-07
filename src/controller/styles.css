@@ -180,6 +180,13 @@ button {
   gap: 10px;
 }
 
+.inventory-orb {
+  width: 52px;
+  height: 52px;
+  touch-action: none;
+  will-change: transform;
+}
+
 .motion-diagnostics {
   position: absolute;
   z-index: 2;

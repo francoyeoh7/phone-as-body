@@ -1,6 +1,11 @@
-import { createIcons, Keyboard, Mic, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
+import { createIcons, Keyboard, Mic, Package, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
 
-const icons = { Keyboard, Mic, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
+const icons = { Keyboard, Mic, Package, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
+const INVENTORY_WIDTH = 360;
+const INVENTORY_HEIGHT = 72;
+const INVENTORY_SLOT_SIZE = 52;
+const INVENTORY_SLOT_GAP = 12;
+const INVENTORY_CURSOR_RADIUS = 5;
 const DOOR_DEFENSE_STATUS = Object.freeze({
   dormant: "抵住门",
   intro: "门锁正在松动",
@@ -23,6 +28,11 @@ export function createDesktopUI(root) {
         <div class="location-mark"><strong>617</strong><span>东侧维护走廊</span></div>
         <div class="desktop-connection" data-connected="false"><i data-lucide="wifi-off"></i><span>等待手机</span></div>
       </header>
+
+      <div class="inventory-bar" id="inventory-bar" role="listbox" aria-label="物品栏" hidden>
+        <div class="inventory-items" id="inventory-items"></div>
+        <span class="inventory-cursor" id="inventory-cursor" aria-hidden="true"></span>
+      </div>
 
       <div class="objective" id="objective"><span>当前目标</span><strong>寻找备用保险丝</strong></div>
       <div class="reticle" id="reticle"><span></span></div>
@@ -82,12 +92,48 @@ export function createDesktopUI(root) {
     promptLabel: root.querySelector("#interaction-prompt span"),
     subtitle: root.querySelector("#subtitle"),
     voiceRecording: root.querySelector("#voice-recording"),
+    inventoryBar: root.querySelector("#inventory-bar"),
+    inventoryItems: root.querySelector("#inventory-items"),
+    inventoryCursor: root.querySelector("#inventory-cursor"),
     doorDefense: root.querySelector("#door-defense"),
     doorDefenseStatus: root.querySelector("#door-defense-status"),
     doorDefenseTrack: root.querySelector(".door-defense-track"),
     doorDefenseFill: root.querySelector(".door-defense-track > span"),
     loading: root.querySelector("#loading-overlay"),
     pause: root.querySelector("#pause-overlay"),
+  };
+  let inventoryItems = [];
+  let inventoryRects = [];
+  const inventoryBounds = { width: INVENTORY_WIDTH, height: INVENTORY_HEIGHT };
+  const inventoryCursor = { x: INVENTORY_WIDTH / 2, y: INVENTORY_HEIGHT / 2 };
+
+  const renderInventoryItems = (equippedId = null, hoveredId = null) => {
+    elements.inventoryItems.innerHTML = inventoryItems.map((item) => `
+      <span class="inventory-slot" role="option" aria-label="${item.id}" data-inventory-id="${item.id}"
+        data-enabled="${item.enabled !== false}" data-equipped="${item.id === equippedId}"
+        data-hovered="${item.id === hoveredId}" aria-selected="${item.id === equippedId}">
+        <i data-lucide="package"></i>
+      </span>`).join("");
+    createIcons({ icons, attrs: { "stroke-width": 1.8 } });
+  };
+
+  const positionInventoryCursor = () => {
+    elements.inventoryCursor.style.transform = `translate3d(${inventoryCursor.x}px, ${inventoryCursor.y}px, 0)`;
+  };
+
+  const itemAtInventoryCursor = () => inventoryRects.find((rect) => (
+    inventoryCursor.x >= rect.left
+      && inventoryCursor.x <= rect.right
+      && inventoryCursor.y >= rect.top
+      && inventoryCursor.y <= rect.bottom
+  ))?.id ?? null;
+
+  const updateInventoryHover = () => {
+    const hoveredId = itemAtInventoryCursor();
+    for (const slot of elements.inventoryItems.querySelectorAll?.("[data-inventory-id]") ?? []) {
+      slot.dataset.hovered = String(slot.dataset.inventoryId === hoveredId);
+    }
+    return hoveredId;
   };
 
   return {
@@ -125,6 +171,53 @@ export function createDesktopUI(root) {
     },
     setVoiceRecording(active) {
       elements.voiceRecording.hidden = !active;
+    },
+    setInventory(snapshot = {}) {
+      elements.inventoryBar.hidden = false;
+      const bounds = elements.inventoryBar.getBoundingClientRect?.();
+      inventoryBounds.width = Number.isFinite(bounds?.width) && bounds.width > INVENTORY_CURSOR_RADIUS * 2
+        ? bounds.width
+        : INVENTORY_WIDTH;
+      inventoryBounds.height = Number.isFinite(bounds?.height) && bounds.height > INVENTORY_CURSOR_RADIUS * 2
+        ? bounds.height
+        : INVENTORY_HEIGHT;
+      inventoryItems = Array.isArray(snapshot.items) ? snapshot.items.map((item) => ({ ...item })) : [];
+      const totalWidth = inventoryItems.length > 0
+        ? inventoryItems.length * INVENTORY_SLOT_SIZE + (inventoryItems.length - 1) * INVENTORY_SLOT_GAP
+        : 0;
+      const firstLeft = (inventoryBounds.width - totalWidth) / 2;
+      const top = (inventoryBounds.height - INVENTORY_SLOT_SIZE) / 2;
+      inventoryRects = inventoryItems.map((item, index) => {
+        const left = firstLeft + index * (INVENTORY_SLOT_SIZE + INVENTORY_SLOT_GAP);
+        return { id: item.id, left, right: left + INVENTORY_SLOT_SIZE, top, bottom: top + INVENTORY_SLOT_SIZE };
+      });
+      const initialId = inventoryItems.some((item) => item.id === snapshot.equippedId)
+        ? snapshot.equippedId
+        : inventoryItems[0]?.id ?? null;
+      const initialRect = inventoryRects.find((rect) => rect.id === initialId);
+      inventoryCursor.x = initialRect ? (initialRect.left + initialRect.right) / 2 : inventoryBounds.width / 2;
+      inventoryCursor.y = initialRect ? (initialRect.top + initialRect.bottom) / 2 : inventoryBounds.height / 2;
+      renderInventoryItems(snapshot.equippedId, initialId);
+      positionInventoryCursor();
+      return initialId;
+    },
+    moveInventoryCursor(dx, dy) {
+      inventoryCursor.x = Math.min(
+        inventoryBounds.width - INVENTORY_CURSOR_RADIUS,
+        Math.max(INVENTORY_CURSOR_RADIUS, inventoryCursor.x + (Number.isFinite(dx) ? dx : 0))
+      );
+      inventoryCursor.y = Math.min(
+        inventoryBounds.height - INVENTORY_CURSOR_RADIUS,
+        Math.max(INVENTORY_CURSOR_RADIUS, inventoryCursor.y + (Number.isFinite(dy) ? dy : 0))
+      );
+      positionInventoryCursor();
+      return updateInventoryHover();
+    },
+    inventoryItemAtCursor() {
+      return itemAtInventoryCursor();
+    },
+    closeInventory() {
+      elements.inventoryBar.hidden = true;
     },
     setDoorDefense({ visible = false, progress = 0, status = "dormant" } = {}) {
       const normalizedProgress = Number.isFinite(progress)

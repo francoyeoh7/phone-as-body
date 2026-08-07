@@ -5,6 +5,7 @@ import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
 import { HandTrackingDirector } from "./HandTrackingDirector.js";
+import { InventoryState } from "./InventoryState.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { createDesktopUI } from "./ui.js";
@@ -29,6 +30,8 @@ export class DesktopApp {
     this.doorDefense = null;
     this.shadowQuest = null;
     this.handTracking = null;
+    this.inventory = new InventoryState([{ id: "spare-fuse", enabled: true }]);
+    this.inventoryOpen = false;
     this.fallbackHolding = false;
     this.fallbackKeyDown = false;
     this.destroyed = false;
@@ -154,6 +157,7 @@ export class DesktopApp {
   handlePhoneAction(payload = {}) {
     if (this.destroyed) return;
     const { action, settings } = payload;
+    if (action === "inventory-pointer") return this.handleInventoryPointer(payload);
     if (action === "gesture-presence") {
       return;
     }
@@ -179,6 +183,56 @@ export class DesktopApp {
     if (action === "resume") this.setPaused(false);
   }
 
+  canOpenInventory() {
+    return Boolean(
+      this.started
+      && this.player
+      && !this.paused
+      && !this.destroyed
+      && !this.inventoryOpen
+      && !this.doorDefense?.isCinematic?.()
+      && !this.foundPhone?.isInspecting?.()
+      && !this.shadowQuest?.isCinematic?.()
+      && !this.handTracking?.owner
+    );
+  }
+
+  handleInventoryPointer({ phase, dx, dy } = {}) {
+    if (phase === "open") {
+      if (!this.canOpenInventory()) return false;
+      this.inventoryOpen = true;
+      this.ui?.setInventory?.(this.inventory.snapshot());
+      this.inventory.setHovered(this.ui?.inventoryItemAtCursor?.() ?? null);
+      return true;
+    }
+    if (!this.inventoryOpen) return false;
+    if (phase === "move") {
+      const hoveredId = this.ui?.moveInventoryCursor?.(dx, dy) ?? null;
+      this.inventory.setHovered(hoveredId);
+      return true;
+    }
+    if (phase === "commit") {
+      const hoveredId = this.ui?.inventoryItemAtCursor?.() ?? null;
+      this.inventory.setHovered(hoveredId);
+      if (hoveredId) this.inventory.equip(hoveredId);
+      this.closeInventory();
+      return true;
+    }
+    if (phase === "cancel") {
+      this.closeInventory();
+      return true;
+    }
+    return false;
+  }
+
+  closeInventory() {
+    if (!this.inventoryOpen) return false;
+    this.inventoryOpen = false;
+    this.inventory.setHovered(null);
+    this.ui?.closeInventory?.();
+    return true;
+  }
+
   applyDebugStart() {
     if (!import.meta.env.DEV || !new URLSearchParams(location.search).has("shadow")) return;
     const translation = { x: 0, y: 1.05, z: -14.4 };
@@ -194,7 +248,8 @@ export class DesktopApp {
 
   handleInteraction(id, details = {}) {
     if (
-      this.doorDefense?.isCinematic()
+      this.inventoryOpen
+      || this.doorDefense?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
@@ -209,6 +264,7 @@ export class DesktopApp {
       || !this.currentTargetId
       || this.destroyed
       || this.paused
+      || this.inventoryOpen
       || event?.targetId !== this.currentTargetId
       || event?.targetEpoch !== this.currentTargetEpoch
       || this.doorDefense?.isCinematic()
@@ -280,6 +336,7 @@ export class DesktopApp {
     };
     runDisconnectStep(() => this.ui.setConnected(false));
     runDisconnectStep(() => this.ui.setVoiceRecording?.(false));
+    runDisconnectStep(() => this.closeInventory());
     if (this.started) {
       runDisconnectStep(() => this.releaseFallbackHold());
       runDisconnectStep(() => this.foundPhone?.release?.());
@@ -307,6 +364,7 @@ export class DesktopApp {
     };
     if (paused) {
       runPauseStep(() => this.ui.setVoiceRecording?.(false));
+      runPauseStep(() => this.closeInventory());
       runPauseStep(() => this.handTracking?.setPaused(true));
       runPauseStep(() => this.releaseFallbackHold());
       runPauseStep(() => this.foundPhone?.release?.());
@@ -328,7 +386,14 @@ export class DesktopApp {
     if (!this.paused) {
       this.elapsed += delta;
       const phoneInput = this.phone.currentInput();
-      this.player.setControllerInput(phoneInput, this.phone.connected);
+      const gameplayInput = this.inventoryOpen ? {
+        ...phoneInput,
+        move: { x: 0, y: 0 },
+        viewDelta: { yaw: 0, pitch: 0 },
+        clutch: false,
+        crouch: false,
+      } : phoneInput;
+      this.player.setControllerInput(gameplayInput, this.phone.connected);
       this.player.update(delta);
       this.handTracking?.update(delta);
       this.sendControlFeedback(phoneInput);
@@ -471,6 +536,7 @@ export class DesktopApp {
     };
     runCleanup(() => cancelAnimationFrame(this.frame));
     runCleanup(() => this.releaseFallbackHold());
+    runCleanup(() => this.closeInventory());
     runCleanup(() => this.ui?.elements?.startButton?.removeEventListener("click", this.handleStartClick));
     runCleanup(() => this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick));
     runCleanup(() => document.removeEventListener("visibilitychange", this.handleVisibilityChange));

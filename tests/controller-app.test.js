@@ -47,6 +47,7 @@ function createApp({ motionEnabled = true } = {}) {
     bfcacheSuspended: false,
     lifecycleGeneration: 0,
     pointerOwners: { cancelAll: vi.fn(), generation: 0 },
+    inventoryOrb: { cancel: vi.fn() },
     voiceHold: { cancel: vi.fn(() => Promise.resolve()) },
     viewEngaged: false,
     playSurface: { dataset: {} },
@@ -159,6 +160,7 @@ describe("controller app lifecycle", () => {
 
     app.updateConnection(state);
 
+    expect(app.inventoryOrb.cancel).toHaveBeenCalledOnce();
     expect(app.voiceHold.cancel).toHaveBeenCalledExactlyOnceWith({ discard: true });
   });
 
@@ -699,5 +701,70 @@ describe("controller app lifecycle", () => {
     expect(app.crouching).toBe(true);
     expect(app.move).toEqual({ x: 0, y: 0 });
     expect(app.sendInput).toHaveBeenCalledWith({ immediate: true });
+  });
+});
+
+describe("controller inventory modal", () => {
+  it("opens only during active gameplay outside semantic tasks and phone inspection", () => {
+    const { app } = createApp();
+
+    expect(app.canOpenInventory()).toBe(true);
+
+    for (const blocked of [
+      { motionEnabled: false },
+      { foreground: false },
+      { paused: true },
+      { requiresContinue: true },
+      { destroyed: true },
+      { connectionState: "disconnected" },
+      { handTaskContext: "door-defense" },
+    ]) {
+      const original = Object.fromEntries(Object.keys(blocked).map((key) => [key, app[key]]));
+      Object.assign(app, blocked);
+      expect(app.canOpenInventory()).toBe(false);
+      Object.assign(app, original);
+    }
+
+    app.foundPhoneUI.element.hidden = false;
+    expect(app.canOpenInventory()).toBe(false);
+  });
+
+  it("cancels voice and neutralizes joystick movement, crouch, and clutch before open", () => {
+    const { app } = createApp();
+    const order = [];
+    app.move = { x: 0.7, y: -0.4 };
+    app.crouching = true;
+    app.viewEngaged = true;
+    app.viewDelta = { yaw: 12, pitch: -6 };
+    app.voiceHold.cancel.mockImplementation(() => {
+      order.push("voice");
+      return Promise.resolve();
+    });
+    app.joystick.reset.mockImplementation(() => order.push("joystick"));
+    app.socket.sendAction.mockImplementation((action) => order.push(action === "inventory-pointer" ? "open" : action));
+
+    app.handleInventoryClaim();
+    app.sendInventoryPointer("open");
+
+    expect(order).toEqual(["voice", "joystick", "open"]);
+    expect(app.move).toEqual({ x: 0, y: 0 });
+    expect(app.crouching).toBe(false);
+    expect(app.viewEngaged).toBe(false);
+    expect(app.viewDelta).toEqual({ yaw: 0, pitch: 0 });
+    expect(app.socket.clearPendingViewDelta).toHaveBeenCalledOnce();
+    expect(app.sendInput).toHaveBeenCalledWith({ includeViewDelta: true, immediate: true });
+    expect(app.socket.sendAction).toHaveBeenCalledWith("inventory-pointer", { phase: "open" });
+  });
+
+  it("cancels the inventory gesture before invalidating all ownership", () => {
+    const { app } = createApp();
+    const order = [];
+    app.inventoryOrb = { cancel: vi.fn(() => order.push("inventory")) };
+    app.voiceHold.cancel.mockImplementation(() => order.push("voice"));
+    app.pointerOwners.cancelAll.mockImplementation(() => order.push("owners"));
+
+    app.cancelPointerOwnership();
+
+    expect(order).toEqual(["inventory", "voice", "owners"]);
   });
 });

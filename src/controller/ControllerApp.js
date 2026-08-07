@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Mic,
+  Package,
   RotateCcw,
   Settings,
   Wifi,
@@ -15,6 +16,7 @@ import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { MediaPipeHandTracker } from "./MediaPipeHandTracker.js";
 import { ControllerSocket } from "./ControllerSocket.js";
 import { FoundPhoneUI } from "./FoundPhoneUI.js";
+import { InventoryOrbController } from "./InventoryOrbController.js";
 import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { PointerOwnership } from "./PointerOwnership.js";
@@ -22,7 +24,7 @@ import { VirtualJoystick } from "./VirtualJoystick.js";
 import { VoiceHoldController } from "./VoiceHoldController.js";
 import "./styles.css";
 
-const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, RotateCcw, Settings, Wifi, X };
+const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, Package, RotateCcw, Settings, Wifi, X };
 
 const defaultSettings = {
   sensitivity: 1,
@@ -106,6 +108,7 @@ export class ControllerApp {
         <section class="play-surface" aria-label="游戏控制器">
           <div class="utility-controls">
             <button class="icon-button" id="settings" aria-label="设置"><i data-lucide="settings"></i></button>
+            <button class="icon-button inventory-orb" id="inventory-orb" type="button" aria-label="物品栏"><i data-lucide="package"></i></button>
           </div>
 
           <aside class="motion-diagnostics" id="motion-diagnostics" aria-label="体感诊断">
@@ -189,6 +192,7 @@ export class ControllerApp {
     this.enableMotion = this.root.querySelector("#enable-motion");
     this.pauseMenu = this.root.querySelector("#settings-menu");
     this.playSurface = this.root.querySelector(".play-surface");
+    this.inventoryRegion = this.root.querySelector("#inventory-orb");
     this.voiceRegion = this.root.querySelector("#voice-hold");
     this.foundPhoneUI = new FoundPhoneUI(this.root.querySelector("#found-phone-ui"));
     this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
@@ -249,6 +253,25 @@ export class ControllerApp {
     for (const [type, handler] of Object.entries(this.voicePointerHandlers)) {
       this.voiceRegion.addEventListener(type, handler);
     }
+    this.inventoryOrb = new InventoryOrbController(this.inventoryRegion, {
+      ownership: this.pointerOwners,
+      canOpen: () => this.canOpenInventory(),
+      onClaim: () => this.handleInventoryClaim(),
+      onOpen: () => this.sendInventoryPointer("open"),
+      onMove: (delta) => this.sendInventoryPointer("move", delta),
+      onCommit: () => this.sendInventoryPointer("commit"),
+      onCancel: () => this.sendInventoryPointer("cancel"),
+    });
+    this.inventoryPointerHandlers = {
+      pointerdown: (event) => this.inventoryOrb.pointerDown(event),
+      pointermove: (event) => this.inventoryOrb.pointerMove(event),
+      pointerup: (event) => this.inventoryOrb.pointerUp(event),
+      pointercancel: (event) => this.inventoryOrb.pointerCancel(event),
+      lostpointercapture: (event) => this.inventoryOrb.pointerCancel(event),
+    };
+    for (const [type, handler] of Object.entries(this.inventoryPointerHandlers)) {
+      this.inventoryRegion.addEventListener(type, handler);
+    }
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
     this.root.querySelector("#recenter").addEventListener("click", () => {
@@ -300,6 +323,7 @@ export class ControllerApp {
       this.foundPhoneUI?.setActive(false);
     }
     if (state !== "joined") {
+      this.inventoryOrb?.cancel();
       this.voiceHold?.cancel({ discard: true });
       this.cameraMotion?.setMode({ mode: "pulse", context: null, baseline: "fresh" });
       this.cameraMotion?.setFocused(false);
@@ -565,9 +589,45 @@ export class ControllerApp {
   }
 
   cancelPointerOwnership() {
+    this.inventoryOrb?.cancel();
     this.voiceHold?.cancel({ discard: true });
     this.gameplayClaimGeneration = null;
     this.pointerOwners?.cancelAll?.();
+  }
+
+  canOpenInventory() {
+    return Boolean(
+      (this.motionEnabled || this.preview)
+      && this.foreground
+      && !this.paused
+      && !this.requiresContinue
+      && !this.destroyed
+      && this.connectionState === "joined"
+      && !this.handTaskContext
+      && this.foundPhoneUI?.element?.hidden !== false
+    );
+  }
+
+  handleInventoryClaim() {
+    this.voiceHold?.cancel({ discard: true });
+    this.gameplayClaimGeneration = null;
+    this.move = { x: 0, y: 0 };
+    this.clearCrouch();
+    this.viewDelta = zeroViewDelta();
+    this.viewEngaged = false;
+    this.socket?.clearPendingViewDelta?.();
+    this.motion?.disengage?.();
+    this.joystick?.reset();
+    this.diagnostics?.updateEngagement(false);
+    if (this.playSurface) this.playSurface.dataset.clutch = "off";
+    this.sendInput({ includeViewDelta: true, immediate: true });
+  }
+
+  sendInventoryPointer(phase, delta = {}) {
+    const detail = phase === "move"
+      ? { phase, dx: delta.dx, dy: delta.dy }
+      : { phase };
+    this.socket?.sendAction("inventory-pointer", detail);
   }
 
   isVoicePoint({ clientX, clientY }) {
@@ -767,6 +827,9 @@ export class ControllerApp {
     this.playSurface?.classList?.remove("brace-impact");
     for (const [type, handler] of Object.entries(this.voicePointerHandlers ?? {})) {
       this.voiceRegion?.removeEventListener?.(type, handler);
+    }
+    for (const [type, handler] of Object.entries(this.inventoryPointerHandlers ?? {})) {
+      this.inventoryRegion?.removeEventListener?.(type, handler);
     }
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);

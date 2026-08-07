@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopApp } from "../src/desktop/DesktopApp.js";
 import { FoundPhoneDirector } from "../src/desktop/FoundPhoneDirector.js";
+import { InventoryState } from "../src/desktop/InventoryState.js";
 import { createGameAudio } from "../src/desktop/audio.js";
 import { createDesktopUI } from "../src/desktop/ui.js";
 
@@ -12,6 +13,7 @@ vi.mock("lucide", () => ({
   createIcons: vi.fn(),
   Keyboard: {},
   Mic: {},
+  Package: {},
   ScanLine: {},
   Smartphone: {},
   Volume2: {},
@@ -255,6 +257,104 @@ describe("desktop control feedback", () => {
       contactPoint: { x: 0.1, y: 0.2, z: -0.9 },
     }));
     expect(app.handTracking.setTarget).toHaveBeenNthCalledWith(2, null);
+  });
+});
+
+describe("desktop inventory routing", () => {
+  function createInventoryApp(overrides = {}) {
+    const inventory = new InventoryState([{ id: "spare-fuse", enabled: true }]);
+    inventory.acquire("spare-fuse");
+    const ui = {
+      setInventory: vi.fn(),
+      moveInventoryCursor: vi.fn(() => "spare-fuse"),
+      inventoryItemAtCursor: vi.fn(() => "spare-fuse"),
+      closeInventory: vi.fn(),
+      setVoiceRecording: vi.fn(),
+    };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      started: true,
+      paused: false,
+      inventoryOpen: false,
+      inventory,
+      ui,
+      player: {},
+      doorDefense: { isCinematic: vi.fn(() => false) },
+      foundPhone: { isInspecting: vi.fn(() => false) },
+      shadowQuest: { isCinematic: vi.fn(() => false) },
+      handTracking: { owner: null },
+    }, overrides);
+    return { app, inventory, ui };
+  }
+
+  it("opens, moves the desktop cursor, equips the hovered enabled item, and closes", () => {
+    const { app, inventory, ui } = createInventoryApp();
+
+    expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "open" })).toBe(true);
+    expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "move", dx: 12, dy: -4 })).toBe(true);
+    expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "commit" })).toBe(true);
+
+    expect(ui.setInventory).toHaveBeenCalledWith(expect.objectContaining({ items: [{ id: "spare-fuse", enabled: true }] }));
+    expect(ui.moveInventoryCursor).toHaveBeenCalledWith(12, -4);
+    expect(inventory.snapshot().equippedId).toBe("spare-fuse");
+    expect(inventory.snapshot().hoveredId).toBeNull();
+    expect(ui.closeInventory).toHaveBeenCalledOnce();
+    expect(app.inventoryOpen).toBe(false);
+  });
+
+  it("preserves equipment on empty release and cancellation", () => {
+    const { app, inventory, ui } = createInventoryApp();
+    inventory.equip("spare-fuse");
+    ui.inventoryItemAtCursor.mockReturnValue(null);
+
+    app.handlePhoneAction({ action: "inventory-pointer", phase: "open" });
+    app.handlePhoneAction({ action: "inventory-pointer", phase: "commit" });
+    expect(inventory.snapshot().equippedId).toBe("spare-fuse");
+
+    app.handlePhoneAction({ action: "inventory-pointer", phase: "open" });
+    app.handlePhoneAction({ action: "inventory-pointer", phase: "cancel" });
+    expect(inventory.snapshot().equippedId).toBe("spare-fuse");
+    expect(ui.closeInventory).toHaveBeenCalledTimes(2);
+  });
+
+  it("neutralizes stale RTC gameplay input while the ordered inventory modal is open", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 12));
+    const { app } = createTickHarness();
+    const staleInput = {
+      seq: 7,
+      move: { x: 0.8, y: -0.5 },
+      viewDelta: { yaw: 14, pitch: -9 },
+      clutch: true,
+      crouch: true,
+    };
+    app.phone.currentInput.mockReturnValue(staleInput);
+    app.inventoryOpen = true;
+
+    app.tick(16);
+
+    expect(app.phone.currentInput).toHaveBeenCalledOnce();
+    expect(app.player.setControllerInput).toHaveBeenCalledWith({
+      ...staleInput,
+      move: { x: 0, y: 0 },
+      viewDelta: { yaw: 0, pitch: 0 },
+      clutch: false,
+      crouch: false,
+    }, true);
+  });
+
+  it.each([
+    ["before gameplay", { started: false }],
+    ["while paused", { paused: true }],
+    ["during door cinematic", { doorDefense: { isCinematic: () => true } }],
+    ["during found-phone cinematic", { foundPhone: { isInspecting: () => true } }],
+    ["during shadow cinematic", { shadowQuest: { isCinematic: () => true } }],
+    ["during semantic hand task", { handTracking: { owner: "door-defense" } }],
+  ])("rejects opening %s", (_label, override) => {
+    const { app, ui } = createInventoryApp(override);
+
+    expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "open" })).toBe(false);
+    expect(app.inventoryOpen).toBe(false);
+    expect(ui.setInventory).not.toHaveBeenCalled();
   });
 });
 
@@ -946,6 +1046,33 @@ describe("fallback Space hold", () => {
 });
 
 describe("desktop door-defense UI", () => {
+  it("renders acquired slots only and owns a bounded relative inventory cursor", () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const bar = elements.get("#inventory-bar");
+    const items = elements.get("#inventory-items");
+    const cursor = elements.get("#inventory-cursor");
+    bar.getBoundingClientRect = () => ({ width: 280, height: 72 });
+
+    ui.setInventory({ items: [], equippedId: null, hoveredId: null });
+    expect(bar.hidden).toBe(false);
+    expect(items.innerHTML).toBe("");
+    expect(ui.inventoryItemAtCursor()).toBeNull();
+
+    ui.setInventory({
+      items: [{ id: "spare-fuse", enabled: true }],
+      equippedId: "spare-fuse",
+      hoveredId: null,
+    });
+    expect(items.innerHTML).toContain('data-inventory-id="spare-fuse"');
+    expect(ui.inventoryItemAtCursor()).toBe("spare-fuse");
+
+    expect(ui.moveInventoryCursor(999, 999)).toBeNull();
+    expect(cursor.style.transform).toBe("translate3d(275px, 67px, 0)");
+    ui.closeInventory();
+    expect(bar.hidden).toBe(true);
+  });
+
   it("renders a hidden microphone status and toggles it without text", () => {
     const { root, elements } = createRoot();
     const ui = createDesktopUI(root);
