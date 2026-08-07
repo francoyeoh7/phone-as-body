@@ -146,7 +146,7 @@ describe("player phone view deltas", () => {
       },
       occlusionRaycaster: {
         set: vi.fn(),
-        intersectObjects: vi.fn(() => [{ distance: 0.6 }]),
+        intersectObjects: vi.fn(() => [{ distance: 0.6, object: { isMesh: true } }]),
       },
       staticOccluderRoots: [{ visible: true }],
       interactables: [{ id: "faucet", label: "faucet", enabled: true, root: targetRoot, halo: { visible: false } }],
@@ -163,6 +163,24 @@ describe("player phone view deltas", () => {
     expect(player.selected).toBeNull();
     expect(player.aimAssist).toBeNull();
     expect(onTarget).not.toHaveBeenCalled();
+  });
+
+  it("ignores decorative sprites while evaluating anchor occlusion", () => {
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 10);
+    camera.position.set(0, 0, 0);
+    camera.lookAt(0, 0, -1);
+    camera.updateMatrixWorld(true);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial());
+    sprite.position.set(0, 0, -0.6);
+    sprite.updateMatrixWorld(true);
+    const player = Object.assign(Object.create(PlayerController.prototype), {
+      camera,
+      occlusionRaycaster: new THREE.Raycaster(),
+      staticOccluderRoots: [sprite],
+    });
+
+    expect(() => player.isAnchorOccluded(new THREE.Vector3(0, 0, -1.4), 0.22)).not.toThrow();
+    expect(player.isAnchorOccluded(new THREE.Vector3(0, 0, -1.4), 0.22)).toBe(false);
   });
 
   it("switches to keyboard fallback without applying a stale phone delta", () => {

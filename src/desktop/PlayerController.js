@@ -311,11 +311,13 @@ export class PlayerController {
     const radius = Number.isFinite(contactRadius) ? contactRadius : 0;
     if (distance <= radius) return false;
     direction.divideScalar(distance);
+    this.occlusionRaycaster.camera = this.camera;
     this.occlusionRaycaster.set(this.camera.position, direction, 0, distance - radius);
-    return this.occlusionRaycaster.intersectObjects(
+    const hits = this.occlusionRaycaster.intersectObjects(
       this.staticOccluderRoots.filter((root) => root?.visible !== false),
       true,
-    ).some((hit) => hit.distance < distance - radius);
+    );
+    return hits.some((hit) => hit.object?.isMesh && hit.distance < distance - radius);
   }
 
   updateInteraction() {
