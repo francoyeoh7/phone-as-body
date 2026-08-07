@@ -45,6 +45,7 @@ function createApp({ motionEnabled = true } = {}) {
     touchFallback: false,
     bfcacheSuspended: false,
     lifecycleGeneration: 0,
+    pointerOwners: { cancelAll: vi.fn(), generation: 0 },
     viewEngaged: false,
     playSurface: { dataset: {} },
     status: { dataset: {} },
@@ -125,6 +126,16 @@ describe("controller app lifecycle", () => {
     expect(motion.suspend).toHaveBeenCalledTimes(1);
     expect(cameraMotion.suspend).toHaveBeenCalledTimes(1);
     expect(haptics.stop).toHaveBeenCalledTimes(1);
+    expect(app.pointerOwners.cancelAll).toHaveBeenCalledOnce();
+  });
+
+  it("clears crouch before background input cleanup", () => {
+    const { app } = createApp();
+    app.crouching = true;
+
+    app.suspendForBackground();
+
+    expect(app.crouching).toBe(false);
   });
 
   it("requests the rear camera together with motion permission", async () => {
@@ -185,6 +196,19 @@ describe("controller app lifecycle", () => {
       active: false,
     });
     expect(motion.engage).not.toHaveBeenCalled();
+  });
+
+  it("clears crouch when the joystick is repurposed as a door fallback hold", () => {
+    const { app } = createApp();
+    app.crouching = true;
+    app.cameraEnabled = true;
+    app.handTaskContext = "door-defense";
+    app.handTrackingState = "fallback";
+
+    app.handleJoystickEngagement(true);
+
+    expect(app.crouching).toBe(false);
+    expect(app.sendInput).toHaveBeenCalledWith({ immediate: true });
   });
 
   it("keeps motion controls available when camera permission is denied", async () => {
@@ -598,6 +622,7 @@ describe("controller app lifecycle", () => {
       move: { x: 0.2, y: 0.8 },
       viewDelta: { yaw: 9, pitch: 2 },
       viewEngaged: true,
+      crouching: true,
       socket: { setInput },
     });
 
@@ -607,6 +632,18 @@ describe("controller app lifecycle", () => {
       move: { x: 0.2, y: 0.8 },
       viewDelta: { yaw: 9, pitch: 2 },
       clutch: true,
+      crouch: true,
     }, { immediate: true });
+  });
+
+  it("sends an immediate crouch snapshot and neutral movement on crouch entry", () => {
+    const { app } = createApp();
+    app.crouching = false;
+
+    app.handleCrouchChange(true);
+
+    expect(app.crouching).toBe(true);
+    expect(app.move).toEqual({ x: 0, y: 0 });
+    expect(app.sendInput).toHaveBeenCalledWith({ immediate: true });
   });
 });

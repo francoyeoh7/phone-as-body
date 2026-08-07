@@ -16,6 +16,7 @@ import { ControllerSocket } from "./ControllerSocket.js";
 import { FoundPhoneUI } from "./FoundPhoneUI.js";
 import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
+import { PointerOwnership } from "./PointerOwnership.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
 import "./styles.css";
 
@@ -58,6 +59,7 @@ export class ControllerApp {
     this.room = parameters.get("room") ?? "";
     this.preview = import.meta.env.DEV && parameters.has("preview");
     this.move = { x: 0, y: 0 };
+    this.crouching = false;
     this.viewDelta = zeroViewDelta();
     this.viewEngaged = false;
     this.settings = loadSettings();
@@ -68,6 +70,8 @@ export class ControllerApp {
     this.handTaskContext = null;
     this.handTrackingState = "idle";
     this.doorFallbackHolding = false;
+    this.pointerOwners = new PointerOwnership();
+    this.gameplayClaimGeneration = null;
     this.cameraMotion = null;
     this.handTracker = null;
     this.connectionState = "connecting";
@@ -195,6 +199,10 @@ export class ControllerApp {
         this.sendInput({ immediate: true });
       },
       onEngagementChange: (engaged) => this.handleJoystickEngagement(engaged),
+      canStart: (event) => this.claimGameplayPointer(event),
+      onReset: (pointerId) => this.releaseGameplayPointer(pointerId),
+      isBottomPoint: (point) => this.isBottomPoint(point),
+      onCrouchChange: (active) => this.handleCrouchChange(active),
       onTap: () => {
         pulse();
         this.socket?.sendAction("interact");
@@ -398,6 +406,8 @@ export class ControllerApp {
       return;
     }
     if (state === "reorienting") {
+      this.cancelPointerOwnership();
+      this.clearCrouch();
       this.viewEngaged = false;
       this.viewDelta = zeroViewDelta();
       this.socket?.clearPendingViewDelta?.();
@@ -437,7 +447,9 @@ export class ControllerApp {
     this.lifecycleGeneration += 1;
     this.foreground = false;
     this.hapticsActive = false;
+    this.cancelPointerOwnership();
     this.move = { x: 0, y: 0 };
+    this.clearCrouch();
     this.viewDelta = zeroViewDelta();
     this.viewEngaged = false;
     this.socket?.clearPendingViewDelta?.();
@@ -483,6 +495,7 @@ export class ControllerApp {
 
   handleJoystickEngagement(engaged) {
     if (this.usesDoorFallbackHold()) {
+      this.clearCrouch({ immediate: true });
       this.viewEngaged = false;
       this.doorFallbackHolding = Boolean(engaged);
       this.socket?.sendAction("task-hold", {
@@ -511,8 +524,50 @@ export class ControllerApp {
       && (!this.cameraEnabled || this.handTrackingState === "fallback"));
   }
 
+  claimGameplayPointer(event) {
+    if (!this.pointerOwners?.claimGameplay?.(event.pointerId)) return false;
+    this.gameplayClaimGeneration = this.pointerOwners.generation;
+    return true;
+  }
+
+  releaseGameplayPointer(pointerId) {
+    const generation = this.gameplayClaimGeneration;
+    this.gameplayClaimGeneration = null;
+    if (Number.isInteger(generation)) this.pointerOwners?.release?.("gameplay", pointerId, generation);
+  }
+
+  cancelPointerOwnership() {
+    this.gameplayClaimGeneration = null;
+    this.pointerOwners?.cancelAll?.();
+  }
+
+  isBottomPoint({ y }) {
+    const height = window.innerHeight || document.documentElement?.clientHeight || 0;
+    const bottomRegionHeight = Math.min(96, Math.max(68, height * 0.12));
+    return !this.usesDoorFallbackHold() && y >= height - bottomRegionHeight;
+  }
+
+  handleCrouchChange(active) {
+    const crouching = Boolean(active) && !this.usesDoorFallbackHold();
+    if (crouching === this.crouching) return;
+    this.crouching = crouching;
+    if (crouching) this.move = { x: 0, y: 0 };
+    this.sendInput({ immediate: true });
+  }
+
+  clearCrouch({ immediate = false } = {}) {
+    if (!this.crouching) return false;
+    this.crouching = false;
+    if (immediate) this.sendInput({ immediate: true });
+    return true;
+  }
+
   sendInput({ includeViewDelta = false, immediate = false } = {}) {
-    const input = { move: this.move, clutch: this.viewEngaged };
+    const input = {
+      move: this.move,
+      clutch: this.viewEngaged,
+      crouch: Boolean(this.crouching) && !this.usesDoorFallbackHold(),
+    };
     if (includeViewDelta) input.viewDelta = this.viewDelta;
     this.socket?.setInput(input, { immediate });
   }
@@ -529,7 +584,9 @@ export class ControllerApp {
     if (paused) {
       this.lifecycleGeneration += 1;
       this.hapticsActive = false;
+      this.cancelPointerOwnership();
       this.move = { x: 0, y: 0 };
+      this.clearCrouch();
       this.viewDelta = zeroViewDelta();
       this.viewEngaged = false;
       this.socket?.clearPendingViewDelta?.();
@@ -581,6 +638,7 @@ export class ControllerApp {
         this.doorFallbackHolding = false;
       }
       this.handTaskContext = event.active ? event.context : null;
+      if (this.usesDoorFallbackHold()) this.clearCrouch({ immediate: true });
       if (this.playSurface) this.playSurface.dataset.handTask = this.handTaskContext ?? "off";
       return;
     }
@@ -653,6 +711,8 @@ export class ControllerApp {
     this.lifecycleGeneration += 1;
     this.destroyed = true;
     this.hapticsActive = false;
+    this.cancelPointerOwnership();
+    this.clearCrouch({ immediate: true });
     this.haptics?.stop();
     this.foundPhoneUI?.setActive(false);
     window.clearTimeout(this.calibrationTimer);
