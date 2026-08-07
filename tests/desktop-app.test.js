@@ -246,21 +246,38 @@ describe("desktop control feedback", () => {
 });
 
 describe("desktop director routing", () => {
-  it("applies a confirmed hand grab only to the currently focused target", () => {
-    const player = { interact: vi.fn() };
+  it("rejects hand grab with stale target epoch", () => {
     const app = Object.assign(Object.create(DesktopApp.prototype), {
-      player,
-      currentTargetId: "washbasin",
+      currentTargetId: null,
+      currentTargetEpoch: 0,
+      player: { interact: vi.fn() },
       doorDefense: { isCinematic: vi.fn(() => false) },
       foundPhone: { isInspecting: vi.fn(() => false) },
       shadowQuest: { isCinematic: vi.fn(() => false) },
     });
 
-    expect(app.handleHandGesture({ type: "grab" })).toBe(true);
+    app.handleTargetFocus({ id: "fuse", focused: true, epoch: 12, contactPoint: { x: 0, y: 1, z: -1 }, contactNormal: { x: 0, y: 0, z: 1 }, focusedAt: 40 });
+
+    expect(app.handleHandGesture({ type: "grab", targetId: "fuse", targetEpoch: 11 })).toBe(false);
+    expect(app.player.interact).not.toHaveBeenCalled();
+  });
+
+  it("applies a confirmed hand grab only to the currently focused target", () => {
+    const player = { interact: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      player,
+      currentTargetId: "washbasin",
+      currentTargetEpoch: 7,
+      doorDefense: { isCinematic: vi.fn(() => false) },
+      foundPhone: { isInspecting: vi.fn(() => false) },
+      shadowQuest: { isCinematic: vi.fn(() => false) },
+    });
+
+    expect(app.handleHandGesture({ type: "grab", targetId: "washbasin", targetEpoch: 7 })).toBe(true);
     expect(player.interact).toHaveBeenCalledExactlyOnceWith("hand");
 
     app.currentTargetId = null;
-    expect(app.handleHandGesture({ type: "grab" })).toBe(false);
+    expect(app.handleHandGesture({ type: "grab", targetId: "washbasin", targetEpoch: 7 })).toBe(false);
     expect(player.interact).toHaveBeenCalledOnce();
   });
 

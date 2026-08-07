@@ -29,4 +29,15 @@ describe("assisted interaction targeting", () => {
     ];
     expect(chooseAssistedTarget(targets, camera, forward)).toBeNull();
   });
+
+  it("keeps current near-equal target but rejects its occluded anchor", () => {
+    const targets = [
+      { id: "fuse", enabled: true, visible: true, anchor: { x: 0.05, y: 1.6, z: -1.4 }, contactRadius: 0.22, maxUseDistance: 2.35, occluded: false },
+      { id: "panel", enabled: true, visible: true, anchor: { x: 0.04, y: 1.6, z: -1.45 }, contactRadius: 0.22, maxUseDistance: 2.35, occluded: false },
+    ];
+
+    expect(chooseAssistedTarget(targets, camera, forward, { currentId: "fuse" })?.id).toBe("fuse");
+    targets[0].occluded = true;
+    expect(chooseAssistedTarget(targets, camera, forward, { currentId: "fuse" })?.id).toBe("panel");
+  });
 });

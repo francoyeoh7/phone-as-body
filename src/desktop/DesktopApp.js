@@ -37,6 +37,7 @@ export class DesktopApp {
     this.debugShadowTriggered = false;
     this.lastFeedbackSequence = -1;
     this.currentTargetId = null;
+    this.currentTargetEpoch = 0;
     this.handleStartClick = () => this.startGame(false);
     this.handleFallbackClick = () => this.startGame(true);
     this.handleVisibilityChange = () => {
@@ -207,7 +208,8 @@ export class DesktopApp {
       || !this.currentTargetId
       || this.destroyed
       || this.paused
-      || (event?.targetId && event.targetId !== this.currentTargetId)
+      || event?.targetId !== this.currentTargetId
+      || event?.targetEpoch !== this.currentTargetEpoch
       || this.doorDefense?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
@@ -220,9 +222,13 @@ export class DesktopApp {
     const { id, focused } = target;
     const previousTargetId = this.currentTargetId;
     this.currentTargetId = focused ? id : null;
+    this.currentTargetEpoch = Number.isInteger(target.epoch)
+      ? target.epoch
+      : this.currentTargetId !== previousTargetId ? this.currentTargetEpoch + 1 : this.currentTargetEpoch;
     this.ui?.setTargetFocused(Boolean(this.currentTargetId));
     this.handTracking?.setTarget?.(this.currentTargetId ? {
       id: this.currentTargetId,
+      epoch: this.currentTargetEpoch,
       contactPoint: target.contactPoint ?? null,
       contactNormal: target.contactNormal ?? null,
       focusedAt: target.focusedAt ?? null,

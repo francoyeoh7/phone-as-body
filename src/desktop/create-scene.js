@@ -761,6 +761,21 @@ export async function createScene(host) {
   scene.add(silhouette);
 
   const interactables = [fuse, panel, foundPhone, washbasin, shadowQuest.window];
+  for (const entry of interactables) {
+    entry.interaction ??= {
+      anchor: entry.interactionAnchor ?? entry.root,
+      contactRadius: 0.22,
+      maxUseDistance: 2.35,
+      approachDirection: null,
+    };
+  }
+  const staticOccluderRoots = scene.children.filter((root) => (
+    root !== camera
+    && root !== flashlightGroup
+    && root !== silhouette
+    && root !== exitDoor.root
+    && !interactables.some((entry) => entry.root === root)
+  ));
   const corridorWorldAnchors = {
     door: exitDoor.root,
     triggerPosition: exitDoor.triggerPosition,
@@ -787,6 +802,7 @@ export async function createScene(host) {
     renderer,
     world,
     interactables,
+    staticOccluderRoots,
     objects: {
       flashlight: flashlightGroup,
       flashlightCore: flashlight,

@@ -17,16 +17,23 @@ const serializeVector = (value) => (value?.isVector3
   ? { x: value.x, y: value.y, z: value.z }
   : null);
 
+const resolveWorldPosition = (anchor, target) => {
+  if (anchor?.getWorldPosition) return anchor.getWorldPosition(target);
+  const point = cloneVector(anchor);
+  return point ? target.copy(point) : null;
+};
+
 const readClock = () => (typeof performance !== "undefined" && typeof performance.now === "function"
   ? performance.now()
   : Date.now());
 
 export class PlayerController {
-  constructor({ RAPIER, world, camera, renderer, interactables, onInteract, onAction, onPrompt, onTarget, now }) {
+  constructor({ RAPIER, world, camera, renderer, interactables, staticOccluderRoots, onInteract, onAction, onPrompt, onTarget, now }) {
     this.world = world;
     this.camera = camera;
     this.renderer = renderer;
     this.interactables = interactables;
+    this.staticOccluderRoots = staticOccluderRoots ?? [];
     this.onInteract = onInteract;
     this.onAction = onAction;
     this.onPrompt = onPrompt;
@@ -53,11 +60,13 @@ export class PlayerController {
     this.aimAssist = null;
     this.cinematic = false;
     this.raycaster = new THREE.Raycaster();
+    this.occlusionRaycaster = new THREE.Raycaster();
     this.pointerLocked = false;
     this.selected = null;
     this.focusedAt = null;
     this.lastTargetContact = null;
     this.lastTargetNormal = null;
+    this.targetEpoch = 0;
     this.forward = new THREE.Vector3();
     this.targetPosition = new THREE.Vector3();
 
@@ -245,15 +254,18 @@ export class PlayerController {
     this.cinematic = true;
     this.velocity = { x: 0, z: 0 };
     this.clearAimAssist();
+    const hadTarget = Boolean(this.selected);
     if (this.selected?.halo) this.selected.halo.visible = false;
     this.selected = null;
     this.focusedAt = null;
     this.lastTargetContact = null;
     this.lastTargetNormal = null;
+    if (hadTarget) this.targetEpoch += 1;
     this.onPrompt?.(null);
     this.onTarget?.({
       id: null,
       focused: false,
+      epoch: this.targetEpoch,
       contactPoint: null,
       contactNormal: null,
       focusedAt: null,
@@ -292,6 +304,20 @@ export class PlayerController {
     };
   }
 
+  isAnchorOccluded(anchorPosition, contactRadius) {
+    if (!anchorPosition || !this.staticOccluderRoots?.length) return false;
+    const direction = anchorPosition.clone().sub(this.camera.position);
+    const distance = direction.length();
+    const radius = Number.isFinite(contactRadius) ? contactRadius : 0;
+    if (distance <= radius) return false;
+    direction.divideScalar(distance);
+    this.occlusionRaycaster.set(this.camera.position, direction, 0, distance - radius);
+    return this.occlusionRaycaster.intersectObjects(
+      this.staticOccluderRoots.filter((root) => root?.visible !== false),
+      true,
+    ).some((hit) => hit.distance < distance - radius);
+  }
+
   updateInteraction() {
     this.raycaster.setFromCamera({ x: 0, y: 0 }, this.camera);
     const enabledRoots = this.interactables
@@ -306,6 +332,13 @@ export class PlayerController {
       let object = hit.object;
       while (object && !object.userData.interactableId) object = object.parent;
       selected = this.interactables.find((entry) => entry.id === object?.userData.interactableId) ?? null;
+      const interaction = selected && (selected.interaction ??= {
+        anchor: selected.interactionAnchor ?? selected.root,
+        contactRadius: 0.22,
+        maxUseDistance: 2.35,
+        approachDirection: null,
+      });
+      if (selected && hit.distance > interaction.maxUseDistance) selected = null;
       if (selected) {
         contactPoint = cloneVector(hit.point);
         contactNormal = cloneVector(hit.face?.normal);
@@ -320,31 +353,45 @@ export class PlayerController {
     if (!selected) {
       this.camera.getWorldDirection(this.forward);
       const assisted = chooseAssistedTarget(
-        this.interactables.map((entry) => ({
-          ...entry,
-          visible: entry.root.visible,
-          position: entry.root.getWorldPosition(this.targetPosition.clone()),
-        })),
+        this.interactables.map((entry) => {
+          const interaction = entry.interaction ??= {
+            anchor: entry.interactionAnchor ?? entry.root,
+            contactRadius: 0.22,
+            maxUseDistance: 2.35,
+            approachDirection: null,
+          };
+          const anchor = interaction.anchor ?? entry.root;
+          const anchorPosition = resolveWorldPosition(anchor, this.targetPosition.clone());
+          return {
+            ...entry,
+            ...interaction,
+            anchor: anchorPosition,
+            visible: entry.root.visible,
+            occluded: this.isAnchorOccluded(anchorPosition, interaction.contactRadius),
+          };
+        }),
         this.camera.position,
         this.forward,
+        { currentId: this.selected?.id ?? null },
       );
       selected = assisted ? this.interactables.find((entry) => entry.id === assisted.id) : null;
       if (selected) {
-        const anchor = selected.interactionAnchor ?? selected.root;
-        contactPoint = anchor?.getWorldPosition?.(this.targetPosition.clone()) ?? null;
+        const anchor = selected.interaction?.anchor ?? selected.interactionAnchor ?? selected.root;
+        contactPoint = resolveWorldPosition(anchor, this.targetPosition.clone());
         contactNormal = this.forward.clone().multiplyScalar(-1).normalize();
       }
     }
     if (selected) {
       if (!contactPoint) {
-        const anchor = selected.interactionAnchor ?? selected.root;
-        contactPoint = anchor?.getWorldPosition?.(this.targetPosition.clone()) ?? null;
+        const anchor = selected.interaction?.anchor ?? selected.interactionAnchor ?? selected.root;
+        contactPoint = resolveWorldPosition(anchor, this.targetPosition.clone());
       }
       this.setAimAssist(contactPoint ?? selected.root.getWorldPosition(this.targetPosition.clone()), 0.28);
     } else {
       this.clearAimAssist();
     }
     const selectionChanged = selected !== this.selected;
+    const targetIdChanged = selected?.id !== this.selected?.id;
     const contactChanged = Boolean(contactPoint && (!this.lastTargetContact
       || this.lastTargetContact.distanceTo(contactPoint) > 0.002));
     const normalChanged = Boolean(contactNormal && (!this.lastTargetNormal
@@ -352,9 +399,12 @@ export class PlayerController {
     if (selectionChanged || contactChanged || normalChanged) {
       if (this.selected?.halo) this.selected.halo.visible = false;
       if (selected?.halo) selected.halo.visible = true;
-      if (selectionChanged) this.focusedAt = selected
-        ? (typeof this.now === "function" ? this.now() : readClock())
-        : null;
+      if (targetIdChanged) {
+        this.targetEpoch = Number.isInteger(this.targetEpoch) ? this.targetEpoch + 1 : 1;
+        this.focusedAt = selected
+          ? (typeof this.now === "function" ? this.now() : readClock())
+          : null;
+      }
       this.selected = selected;
       this.lastTargetContact = contactPoint?.clone?.() ?? null;
       this.lastTargetNormal = contactNormal?.clone?.() ?? null;
@@ -362,6 +412,7 @@ export class PlayerController {
       this.onTarget?.({
         id: selected?.id ?? null,
         focused: Boolean(selected),
+        epoch: this.targetEpoch,
         contactPoint: serializeVector(contactPoint),
         contactNormal: serializeVector(contactNormal),
         focusedAt: selected ? this.focusedAt : null,
