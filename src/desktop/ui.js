@@ -1,6 +1,6 @@
-import { createIcons, Keyboard, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
+import { createIcons, Keyboard, Mic, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
 
-const icons = { Keyboard, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
+const icons = { Keyboard, Mic, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
 const DOOR_DEFENSE_STATUS = Object.freeze({
   dormant: "抵住门",
   intro: "门锁正在松动",
@@ -28,6 +28,9 @@ export function createDesktopUI(root) {
       <div class="reticle" id="reticle"><span></span></div>
       <div class="interaction-prompt" id="interaction-prompt" hidden><kbd>E</kbd><span></span></div>
       <div class="subtitle" id="subtitle" hidden></div>
+      <div class="voice-recording" id="voice-recording" role="status" aria-label="正在录音" hidden>
+        <i data-lucide="mic"></i>
+      </div>
       <div class="door-defense" id="door-defense" hidden>
         <span id="door-defense-status">抵住门</span>
         <div class="door-defense-track" role="progressbar" aria-labelledby="door-defense-status" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -78,6 +81,7 @@ export function createDesktopUI(root) {
     prompt: root.querySelector("#interaction-prompt"),
     promptLabel: root.querySelector("#interaction-prompt span"),
     subtitle: root.querySelector("#subtitle"),
+    voiceRecording: root.querySelector("#voice-recording"),
     doorDefense: root.querySelector("#door-defense"),
     doorDefenseStatus: root.querySelector("#door-defense-status"),
     doorDefenseTrack: root.querySelector(".door-defense-track"),
@@ -118,6 +122,9 @@ export function createDesktopUI(root) {
     setSubtitle(text, visible = true) {
       elements.subtitle.textContent = text;
       elements.subtitle.hidden = !visible || !text;
+    },
+    setVoiceRecording(active) {
+      elements.voiceRecording.hidden = !active;
     },
     setDoorDefense({ visible = false, progress = 0, status = "dormant" } = {}) {
       const normalizedProgress = Number.isFinite(progress)

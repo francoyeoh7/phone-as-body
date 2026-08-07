@@ -11,6 +11,7 @@ vi.mock("../src/desktop/create-scene.js", () => ({ createScene: createSceneMock 
 vi.mock("lucide", () => ({
   createIcons: vi.fn(),
   Keyboard: {},
+  Mic: {},
   ScanLine: {},
   Smartphone: {},
   Volume2: {},
@@ -197,6 +198,18 @@ afterEach(() => {
 });
 
 describe("desktop control feedback", () => {
+  it("shows recording only for active voice actions", () => {
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      ui: { setVoiceRecording: vi.fn() },
+    });
+
+    app.handlePhoneAction({ action: "voice-recording", active: true });
+    app.handlePhoneAction({ action: "voice-recording", active: false });
+
+    expect(app.ui.setVoiceRecording.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("reports each applied input sequence and resulting camera angles once", () => {
     const app = Object.assign(Object.create(DesktopApp.prototype), {
       lastFeedbackSequence: -1,
@@ -426,7 +439,7 @@ describe("desktop director routing", () => {
       started: true,
       fallback: false,
       fallbackHolding: false,
-      ui: { setConnected: vi.fn(), showPause: vi.fn(), showPairing: vi.fn() },
+      ui: { setConnected: vi.fn(), setVoiceRecording: vi.fn(), showPause: vi.fn(), showPairing: vi.fn() },
       foundPhone: { release: vi.fn() },
       doorDefense: { abort: vi.fn(), setFallbackHolding: vi.fn() },
       shadowQuest: { abort: vi.fn() },
@@ -439,6 +452,7 @@ describe("desktop director routing", () => {
     expect(app.doorDefense.abort).toHaveBeenCalledOnce();
     expect(app.shadowQuest.abort).toHaveBeenCalledOnce();
     expect(app.player.setPaused).toHaveBeenCalledWith(true);
+    expect(app.ui.setVoiceRecording).toHaveBeenCalledWith(false);
   });
 
   it("finishes disconnect cleanup when an earlier release throws", () => {
@@ -518,7 +532,7 @@ describe("fallback Space hold", () => {
       doorDefense,
       player: { setPaused: vi.fn() },
       audio: { setPaused: vi.fn() },
-      ui: { showPause: vi.fn() },
+      ui: { showPause: vi.fn(), setVoiceRecording: vi.fn() },
     });
 
     app.handleWindowBlur();
@@ -528,6 +542,7 @@ describe("fallback Space hold", () => {
     app.setPaused(true);
     expect(doorDefense.setFallbackHolding).toHaveBeenLastCalledWith(false);
     expect(doorDefense.setFallbackHolding).toHaveBeenCalledTimes(2);
+    expect(app.ui.setVoiceRecording).toHaveBeenCalledWith(false);
   });
 
   it("aborts every cinematic interaction before pausing the player", () => {
@@ -931,6 +946,21 @@ describe("fallback Space hold", () => {
 });
 
 describe("desktop door-defense UI", () => {
+  it("renders a hidden microphone status and toggles it without text", () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const voiceRecording = elements.get("#voice-recording");
+
+    expect(root.innerHTML).toContain('id="voice-recording"');
+    expect(root.innerHTML).toContain('data-lucide="mic"');
+    expect(ui.elements.voiceRecording).toBe(voiceRecording);
+
+    ui.setVoiceRecording(true);
+    expect(voiceRecording.hidden).toBe(false);
+    ui.setVoiceRecording(false);
+    expect(voiceRecording.hidden).toBe(true);
+  });
+
   it("clamps progress into aria percent and a stable scale transform with Chinese status", () => {
     const { root, elements } = createRoot();
     const ui = createDesktopUI(root);

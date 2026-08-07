@@ -174,6 +174,7 @@ export class DesktopApp {
       this.director?.setSettings(settings);
       this.ui.elements.reticle.hidden = settings?.reticle === false;
     }
+    if (action === "voice-recording") this.ui.setVoiceRecording(payload.active === true);
     if (action === "pause") this.setPaused(true);
     if (action === "resume") this.setPaused(false);
   }
@@ -278,6 +279,7 @@ export class DesktopApp {
       }
     };
     runDisconnectStep(() => this.ui.setConnected(false));
+    runDisconnectStep(() => this.ui.setVoiceRecording?.(false));
     if (this.started) {
       runDisconnectStep(() => this.releaseFallbackHold());
       runDisconnectStep(() => this.foundPhone?.release?.());
@@ -304,6 +306,7 @@ export class DesktopApp {
       }
     };
     if (paused) {
+      runPauseStep(() => this.ui.setVoiceRecording?.(false));
       runPauseStep(() => this.handTracking?.setPaused(true));
       runPauseStep(() => this.releaseFallbackHold());
       runPauseStep(() => this.foundPhone?.release?.());

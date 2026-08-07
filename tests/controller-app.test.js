@@ -3,6 +3,7 @@ import { ControllerApp } from "../src/controller/ControllerApp.js";
 
 function createApp({ motionEnabled = true } = {}) {
   const actions = vi.fn();
+  const sendVoiceClip = vi.fn();
   const motion = {
     requestPermission: vi.fn(async () => ({ motionGranted: true })),
     engage: vi.fn(() => true),
@@ -46,6 +47,7 @@ function createApp({ motionEnabled = true } = {}) {
     bfcacheSuspended: false,
     lifecycleGeneration: 0,
     pointerOwners: { cancelAll: vi.fn(), generation: 0 },
+    voiceHold: { cancel: vi.fn(() => Promise.resolve()) },
     viewEngaged: false,
     playSurface: { dataset: {} },
     status: { dataset: {} },
@@ -53,6 +55,7 @@ function createApp({ motionEnabled = true } = {}) {
     joystick: { reset: vi.fn() },
     socket: {
       sendAction: actions,
+      sendVoiceClip,
       markApplied: vi.fn(),
       clearPendingViewDelta: vi.fn(),
       setInput: vi.fn(),
@@ -67,7 +70,7 @@ function createApp({ motionEnabled = true } = {}) {
     ensureAudioContext: vi.fn(),
     destroy: vi.fn(),
   });
-  return { app, motion, cameraMotion, haptics: app.haptics, actions };
+  return { app, motion, cameraMotion, haptics: app.haptics, actions, sendVoiceClip };
 }
 
 function deferred() {
@@ -127,6 +130,36 @@ describe("controller app lifecycle", () => {
     expect(cameraMotion.suspend).toHaveBeenCalledTimes(1);
     expect(haptics.stop).toHaveBeenCalledTimes(1);
     expect(app.pointerOwners.cancelAll).toHaveBeenCalledOnce();
+    expect(app.voiceHold.cancel).toHaveBeenCalledExactlyOnceWith({ discard: true });
+  });
+
+  it("forwards committed voice state and direct binary clips to the socket", () => {
+    const { app, actions, sendVoiceClip } = createApp();
+    const clip = {
+      version: 1,
+      seq: 0,
+      durationMs: 900,
+      mimeType: "audio/webm",
+      data: new Uint8Array([1, 2, 3]).buffer,
+    };
+
+    app.handleVoiceActive(true);
+    app.handleVoiceActive(false);
+    app.handleVoiceClip(clip);
+
+    expect(actions.mock.calls).toEqual([
+      ["voice-recording", { active: true }],
+      ["voice-recording", { active: false }],
+    ]);
+    expect(sendVoiceClip).toHaveBeenCalledExactlyOnceWith(clip);
+  });
+
+  it.each(["disconnected", "replaced"])("discard-cancels voice when the controller is %s", (state) => {
+    const { app } = createApp();
+
+    app.updateConnection(state);
+
+    expect(app.voiceHold.cancel).toHaveBeenCalledExactlyOnceWith({ discard: true });
   });
 
   it("clears crouch before background input cleanup", () => {
@@ -497,6 +530,7 @@ describe("controller app lifecycle", () => {
     app.destroy();
 
     expect(app.foundPhoneUI.setActive).toHaveBeenCalledWith(false);
+    expect(app.voiceHold.cancel).toHaveBeenCalledExactlyOnceWith({ discard: true });
   });
 
   it("stops haptics when the peer disconnects", () => {

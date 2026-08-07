@@ -3,6 +3,7 @@ import {
   Crosshair,
   ChevronLeft,
   ChevronRight,
+  Mic,
   RotateCcw,
   Settings,
   Wifi,
@@ -18,9 +19,10 @@ import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { PointerOwnership } from "./PointerOwnership.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
+import { VoiceHoldController } from "./VoiceHoldController.js";
 import "./styles.css";
 
-const icons = { ChevronLeft, ChevronRight, Crosshair, RotateCcw, Settings, Wifi, X };
+const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, RotateCcw, Settings, Wifi, X };
 
 const defaultSettings = {
   sensitivity: 1,
@@ -120,6 +122,10 @@ export class ControllerApp {
           </div>
         </section>
 
+        <button class="voice-hold" id="voice-hold" type="button" aria-label="按住录音" data-active="false">
+          <i data-lucide="mic"></i>
+        </button>
+
         <div class="permission-panel" id="permission-panel">
           <div class="permission-mark"><i data-lucide="rotate-ccw"></i></div>
           <p class="eyebrow">CORRIDOR 617</p>
@@ -183,6 +189,7 @@ export class ControllerApp {
     this.enableMotion = this.root.querySelector("#enable-motion");
     this.pauseMenu = this.root.querySelector("#settings-menu");
     this.playSurface = this.root.querySelector(".play-surface");
+    this.voiceRegion = this.root.querySelector("#voice-hold");
     this.foundPhoneUI = new FoundPhoneUI(this.root.querySelector("#found-phone-ui"));
     this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
   }
@@ -207,7 +214,7 @@ export class ControllerApp {
         pulse();
         this.socket?.sendAction("interact");
       },
-      onIgnoreTarget: (target) => Boolean(target?.closest?.("button, input, .pause-menu, .permission-panel, .found-phone-ui")),
+      onIgnoreTarget: (target) => Boolean(target?.closest?.("button, input, .pause-menu, .permission-panel, .found-phone-ui, .voice-hold")),
     });
     this.motion = new MotionController({
       onSample: (viewDelta) => this.handleMotionSample(viewDelta),
@@ -225,6 +232,23 @@ export class ControllerApp {
       onFrame: (frame) => this.socket?.sendHandFrame?.(frame),
       onState: (state) => this.handleHandTrackingState(state),
     });
+    this.voiceHold = new VoiceHoldController({
+      ownership: this.pointerOwners,
+      isInRegion: (event) => this.isVoicePoint(event),
+      onActive: (active) => this.handleVoiceActive(active),
+      onClip: (clip) => this.handleVoiceClip(clip),
+    });
+    this.voicePointerHandlers = {
+      pointerdown: (event) => this.voiceHold.pointerDown(event),
+      pointermove: (event) => this.voiceHold.pointerMove(event),
+      pointerleave: (event) => this.voiceHold.pointerLeave(event),
+      pointerup: (event) => this.voiceHold.pointerUp(event),
+      pointercancel: (event) => this.voiceHold.pointerCancel(event),
+      lostpointercapture: (event) => this.voiceHold.pointerCancel(event),
+    };
+    for (const [type, handler] of Object.entries(this.voicePointerHandlers)) {
+      this.voiceRegion.addEventListener(type, handler);
+    }
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
     this.root.querySelector("#recenter").addEventListener("click", () => {
@@ -276,6 +300,7 @@ export class ControllerApp {
       this.foundPhoneUI?.setActive(false);
     }
     if (state !== "joined") {
+      this.voiceHold?.cancel({ discard: true });
       this.cameraMotion?.setMode({ mode: "pulse", context: null, baseline: "fresh" });
       this.cameraMotion?.setFocused(false);
     }
@@ -540,8 +565,27 @@ export class ControllerApp {
   }
 
   cancelPointerOwnership() {
+    this.voiceHold?.cancel({ discard: true });
     this.gameplayClaimGeneration = null;
     this.pointerOwners?.cancelAll?.();
+  }
+
+  isVoicePoint({ clientX, clientY }) {
+    const bounds = this.voiceRegion?.getBoundingClientRect?.();
+    if (bounds?.width > 0 && bounds?.height > 0) {
+      return clientX >= bounds.left && clientX <= bounds.right
+        && clientY >= bounds.top && clientY <= bounds.bottom;
+    }
+    return this.isBottomPoint({ y: clientY });
+  }
+
+  handleVoiceActive(active) {
+    if (this.voiceRegion) this.voiceRegion.dataset.active = String(Boolean(active));
+    this.socket?.sendAction("voice-recording", { active: Boolean(active) });
+  }
+
+  handleVoiceClip(clip) {
+    this.socket?.sendVoiceClip?.(clip);
   }
 
   isBottomPoint({ y }) {
@@ -721,6 +765,9 @@ export class ControllerApp {
     window.clearTimeout(this.calibrationTimer);
     window.clearTimeout(this.braceFallbackTimer);
     this.playSurface?.classList?.remove("brace-impact");
+    for (const [type, handler] of Object.entries(this.voicePointerHandlers ?? {})) {
+      this.voiceRegion?.removeEventListener?.(type, handler);
+    }
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);
     window.removeEventListener("pageshow", this.handlePageShow);

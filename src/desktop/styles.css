@@ -244,7 +244,7 @@ button {
 .subtitle {
   position: fixed;
   z-index: 5;
-  bottom: 54px;
+  bottom: 72px;
   left: 50%;
   max-width: min(620px, calc(100vw - 40px));
   padding: 8px 12px;
@@ -253,6 +253,40 @@ button {
   font-size: 14px;
   text-align: center;
   transform: translateX(-50%);
+}
+
+.voice-recording {
+  position: fixed;
+  z-index: 6;
+  bottom: 24px;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(210, 173, 99, 0.62);
+  border-radius: 50%;
+  color: #f0d99c;
+  background: rgba(10, 12, 11, 0.82);
+  transform: translateX(-50%);
+  animation: voice-recording-pulse 1.35s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.voice-recording svg {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes voice-recording-pulse {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-recording {
+    animation: none;
+  }
 }
 
 .pairing-overlay {
