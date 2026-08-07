@@ -20,6 +20,7 @@ export class VoiceHoldController {
     clearTimeout = (timer) => window.clearTimeout(timer),
     getUserMedia = (constraints) => navigator.mediaDevices.getUserMedia(constraints),
     MediaRecorder = globalThis.MediaRecorder,
+    Blob = globalThis.Blob,
     ownership,
     isInRegion,
     onActive,
@@ -30,6 +31,7 @@ export class VoiceHoldController {
     this.clearTimeout = clearTimeout;
     this.getUserMedia = getUserMedia;
     this.MediaRecorder = MediaRecorder;
+    this.Blob = Blob;
     this.ownership = ownership;
     this.isInRegion = isInRegion;
     this.onActive = onActive;
@@ -60,6 +62,7 @@ export class VoiceHoldController {
       recorder: null,
       chunks: [],
       active: false,
+      stopping: false,
       discard: false,
       released: false,
       tracksStopped: false,
@@ -116,6 +119,7 @@ export class VoiceHoldController {
     consumePointer(event);
     const attempt = this.currentAttempt(event?.pointerId);
     if (!attempt) return Promise.resolve(false);
+    if (!this.isInRegion?.(event)) return this.cancel({ discard: true });
     return attempt.active
       ? this.stopRecording(attempt, { discard: false })
       : this.cancel({ discard: true });
@@ -130,6 +134,7 @@ export class VoiceHoldController {
   cancel({ discard = true } = {}) {
     const attempt = this.attempt;
     if (!attempt) return Promise.resolve(false);
+    attempt.discard ||= discard;
     if (attempt.active) return this.stopRecording(attempt, { discard });
 
     attempt.discard = true;
@@ -149,16 +154,25 @@ export class VoiceHoldController {
 
   currentAttempt(pointerId) {
     const attempt = this.attempt;
-    return attempt
-      && attempt.generation === this.generation
-      && attempt.pointerId === pointerId
-      ? attempt
-      : null;
+    if (!attempt
+      || attempt.generation !== this.generation
+      || attempt.pointerId !== pointerId
+      || attempt.stopping) return null;
+    if (!this.hasCurrentOwnership(attempt)) {
+      this.cancel({ discard: true });
+      return null;
+    }
+    return attempt;
   }
 
   receiveStream(attempt, stream) {
-    if (this.attempt !== attempt || attempt.generation !== this.generation) {
+    if (!this.isCurrent(attempt) || !this.hasCurrentOwnership(attempt)) {
       stopStream(stream);
+      if (this.attempt === attempt) {
+        attempt.discard = true;
+        this.detachAttempt(attempt);
+        attempt.resolveCompletion(false);
+      }
       return false;
     }
     attempt.stream = stream;
@@ -175,7 +189,15 @@ export class VoiceHoldController {
   }
 
   commit(attempt) {
-    if (this.attempt !== attempt || !attempt.dwellReady || !attempt.stream || attempt.active) return false;
+    if (!this.isCurrent(attempt)) return false;
+    if (!this.hasCurrentOwnership(attempt)) {
+      attempt.discard = true;
+      this.detachAttempt(attempt);
+      this.stopTracks(attempt);
+      attempt.resolveCompletion(false);
+      return false;
+    }
+    if (!attempt.dwellReady || !attempt.stream || attempt.active) return false;
     try {
       const recorder = new this.MediaRecorder(attempt.stream);
       attempt.recorder = recorder;
@@ -203,10 +225,12 @@ export class VoiceHoldController {
   }
 
   stopRecording(attempt, { discard }) {
-    if (attempt.finalized) return attempt.completion;
     attempt.discard ||= discard;
+    if (attempt.finalized) return attempt.completion;
+    if (attempt.stopping) return attempt.completion;
+    attempt.stopping = true;
     attempt.durationMs = Math.min(MAX_VOICE_DURATION_MS, Math.max(1, this.clock() - attempt.startedAt));
-    this.detachAttempt(attempt);
+    this.releaseAttempt(attempt);
     this.notifyInactive(attempt);
     this.pendingRecording = attempt.completion;
     try {
@@ -227,33 +251,52 @@ export class VoiceHoldController {
     attempt.finalized = true;
     try {
       const mimeType = attempt.recorder?.mimeType || attempt.chunks[0]?.type || "audio/webm";
-      const clipBlob = new Blob(attempt.chunks, { type: mimeType });
+      const clipBlob = new this.Blob(attempt.chunks, { type: mimeType });
       if (!attempt.discard && clipBlob.size > 0 && clipBlob.size <= MAX_VOICE_CLIP_BYTES) {
         const data = await clipBlob.arrayBuffer();
-        this.onClip?.({
-          version: 1,
-          seq: this.clipSequence++,
-          durationMs: attempt.durationMs,
-          mimeType,
-          data,
-        });
+        if (!attempt.discard && this.isCurrent(attempt) && this.hasCurrentOwnership(attempt)) {
+          this.onClip?.({
+            version: 1,
+            seq: this.clipSequence++,
+            durationMs: attempt.durationMs,
+            mimeType,
+            data,
+          });
+        }
       }
     } finally {
       this.stopTracks(attempt);
+      this.clearAttempt(attempt);
       attempt.resolveCompletion(true);
     }
   }
 
   detachAttempt(attempt) {
+    this.releaseAttempt(attempt);
+    this.clearAttempt(attempt);
+  }
+
+  releaseAttempt(attempt) {
     if (attempt.dwellTimer !== null) this.clearTimeout(attempt.dwellTimer);
     if (attempt.stopTimer !== null) this.clearTimeout(attempt.stopTimer);
     attempt.dwellTimer = null;
     attempt.stopTimer = null;
     this.releaseOwnership(attempt);
+  }
+
+  clearAttempt(attempt) {
     if (this.attempt === attempt) {
       this.attempt = null;
       this.generation += 1;
     }
+  }
+
+  isCurrent(attempt) {
+    return this.attempt === attempt && attempt.generation === this.generation;
+  }
+
+  hasCurrentOwnership(attempt) {
+    return this.ownership?.generation === attempt.ownershipGeneration;
   }
 
   releaseOwnership(attempt) {

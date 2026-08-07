@@ -59,9 +59,17 @@ function createStream() {
   return { stream: { getTracks: () => [track] }, track };
 }
 
-function createRecorderClass(chunks = [new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" })]) {
+function createRecorderClass(
+  chunks = [new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" })],
+  { deferStop = false } = {}
+) {
   return class FakeMediaRecorder {
     static instances = [];
+    static pendingStops = [];
+
+    static flushStops() {
+      for (const finish of this.pendingStops.splice(0)) finish();
+    }
 
     constructor(stream) {
       this.stream = stream;
@@ -75,18 +83,20 @@ function createRecorderClass(chunks = [new Blob([new Uint8Array([1, 2, 3])], { t
         if (this.state === "inactive") return;
         this.state = "inactive";
         for (const data of chunks) this.ondataavailable?.({ data });
-        this.onstop?.();
+        const finish = () => this.onstop?.();
+        if (deferStop) FakeMediaRecorder.pendingStops.push(finish);
+        else finish();
       });
       FakeMediaRecorder.instances.push(this);
     }
   };
 }
 
-function createHarness({ permission, chunks, isInRegion } = {}) {
+function createHarness({ permission, chunks, isInRegion, recorderOptions, Blob: BlobImpl } = {}) {
   const clock = createClock();
   const media = createStream();
   const getUserMedia = vi.fn(() => permission ?? Promise.resolve(media.stream));
-  const MediaRecorder = createRecorderClass(chunks);
+  const MediaRecorder = createRecorderClass(chunks, recorderOptions);
   const ownership = {
     generation: 3,
     claimVoice: vi.fn(() => true),
@@ -100,6 +110,7 @@ function createHarness({ permission, chunks, isInRegion } = {}) {
     clearTimeout: clock.clearTimeout,
     getUserMedia,
     MediaRecorder,
+    Blob: BlobImpl,
     ownership,
     isInRegion: isInRegion ?? ((event) => event.clientY >= 700),
     onActive,
@@ -283,5 +294,83 @@ describe("VoiceHoldController", () => {
     expect(harness.onClip).not.toHaveBeenCalled();
     expect(harness.track.stop).toHaveBeenCalledOnce();
     expect(harness.ownership.release).toHaveBeenCalledOnce();
+  });
+
+  it("lets lifecycle discard cancel a normal stop while recorder onstop is queued", async () => {
+    const harness = createHarness({ recorderOptions: { deferStop: true } });
+    await beginRecording(harness);
+
+    const stop = harness.controller.pointerUp(pointer(7, 100, 800));
+    const cancel = harness.controller.cancel({ discard: true });
+    harness.MediaRecorder.flushStops();
+    await Promise.all([stop, cancel]);
+
+    expect(harness.onActive.mock.calls).toEqual([[true], [false]]);
+    expect(harness.onClip).not.toHaveBeenCalled();
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks lifecycle discard after asynchronous clip conversion", async () => {
+    const pendingData = deferred();
+    class DeferredBlob {
+      constructor(parts, { type } = {}) {
+        this.type = type ?? "";
+        this.size = parts.reduce((size, part) => size + (part.size ?? part.byteLength ?? 0), 0);
+      }
+
+      arrayBuffer() {
+        return pendingData.promise;
+      }
+    }
+    const harness = createHarness({ Blob: DeferredBlob });
+    await beginRecording(harness);
+
+    const stop = harness.controller.pointerUp(pointer(7, 100, 800));
+    const cancel = harness.controller.cancel({ discard: true });
+    pendingData.resolve(new Uint8Array([1, 2, 3]).buffer);
+    await Promise.all([stop, cancel]);
+
+    expect(harness.onActive.mock.calls).toEqual([[true], [false]]);
+    expect(harness.onClip).not.toHaveBeenCalled();
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("rejects permission that resolves after pointer ownership generation changes", async () => {
+    const pending = deferred();
+    const harness = createHarness({ permission: pending.promise });
+    harness.controller.pointerDown(pointer(7, 100, 800));
+    harness.clock.advance(420);
+    harness.ownership.generation += 1;
+
+    pending.resolve(harness.stream);
+    await harness.controller.flushPendingPermission();
+
+    expect(harness.onActive).not.toHaveBeenCalled();
+    expect(harness.onClip).not.toHaveBeenCalled();
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("rejects dwell commit after pointer ownership generation changes", async () => {
+    const harness = createHarness();
+    harness.controller.pointerDown(pointer(7, 100, 800));
+    await harness.controller.flushPendingPermission();
+    harness.ownership.generation += 1;
+
+    harness.clock.advance(420);
+
+    expect(harness.onActive).not.toHaveBeenCalled();
+    expect(harness.onClip).not.toHaveBeenCalled();
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("discards pointerup outside the voice region without an intervening move", async () => {
+    const harness = createHarness({ isInRegion: (event) => event.clientY >= 700 });
+    await beginRecording(harness);
+
+    await harness.controller.pointerUp(pointer(7, 100, 699));
+
+    expect(harness.onActive.mock.calls).toEqual([[true], [false]]);
+    expect(harness.onClip).not.toHaveBeenCalled();
+    expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 });
