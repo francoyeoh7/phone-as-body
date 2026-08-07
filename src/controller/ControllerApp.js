@@ -223,10 +223,7 @@ export class ControllerApp {
     this.handTracker = new MediaPipeHandTracker({
       getVideo: () => this.cameraMotion?.getVideoElement?.() ?? null,
       onFrame: (frame) => this.socket?.sendHandFrame?.(frame),
-      onState: (state) => {
-        this.handTrackingState = state;
-        if (this.playSurface) this.playSurface.dataset.hand = state;
-      },
+      onState: (state) => this.handleHandTrackingState(state),
     });
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
@@ -426,6 +423,12 @@ export class ControllerApp {
     if (state === "denied" && this.motionEnabled && !this.requiresContinue) {
       this.permissionCopy.textContent = "后置摄像头不可用，仍可使用短触操作继续探索。";
     }
+  }
+
+  handleHandTrackingState(state) {
+    this.handTrackingState = state;
+    if (this.usesDoorFallbackHold()) this.clearCrouch({ immediate: true });
+    if (this.playSurface) this.playSurface.dataset.hand = state;
   }
 
   handleCameraMotion() {

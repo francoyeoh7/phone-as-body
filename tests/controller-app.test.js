@@ -211,6 +211,26 @@ describe("controller app lifecycle", () => {
     expect(app.sendInput).toHaveBeenCalledWith({ immediate: true });
   });
 
+  it("clears crouch when hand tracking enters door fallback and keeps it clear after recovery", () => {
+    const { app } = createApp();
+    app.cameraEnabled = true;
+    app.handTaskContext = "door-defense";
+    app.handTrackingState = "tracked";
+    app.crouching = true;
+    app.move = { x: 0, y: 0 };
+
+    app.handleHandTrackingState("fallback");
+
+    expect(app.crouching).toBe(false);
+    expect(app.sendInput).toHaveBeenCalledTimes(1);
+    expect(app.sendInput).toHaveBeenCalledWith({ immediate: true });
+
+    app.handleHandTrackingState("tracked");
+
+    expect(app.crouching).toBe(false);
+    expect(app.sendInput).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps motion controls available when camera permission is denied", async () => {
     const { app, cameraMotion } = createApp({ motionEnabled: false });
     cameraMotion.start.mockResolvedValue({ cameraGranted: false });
