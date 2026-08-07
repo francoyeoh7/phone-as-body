@@ -187,6 +187,7 @@ export class DesktopApp {
     return Boolean(
       this.started
       && this.player
+      && !this.fallback
       && !this.paused
       && !this.destroyed
       && !this.inventoryOpen
@@ -402,7 +403,7 @@ export class DesktopApp {
       this.player.syncAfterPhysics();
       this.experience.update(delta, this.elapsed);
       this.foundPhone?.update(delta);
-      this.doorDefense?.update(delta);
+      if (!this.inventoryOpen) this.doorDefense?.update(delta);
       this.shadowQuest?.update(delta, this.elapsed);
       if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
         this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");

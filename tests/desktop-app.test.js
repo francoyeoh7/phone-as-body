@@ -345,6 +345,7 @@ describe("desktop inventory routing", () => {
   it.each([
     ["before gameplay", { started: false }],
     ["while paused", { paused: true }],
+    ["in fallback keyboard mode", { fallback: true }],
     ["during door cinematic", { doorDefense: { isCinematic: () => true } }],
     ["during found-phone cinematic", { foundPhone: { isInspecting: () => true } }],
     ["during shadow cinematic", { shadowQuest: { isCinematic: () => true } }],
@@ -532,6 +533,27 @@ describe("desktop director routing", () => {
     app.tick(16);
 
     expect(foundPhone.update).toHaveBeenCalledExactlyOnceWith(0.016);
+  });
+
+  it("defers proximity door acquisition while inventory owns input and resumes after close", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 13));
+    const { app, doorDefense } = createTickHarness();
+    doorDefense.acquire = vi.fn();
+    doorDefense.update.mockImplementation(() => doorDefense.acquire());
+    app.inventoryOpen = true;
+    app.inventory = { setHovered: vi.fn() };
+    app.ui = { closeInventory: vi.fn() };
+
+    app.tick(16);
+
+    expect(doorDefense.update).not.toHaveBeenCalled();
+    expect(doorDefense.acquire).not.toHaveBeenCalled();
+
+    expect(app.closeInventory()).toBe(true);
+    app.tick(32);
+
+    expect(doorDefense.update).toHaveBeenCalledExactlyOnceWith(0.016);
+    expect(doorDefense.acquire).toHaveBeenCalledOnce();
   });
 
   it("aborts both new scenes and the shadow quest on peer disconnect", () => {
