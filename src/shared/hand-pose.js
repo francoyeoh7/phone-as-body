@@ -186,16 +186,27 @@ function scaleContinuity(currentScale, previous, relativeScale) {
     : 0.5;
 }
 
-function motionContinuity(center, capturedAt, previous) {
+function motionContinuity(center, capturedAt, previous, currentPalmScale) {
   if (!previous) return { velocity: 0, confidence: 1, valid: true };
   const priorCenter = previousCenter(previous);
   const priorTimestamp = previous.capturedAt;
   if (!priorCenter || !Number.isFinite(capturedAt) || !Number.isFinite(priorTimestamp) || capturedAt <= priorTimestamp) {
     return { velocity: 0, confidence: 0, valid: false };
   }
-  const velocity = distance(center, priorCenter) / ((capturedAt - priorTimestamp) / 1000);
+  const displacement = distance(center, priorCenter);
+  const velocity = displacement / ((capturedAt - priorTimestamp) / 1000);
   if (!Number.isFinite(velocity)) return { velocity: 0, confidence: 0, valid: false };
-  return { velocity, confidence: Math.exp(-velocity * 2.5), valid: true };
+  const priorScale = previousPalmScale(previous);
+  const referenceScale = Math.max(
+    Number.isFinite(currentPalmScale) ? currentPalmScale : 0,
+    Number.isFinite(priorScale) ? priorScale : 0,
+  );
+  const plausibleLimit = 0.3 + referenceScale * 2.4;
+  if (displacement > plausibleLimit) return { velocity, confidence: 0, valid: false };
+  const softStart = Math.max(0.06, referenceScale * 0.45);
+  const excess = Math.max(0, displacement - softStart);
+  const confidence = clamp(1 - (excess / Math.max(PALM_EPSILON, plausibleLimit - softStart)) * 0.7, 0.3, 1);
+  return { velocity, confidence, valid: true };
 }
 
 function assertFiniteDerivedFeatures(pose) {
@@ -252,6 +263,20 @@ export function normalizeCameraWorldLandmarks(points, rotation = 0) {
   return points.map((point) => rotateWorldPoint(point, rotation));
 }
 
+export function resolveCameraRotation({ videoWidth, videoHeight, trackRotation = 0, screenAngle = 0 } = {}) {
+  if (!Number.isFinite(videoWidth) || !Number.isFinite(videoHeight)
+    || videoWidth <= 0 || videoHeight <= 0) {
+    throw new RangeError("video dimensions must be positive");
+  }
+  const cardinal = (value) => [0, 90, 180, 270].includes(value) ? value : 0;
+  const sensorRotation = cardinal(trackRotation);
+  if (sensorRotation !== 0) return sensorRotation;
+  const displayRotation = cardinal(screenAngle);
+  if (videoWidth > videoHeight && [90, 270].includes(displayRotation)) return displayRotation;
+  if (videoHeight >= videoWidth && displayRotation === 180) return 180;
+  return 0;
+}
+
 export function deriveHandFeatures(sample, previous = null, calibration = null) {
   const landmarks = validateLandmarks(sample?.landmarks, "landmarks");
   const worldLandmarks = validateLandmarks(sample?.worldLandmarks, "world landmarks");
@@ -277,7 +302,7 @@ export function deriveHandFeatures(sample, previous = null, calibration = null) 
     ? calibration.palmSpan
     : null;
   const relativeScale = calibratedPalmSpan ? measuredPalmScale / calibratedPalmSpan : 1;
-  const motion = motionContinuity(center, sample?.capturedAt, previous);
+  const motion = motionContinuity(center, sample?.capturedAt, previous, measuredPalmScale);
   const coverage = inFrameCoverage(landmarks);
   const handConfidence = clamp(handedness.score * 0.55 + coverage * 0.45, 0, 1);
   const handednessContinuity = previous?.handedness && previous.handedness !== handedness.label ? 0 : 1;

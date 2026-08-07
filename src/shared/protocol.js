@@ -132,7 +132,7 @@ export function isHandFrame(value) {
     value.handConfidence, value.trackingConfidence, value.openness, value.grabStrength,
     value.pinchStrength, value.reachProgress, value.palmFacing,
   ];
-  return value.handedness === "left" || value.handedness === "right"
+  return value.handedness === "left"
     ? bounded.every((score) => isFiniteNumber(score) && score >= 0 && score <= 1)
       && isLandmarkArray(value.landmarks)
       && isLandmarkArray(value.worldLandmarks)

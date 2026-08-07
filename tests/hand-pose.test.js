@@ -8,6 +8,7 @@ import {
   normalizeMediaPipeHandedness,
   normalizeCameraLandmarks,
   normalizeCameraWorldLandmarks,
+  resolveCameraRotation,
 } from "../src/shared/hand-pose.js";
 import {
   MEDIAPIPE_HAND_LANDMARKS,
@@ -24,6 +25,19 @@ const palmSpan = (sample) => (
 ) / 2;
 
 describe("hand pose features", () => {
+  it.each([
+    [{ videoWidth: 1080, videoHeight: 1920, trackRotation: 0, screenAngle: 0 }, 0],
+    [{ videoWidth: 1920, videoHeight: 1080, trackRotation: 0, screenAngle: 90 }, 90],
+    [{ videoWidth: 1920, videoHeight: 1080, trackRotation: 0, screenAngle: 270 }, 270],
+    [{ videoWidth: 1080, videoHeight: 1920, trackRotation: 180, screenAngle: 0 }, 180],
+  ])("resolves rear-camera display rotation from live video metadata", (input, expected) => {
+    expect(resolveCameraRotation(input)).toBe(expected);
+  });
+
+  it("rejects invalid video dimensions when resolving camera rotation", () => {
+    expect(() => resolveCameraRotation({ videoWidth: 0, videoHeight: 1920, screenAngle: 0 })).toThrow(/dimensions/);
+  });
+
   it("rotates metric world landmarks around their origin", () => {
     const [point] = normalizeCameraWorldLandmarks([{ x: 0.2, y: 0.3, z: 0.4 }], 90);
     expect(point).toEqual({ x: -0.3, y: 0.2, z: 0.4 });
@@ -249,6 +263,37 @@ describe("hand pose features", () => {
 
     expect(stable.trackingConfidence).toBeGreaterThan(0.8);
     expect(discontinuous.trackingConfidence).toBeLessThan(stable.trackingConfidence);
+  });
+
+  it("keeps intentional left-hand reach motion above the tracking threshold", () => {
+    const previous = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      capturedAt: 100,
+      translate: [-0.12, 0, 0],
+    }));
+    const moved = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      capturedAt: 166,
+      translate: [-0.07, -0.03, 0],
+    }), previous);
+
+    expect(moved.velocity).toBeGreaterThan(0.5);
+    expect(moved.trackingConfidence).toBeGreaterThanOrEqual(0.62);
+  });
+
+  it("rejects an impossible single-frame hand teleport", () => {
+    const previous = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      capturedAt: 100,
+      translate: [-0.12, 0, 0],
+    }));
+    const teleported = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      capturedAt: 166,
+      translate: [0.83, 0, 0],
+    }), previous);
+
+    expect(teleported.trackingConfidence).toBeLessThan(0.48);
   });
 
   it("uses palm-span calibration without constraining relative scale to a score range", () => {

@@ -73,6 +73,13 @@ describe("strict hand frame protocol", () => {
     expect(protocol.isHandFrame(handFrame())).toBe(true);
   });
 
+  it("rejects physical-right tracked envelopes while retaining status frames", () => {
+    expect(protocol.isHandFrame(handFrame({ handedness: "right" }))).toBe(false);
+    expect(protocol.isHandFrame({
+      version: 1, seq: 2, capturedAt: 1, modeEpoch: 0, state: "lost", reason: "no-hand",
+    })).toBe(true);
+  });
+
   it.each([
     ["20 landmarks", { landmarks: handLandmarks().slice(0, 20) }],
     ["invalid confidence", { handConfidence: 1.01 }],
