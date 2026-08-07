@@ -102,8 +102,11 @@ describe("hierarchical arm rig adapter", () => {
         new THREE.QuaternionKeyframeTrack("f_index01L.quaternion", [0, 1], [...open.toArray(), ...closed.toArray()]),
       ]),
     ];
-    const adapter = createArmRigAdapter(root, bones, "right", animations);
-    const result = adapter.mapJoints([{ name: "wrist", position: [0, 0, 0] }], {
+    const adapter = createArmRigAdapter(root, bones, "left", animations);
+    const result = adapter.mapJoints([
+      { name: "wrist", position: [0, 0, 0] },
+      { name: "index-finger-phalanx-proximal", position: [0, 0.1, 0], curl: 0.5 },
+    ], {
       wrist: { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] },
       curls: [0, 0.5, 0, 0, 0],
       relativeScale: 1,
@@ -114,7 +117,7 @@ describe("hierarchical arm rig adapter", () => {
 
   it("converts MediaPipe camera axes into a matching Three.js palm orientation", () => {
     const { root, bones } = makeArmRig();
-    const adapter = createArmRigAdapter(root, bones, "right");
+    const adapter = createArmRigAdapter(root, bones, "left");
     const result = adapter.mapJoints([
       { name: "wrist", position: [0, 0, 0] },
       { name: "middle-finger-metacarpal", position: [0, -0.2, 0] },
@@ -131,14 +134,14 @@ describe("hierarchical arm rig adapter", () => {
     expect(result.rootQuaternion.angleTo(
       new THREE.Quaternion().setFromAxisAngle(
         new THREE.Vector3(0, 0, 1),
-        Math.PI - THREE.MathUtils.degToRad(42),
+        Math.PI + THREE.MathUtils.degToRad(42),
       ),
     )).toBeLessThan(1e-6);
   });
 
   it("keeps a forearm rig anchored at the wrist and returns a finite palm rotation", () => {
     const { root, bones } = makeArmRig();
-    const adapter = createArmRigAdapter(root, bones, "right");
+    const adapter = createArmRigAdapter(root, bones, "left");
     adapter.prepareModel();
     const result = adapter.mapJoints([
       { name: "wrist", position: [0, 0, 0] },
@@ -162,7 +165,26 @@ describe("hierarchical arm rig adapter", () => {
     expect(result.rootQuaternion.toArray().every(Number.isFinite)).toBe(true);
     expect(result.transforms.f_index01L.quaternion.toArray().every(Number.isFinite)).toBe(true);
     expect(result.scale).toBeCloseTo(1.05, 6);
-    expect(bones.shoulderR.scale.x).toBeCloseTo(0.0001, 8);
-    expect(bones.shoulderR.position.y).toBeLessThan(-10);
+    expect(bones.shoulderR.scale.x).toBe(1);
+    expect(bones.shoulderR.position.y).toBe(0);
+  });
+
+  it("drives adjacent phalanxes from their own tracked bends", () => {
+    const { root, bones } = makeArmRig();
+    const open = new THREE.Quaternion();
+    const closed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    const animations = [new THREE.AnimationClip("grab.L", 1, [
+      new THREE.QuaternionKeyframeTrack("f_index01L.quaternion", [0, 1], [...open.toArray(), ...closed.toArray()]),
+      new THREE.QuaternionKeyframeTrack("f_index02L.quaternion", [0, 1], [...open.toArray(), ...closed.toArray()]),
+    ])];
+    const adapter = createArmRigAdapter(root, bones, "left", animations);
+    const result = adapter.mapJoints([
+      { name: "wrist", position: [0, 0, 0] },
+      { name: "index-finger-phalanx-proximal", position: [0, 0.1, 0], curl: 0.15 },
+      { name: "index-finger-phalanx-intermediate", position: [0, 0.2, 0], curl: 0.85 },
+    ], { wrist: { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] }, curls: [0, 0.5, 0, 0, 0] });
+
+    expect(result.transforms.f_index01L.quaternion.angleTo(open)).toBeCloseTo(Math.PI / 2 * 0.15, 5);
+    expect(result.transforms.f_index02L.quaternion.angleTo(open)).toBeCloseTo(Math.PI / 2 * 0.85, 5);
   });
 });

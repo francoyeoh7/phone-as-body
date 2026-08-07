@@ -26,24 +26,42 @@ export class HandTrackingDirector {
     this.destroyed = false;
     this.paused = false;
     this.target = null;
+    this.targetEpoch = 0;
   }
 
   setTarget(target = null) {
-    const next = target?.id ? {
-      id: target.id,
+    const hadTarget = this.target !== null;
+    const nextId = target?.id ?? null;
+    const idChanged = (this.target?.id ?? null) !== nextId;
+    let epoch = null;
+    if (nextId) {
+      epoch = Number.isInteger(target?.epoch) && target.epoch >= 0
+        ? target.epoch
+        : idChanged ? this.targetEpoch + 1 : this.target?.epoch ?? this.targetEpoch;
+    }
+    const next = nextId ? {
+      id: nextId,
+      epoch,
       contactPoint: finitePoint(target.contactPoint),
       contactNormal: finitePoint(target.contactNormal),
       focusedAt: Number.isFinite(target.focusedAt) ? target.focusedAt : null,
     } : null;
-    const hadTarget = this.target !== null;
-    const changed = (this.target?.id ?? null) !== (next?.id ?? null);
+    const changed = idChanged || (this.target?.epoch ?? null) !== (next?.epoch ?? null);
+    if (next) this.targetEpoch = next.epoch;
+    else if (hadTarget) this.targetEpoch += 1;
     this.target = next;
-    this.hand?.setTargetContact?.(next ? {
-      point: next.contactPoint,
-      normal: next.contactNormal,
-    } : null);
+    this.publishTargetContact(false);
     if (changed) this.gestureGate.reset({ requireRelease: hadTarget });
     return this.target;
+  }
+
+  publishTargetContact(engaged = false) {
+    this.hand?.setTargetContact?.(this.target ? {
+      point: this.target.contactPoint,
+      normal: this.target.contactNormal,
+      epoch: this.target.epoch,
+      engaged: engaged === true,
+    } : null);
   }
 
   beginTask({ context, requiredAction, preCalibrated = false, skipCalibration = false } = {}) {
@@ -65,6 +83,7 @@ export class HandTrackingDirector {
     this.owner = null;
     this.machine.reset();
     this.gestureGate.reset({ requireRelease: true });
+    this.publishTargetContact(false);
     this.hand?.setVisible?.(!this.hand?.fallback);
     this.hand?.setContext?.(null);
     this.sendControllerEvent({ type: "hand-task", active: false, context: activeContext });
@@ -105,17 +124,21 @@ export class HandTrackingDirector {
       if (!this.target?.id) {
         return sample ? { sample, fallback: this.fallback } : null;
       }
-      if (this.gestureGate.update(sample, now, this.target)) {
+      const triggered = this.gestureGate.update(sample, now, this.target);
+      this.publishTargetContact(this.gestureGate.isContactCandidate?.(this.target.epoch) === true);
+      if (triggered) {
         this.onGesture({
           type: "grab",
           at: now,
-          pose: sample?.pose ?? null,
+          pose: sample?.gesturePose ?? sample?.pose ?? null,
           targetId: this.target.id,
+          targetEpoch: this.target.epoch,
         });
       }
       return sample ? { sample, fallback: this.fallback } : null;
     }
     const state = this.machine.update(sample ?? { state: "lost", fresh: false }, now);
+    this.publishTargetContact(["candidate", "confirmed", "held"].includes(state.phase));
     return { ...state, sample, fresh: sample?.fresh === true };
   }
 

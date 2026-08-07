@@ -9,7 +9,8 @@ function frame(overrides = {}) {
     state: "tracked",
     trackingConfidence: 0.95,
     handConfidence: 0.95,
-    handedness: "right",
+    handedness: "left",
+    reachEligible: true,
     openness: 0.9,
     palmFacing: 0.9,
     grabStrength: 0.9,
@@ -34,7 +35,7 @@ describe("HandTrackingDirector", () => {
     expect(director.acceptFrame(frame({ receivedAt: now }))).toBe(true);
     director.update(1 / 60);
 
-    expect(hand.applyPose).toHaveBeenCalledWith(expect.objectContaining({ handedness: "right" }), 1 / 60);
+    expect(hand.applyPose).toHaveBeenCalledWith(expect.objectContaining({ handedness: "left" }), 1 / 60);
     expect(hand.setVisible).toHaveBeenCalledWith(true);
     expect(director.owner).toBeNull();
   });
@@ -92,6 +93,7 @@ describe("HandTrackingDirector", () => {
     };
     expect(director.setTarget(target)).toEqual({
       id: "faucet",
+      epoch: 1,
       contactPoint: [0.25, 1.2, -1.4],
       contactNormal: [1, 0, 0],
       focusedAt: 75,
@@ -99,6 +101,8 @@ describe("HandTrackingDirector", () => {
     expect(hand.setTargetContact).toHaveBeenLastCalledWith({
       point: [0.25, 1.2, -1.4],
       normal: [1, 0, 0],
+      epoch: 1,
+      engaged: false,
     });
     expect(gestureGate.reset).toHaveBeenLastCalledWith({ requireRelease: false });
 
@@ -107,11 +111,41 @@ describe("HandTrackingDirector", () => {
     expect(hand.setTargetContact).toHaveBeenLastCalledWith({
       point: [0.3, 1.2, -1.4],
       normal: [1, 0, 0],
+      epoch: 1,
+      engaged: false,
     });
 
     director.setTarget(null);
     expect(hand.setTargetContact).toHaveBeenLastCalledWith(null);
     expect(gestureGate.reset).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes candidate contact and emits the matching target epoch", () => {
+    const gestureGate = {
+      update: vi.fn(() => true),
+      reset: vi.fn(),
+      isContactCandidate: vi.fn(() => true),
+    };
+    const hand = {
+      fallback: false,
+      setContext: vi.fn(),
+      setVisible: vi.fn(),
+      setTargetContact: vi.fn(),
+      applyPose: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const onGesture = vi.fn();
+    const director = new HandTrackingDirector({ hand, gestureGate, onGesture, now: () => 200, sendControllerEvent: vi.fn() });
+    director.setTarget({
+      id: "faucet", epoch: 7, focusedAt: 0,
+      contactPoint: [0.2, 1, -1], contactNormal: [0, 0, 1],
+    });
+    director.acceptFrame(frame({ receivedAt: 200 }));
+
+    director.update(0.016);
+
+    expect(hand.setTargetContact).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 7, engaged: true }));
+    expect(onGesture).toHaveBeenCalledWith(expect.objectContaining({ targetId: "faucet", targetEpoch: 7 }));
   });
 
   it("does not consume a grab while the reticle has no focused target", () => {
@@ -129,9 +163,10 @@ describe("HandTrackingDirector", () => {
 
   it("owns one context and emits exactly-once task lifecycle events", () => {
     let now = 0;
-    const hand = { fallback: false, load: vi.fn(async () => true), setContext: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
+    const hand = { fallback: false, load: vi.fn(async () => true), setContext: vi.fn(), setVisible: vi.fn(), setTargetContact: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
     const send = vi.fn();
     const director = new HandTrackingDirector({ hand, now: () => now, sendControllerEvent: send });
+    director.setTarget({ id: "found-phone", epoch: 4, contactPoint: [0.2, 1, -1], contactNormal: [0, 0, 1] });
     expect(director.beginTask({ context: "found-phone", requiredAction: "grab" })).toBe(true);
     expect(director.beginTask({ context: "door-defense", requiredAction: "brace" })).toBe(false);
     expect(send).toHaveBeenCalledWith({ type: "hand-task", active: true, context: "found-phone" });
@@ -139,7 +174,10 @@ describe("HandTrackingDirector", () => {
     now = 1000;
     director.update(1);
     expect(director.snapshot("found-phone")).toEqual(expect.objectContaining({ context: "found-phone" }));
+    director.publishTargetContact(true);
+    expect(hand.setTargetContact).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 4, engaged: true }));
     expect(director.endTask("found-phone")).toBe(true);
+    expect(hand.setTargetContact).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 4, engaged: false }));
     expect(director.endTask("found-phone")).toBe(false);
     expect(send).toHaveBeenCalledWith({ type: "hand-task", active: false, context: "found-phone" });
     expect(hand.setVisible).not.toHaveBeenCalledWith(false);

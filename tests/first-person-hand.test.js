@@ -54,9 +54,8 @@ describe("FirstPersonHand", () => {
 
   it("anchors the hand at the lower edge and preserves the authored wrist position", async () => {
     const left = fakeScene();
-    const right = fakeScene();
     const camera = new THREE.Group();
-    const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/left.glb": left.root, "/assets/hands/right.glb": right.root }), cloneScene: (scene) => scene.clone(true) });
+    const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/left.glb": left.root }), cloneScene: (scene) => scene.clone(true) });
     await hand.load();
     const wristRest = hand.bones.wrist.position.clone();
     hand.applyPose({ ...openHand(), handedness: "left", center: [0.2, 0.2, 0], palmSpan: 0.2, reachEligible: false, trackingConfidence: 1 }, 0.016);
@@ -69,31 +68,38 @@ describe("FirstPersonHand", () => {
     expect(hand.bones.wrist.position.distanceTo(wristRest)).toBeLessThan(1e-6);
   });
 
-  it("places a fully extended wrist on the focused screen contact without changing tracked fingers", async () => {
-    const right = fakeScene();
+  it("reaches a focused contact only while the matching gesture candidate is engaged", async () => {
+    const left = fakeScene();
     const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 10);
     camera.lookAt(0, 0, -1);
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
-    const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/right.glb": right.root, "/assets/hands/left.glb": right.root }), cloneScene: (scene) => scene.clone(true) });
+    const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/left.glb": left.root }), cloneScene: (scene) => scene.clone(true) });
     await hand.load();
     const contact = new THREE.Vector3(0.18, 0.12, -1);
-    hand.setTargetContact({ point: contact });
-    hand.applyPose({ ...openHand(), handedness: "right", palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.2);
+    const tracked = { ...openHand({ physicalHandedness: "Left" }), handedness: "left", palmSpan: 0.2, reachEligible: true, reachProgress: 1, trackingConfidence: 1 };
+    hand.setTargetContact({ point: contact, normal: [0, 0, 1], epoch: 8, engaged: false });
+    hand.applyPose(tracked, 0.2);
+    const neutral = hand.root.position.clone();
+    expect(neutral.x).toBeLessThan(-0.16);
+    expect(neutral.y).toBeLessThan(-0.2);
+
+    hand.setTargetContact({ point: contact, normal: [0, 0, 1], epoch: 8, engaged: true });
+    hand.applyPose(tracked, 0.2);
     const wristScreen = hand.root.position.clone().project(camera);
     const contactScreen = contact.clone().project(camera);
-    expect(wristScreen.x).toBeCloseTo(contactScreen.x, 5);
-    expect(wristScreen.y).toBeCloseTo(contactScreen.y, 5);
+    expect(wristScreen.x).toBeCloseTo(contactScreen.x, 1);
+    expect(wristScreen.y).toBeCloseTo(contactScreen.y, 1);
+    expect(hand.root.position.distanceTo(neutral)).toBeGreaterThan(0.15);
     expect(hand.root.position.y).toBeGreaterThan(-0.2);
     const beforeFinger = hand.bones["index-finger-phalanx-proximal"].quaternion.clone();
-    hand.applyPose({ ...openHand(), handedness: "right", palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.2);
+    hand.applyPose(tracked, 0.2);
     expect(hand.bones["index-finger-phalanx-proximal"].quaternion.equals(beforeFinger)).toBe(true);
   });
 
-  it("deforms phalanxes from curl, fades loss without moving, and switches handedness after stabilization", async () => {
+  it("deforms phalanxes, fades loss without moving, and remains a fixed left rig", async () => {
     const left = fakeScene();
-    const right = fakeScene();
-    const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: loaderFor({ "/assets/hands/left.glb": left.root, "/assets/hands/right.glb": right.root }), cloneScene: (scene) => scene.clone(true) });
+    const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: loaderFor({ "/assets/hands/left.glb": left.root }), cloneScene: (scene) => scene.clone(true) });
     await hand.load();
     hand.applyPose({ ...openHand(), handedness: "left", trackingConfidence: 1 }, 0.016);
     const before = hand.bones["index-finger-phalanx-proximal"].quaternion.clone();
@@ -107,10 +113,42 @@ describe("FirstPersonHand", () => {
     hand.applyPose({ state: "lost", opacity: 0, handedness: "left" }, 0.175);
     expect(hand.opacity).toBeCloseTo(0, 6);
     expect(hand.root.position.equals(position)).toBe(true);
-    hand.applyPose({ ...openHand(), handedness: "right", trackingConfidence: 1 }, 0.1);
+    const beforeRightPose = hand.bones["index-finger-phalanx-proximal"].quaternion.clone();
+    hand.applyPose({ ...curledHand(), handedness: "right", trackingConfidence: 1 }, 0.1);
     expect(hand.handedness).toBe("left");
+    expect(hand.bones["index-finger-phalanx-proximal"].quaternion.equals(beforeRightPose)).toBe(true);
     hand.applyPose({ ...openHand(), handedness: "right", trackingConfidence: 1 }, 0.5);
-    expect(hand.handedness).toBe("right");
+    expect(hand.handedness).toBe("left");
+    expect(hand.models.right).toBeUndefined();
+    expect(hand.bones["index-finger-phalanx-proximal"].quaternion.equals(beforeRightPose)).toBe(true);
+  });
+
+  it("ignores non-finite mapped transforms instead of corrupting the visible hand", async () => {
+    const left = fakeScene();
+    const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: loaderFor({ "/assets/hands/left.glb": left.root }), cloneScene: (scene) => scene.clone(true) });
+    await hand.load();
+    hand.applyPose({ ...openHand(), handedness: "left", trackingConfidence: 1 }, 0.016);
+
+    const bone = hand.bones["index-finger-phalanx-proximal"];
+    const beforeRoot = hand.root.quaternion.clone();
+    const beforePosition = bone.position.clone();
+    const beforeQuaternion = bone.quaternion.clone();
+    hand.adapter = {
+      mapJoints: () => ({
+        rootQuaternion: new THREE.Quaternion(Number.NaN, 0, 0, 1),
+        transforms: {
+          "index-finger-phalanx-proximal": {
+            position: new THREE.Vector3(Number.NaN, 0, 0),
+            quaternion: new THREE.Quaternion(0, Number.NaN, 0, 1),
+          },
+        },
+      }),
+    };
+
+    hand.applyPose({ ...openHand(), handedness: "left", trackingConfidence: 1 }, 0.016);
+    expect(hand.root.quaternion.equals(beforeRoot)).toBe(true);
+    expect(bone.position.equals(beforePosition)).toBe(true);
+    expect(bone.quaternion.equals(beforeQuaternion)).toBe(true);
   });
 
   it("keeps failed loads hidden and destroy removes the camera attachment", async () => {
@@ -124,13 +162,12 @@ describe("FirstPersonHand", () => {
     expect(camera.children.includes(hand.root)).toBe(false);
   });
 
-  it("loads the checked-in GLBs with exact skinned hierarchies, authored wrist mirrors, and transparent materials", async () => {
+  it("loads only the checked-in left rig with a cohesive authored forearm", async () => {
     const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: assetLoader() });
     await expect(hand.load()).resolves.toBe(true);
-    for (const side of ["left", "right"]) {
-      let skinned = 0;
-      const found = [];
-      hand.models[side].traverse((object) => {
+    let skinned = 0;
+    const found = [];
+    hand.models.left.traverse((object) => {
         if (object.isSkinnedMesh) {
           skinned += 1;
           const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -144,24 +181,22 @@ describe("FirstPersonHand", () => {
           expect(object.receiveShadow).toBe(true);
         }
         if (WEBXR_JOINTS.includes(object.name)) found.push(object.name);
-      });
-      expect(skinned).toBe(1);
-      expect(found.sort()).toEqual([...WEBXR_JOINTS].sort());
-    }
-    expect(hand.boneSets.left.wrist.quaternion.equals(hand.boneSets.right.wrist.quaternion)).toBe(false);
+    });
+    expect(skinned).toBe(1);
+    expect(found.sort()).toEqual([...WEBXR_JOINTS].sort());
+    expect(hand.models.right).toBeUndefined();
     expect(hand.boneSets.left.wrist.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.1);
-    expect(hand.boneSets.right.wrist.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.1);
     expect(hand.boneSets.left.wrist.position.x).toBeLessThan(0);
-    expect(hand.boneSets.right.wrist.position.x).toBeGreaterThan(0);
     expect(hand.presentationLoadError?.message).toBeUndefined();
     expect(hand.presentationBones).not.toBeNull();
 
-    const tracked = deriveHandFeatures(openHand());
-    hand.applyPose({ ...tracked, curls: [0, 0, 0, 0, 0], trackingConfidence: 1, reachEligible: true }, 0.016);
-    const openIndex = hand.presentationBones.f_index01L.quaternion.clone();
-    hand.applyPose({ ...tracked, curls: [1, 1, 1, 1, 1], trackingConfidence: 1, reachEligible: true }, 0.016);
-    expect(hand.presentationBones.f_index01L.quaternion.angleTo(openIndex)).toBeGreaterThan(0.8);
-    expect(hand.presentationBones.f_index01L.quaternion.toArray().every(Number.isFinite)).toBe(true);
+    const tracked = deriveHandFeatures(openHand({ physicalHandedness: "Left" }));
+    hand.applyPose({ ...tracked, trackingConfidence: 1, reachEligible: true }, 0.016);
+    const openIndex = hand.presentationBones.f_index02L.quaternion.clone();
+    const curled = deriveHandFeatures(curledHand({ physicalHandedness: "Left" }));
+    hand.applyPose({ ...curled, trackingConfidence: 1, reachEligible: true }, 0.016);
+    expect(hand.presentationBones.f_index02L.quaternion.angleTo(openIndex)).toBeGreaterThan(0.8);
+    expect(hand.presentationBones.f_index02L.quaternion.toArray().every(Number.isFinite)).toBe(true);
   });
 
   it("disposes clone-owned geometry and materials during destroy", async () => {

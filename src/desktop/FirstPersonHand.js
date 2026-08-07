@@ -20,6 +20,11 @@ const finitePoint = (point) => {
   const value = asPoint(point);
   return value.length === 3 && value.every(Number.isFinite) ? value : [0, 0, 0];
 };
+const finiteVector3 = (value) => value?.isVector3 === true
+  && [value.x, value.y, value.z].every(Number.isFinite);
+const finiteQuaternion = (value) => value?.isQuaternion === true
+  && [value.x, value.y, value.z, value.w].every(Number.isFinite)
+  && value.lengthSq() > 1e-12;
 const normalize = (v, fallback = [0, 1, 0]) => {
   const n = Math.hypot(...v);
   return n > 1e-8 && Number.isFinite(n) ? v.map((x) => x / n) : fallback.slice();
@@ -73,24 +78,39 @@ export function jointQuaternion(joint, child, palmBasis = {}) {
 
 function interpolate(a, b, amount) { return a.map((x, index) => x + (b[index] - x) * amount); }
 
+function segmentCurl(previous, joint, next) {
+  const incoming = subtract(joint, previous);
+  const outgoing = subtract(next, joint);
+  const incomingLength = Math.hypot(...incoming);
+  const outgoingLength = Math.hypot(...outgoing);
+  if (incomingLength < 1e-8 || outgoingLength < 1e-8) return 0;
+  const cosine = incoming.reduce((sum, value, index) => sum + value * outgoing[index], 0)
+    / (incomingLength * outgoingLength);
+  return clamp(Math.acos(clamp(cosine, -1, 1)) / (Math.PI * 0.65), 0, 1);
+}
+
 export function expandMediaPipeJoints(pose = {}) {
   const source = Array.isArray(pose.worldLandmarks) && pose.worldLandmarks.length >= 21 ? pose.worldLandmarks : pose.landmarks;
   const points = Array.from({ length: 21 }, (_, index) => finitePoint(source?.[index]));
   const entries = [];
-  const add = (name, position, childIndex) => {
+  const add = (name, position, childIndex, previousIndex) => {
     const child = childIndex === undefined ? position : points[childIndex];
-    entries.push({ name, position: position.slice(), quaternion: jointQuaternion(position, child, pose.wrist) });
+    const entry = { name, position: position.slice(), quaternion: jointQuaternion(position, child, pose.wrist) };
+    if (previousIndex !== undefined && childIndex !== undefined) {
+      entry.curl = segmentCurl(points[previousIndex], position, child);
+    }
+    entries.push(entry);
   };
   add("wrist", points[0], 9);
-  add("thumb-metacarpal", points[1], 2);
-  add("thumb-phalanx-proximal", points[2], 3);
-  add("thumb-phalanx-distal", points[3], 4);
+  add("thumb-metacarpal", points[1], 2, 0);
+  add("thumb-phalanx-proximal", points[2], 3, 1);
+  add("thumb-phalanx-distal", points[3], 4, 2);
   add("thumb-tip", points[4], 4);
   for (const [prefix, chain] of [["index-finger", MP.index], ["middle-finger", MP.middle], ["ring-finger", MP.ring], ["pinky-finger", MP.pinky]]) {
     add(`${prefix}-metacarpal`, interpolate(points[0], points[chain[0]], 0.35), chain[1]);
-    add(`${prefix}-phalanx-proximal`, points[chain[0]], chain[1]);
-    add(`${prefix}-phalanx-intermediate`, points[chain[1]], chain[2]);
-    add(`${prefix}-phalanx-distal`, points[chain[2]], chain[3]);
+    add(`${prefix}-phalanx-proximal`, points[chain[0]], chain[1], 0);
+    add(`${prefix}-phalanx-intermediate`, points[chain[1]], chain[2], chain[0]);
+    add(`${prefix}-phalanx-distal`, points[chain[2]], chain[3], chain[1]);
     add(`${prefix}-tip`, points[chain[3]], chain[3]);
   }
   entries.byName = Object.fromEntries(entries.map((entry) => [entry.name, entry]));
@@ -156,6 +176,42 @@ function discoverArmBones(root) {
   return bones;
 }
 
+export function retainSkinnedSide(root, side = "left") {
+  const activeSuffix = side === "left" ? "L" : "R";
+  const inactiveSuffix = activeSuffix === "L" ? "R" : "L";
+  root.traverse?.((object) => {
+    if (!object.isSkinnedMesh || !object.geometry?.index) return;
+    const geometry = object.geometry.clone();
+    const skinIndex = geometry.getAttribute("skinIndex");
+    const skinWeight = geometry.getAttribute("skinWeight");
+    if (!skinIndex || !skinWeight) return;
+    const scoreVertex = (vertex) => {
+      let score = 0;
+      for (let slot = 0; slot < 4; slot += 1) {
+        const boneIndex = skinIndex.getComponent(vertex, slot);
+        const weight = skinWeight.getComponent(vertex, slot);
+        const name = object.skeleton?.bones?.[boneIndex]?.name ?? "";
+        if (name.endsWith(activeSuffix)) score += weight;
+        else if (name.endsWith(inactiveSuffix)) score -= weight;
+      }
+      return score;
+    };
+    const source = geometry.index.array;
+    const kept = [];
+    for (let index = 0; index < source.length; index += 3) {
+      const a = source[index];
+      const b = source[index + 1];
+      const c = source[index + 2];
+      if (scoreVertex(a) + scoreVertex(b) + scoreVertex(c) > 0.01) kept.push(a, b, c);
+    }
+    geometry.setIndex(kept);
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    object.geometry = geometry;
+  });
+  return root;
+}
+
 export class FirstPersonHand {
   constructor(options = {}) {
     this.camera = options.camera ?? null;
@@ -175,8 +231,6 @@ export class FirstPersonHand {
     this.bones = {};
     this.adapter = null;
     this.handedness = null;
-    this.competingHandedness = null;
-    this.competingSince = null;
     this.context = null;
     this.active = true;
     this.loaded = false;
@@ -194,25 +248,22 @@ export class FirstPersonHand {
     if (this.loaded) return true;
     try {
       const loadOne = (url) => this.loader.loadAsync ? this.loader.loadAsync(url) : new Promise((resolve, reject) => this.loader.load(url, resolve, undefined, reject));
-      const [left, right] = await Promise.all([loadOne("/assets/hands/left.glb"), loadOne("/assets/hands/right.glb")]);
-      for (const [side, gltf] of [["left", left], ["right", right]]) {
-        const scene = this.cloneScene(gltf.scene ?? gltf.scenes?.[0]);
-        this.models[side] = scene;
-        this.boneSets[side] = discoverBones(scene);
-        this.adapters[side] = createFlatWebXRAdapter(this.boneSets[side], side);
-        this.materialRoots[side] = scene;
-        setMaterialOpacity(scene, 0);
-        scene.visible = false;
-        this.root.add(scene);
-      }
+      const left = await loadOne("/assets/hands/left.glb");
+      const leftScene = this.cloneScene(left.scene ?? left.scenes?.[0]);
+      this.models.left = leftScene;
+      this.boneSets.left = discoverBones(leftScene);
+      this.adapters.left = createFlatWebXRAdapter(this.boneSets.left, "left");
+      this.materialRoots.left = leftScene;
+      setMaterialOpacity(leftScene, 0);
+      leftScene.visible = false;
+      this.root.add(leftScene);
       try {
         const gltf = await loadOne("/assets/hands/psx-arms.glb");
-        const scene = this.cloneScene(gltf.scene ?? gltf.scenes?.[0]);
+        const scene = retainSkinnedSide(this.cloneScene(gltf.scene ?? gltf.scenes?.[0]), "left");
         const bones = discoverArmBones(scene);
         this.presentationModel = scene;
         this.presentationBones = bones;
         this.presentationAdapters.left = createArmRigAdapter(scene, bones, "left", gltf.animations);
-        this.presentationAdapters.right = createArmRigAdapter(scene, bones, "right", gltf.animations);
         this.materialRoots.presentation = scene;
         setMaterialOpacity(scene, 0);
         scene.visible = false;
@@ -225,7 +276,7 @@ export class FirstPersonHand {
       }
       this.loaded = true;
       this.fallback = false;
-      this._activateModel("right");
+      this._activateModel();
       return true;
     } catch (error) {
       this.fallback = true;
@@ -236,16 +287,16 @@ export class FirstPersonHand {
     }
   }
 
-  _activateModel(side) {
-    if (!this.models[side]) return;
-    for (const [name, model] of Object.entries(this.models)) model.visible = !this.presentationModel && name === side;
+  _activateModel() {
+    if (!this.models.left) return;
+    this.models.left.visible = !this.presentationModel;
     if (this.presentationModel) {
       this.presentationModel.visible = true;
-      this.presentationAdapters[side]?.prepareModel?.();
+      this.presentationAdapters.left?.prepareModel?.();
     }
-    this.handedness = side;
-    this.bones = this.boneSets[side];
-    this.adapter = this.adapters[side] ?? null;
+    this.handedness = "left";
+    this.bones = this.boneSets.left;
+    this.adapter = this.adapters.left ?? null;
     this._setOpacity(this.opacity);
   }
 
@@ -264,8 +315,14 @@ export class FirstPersonHand {
     const normal = contact?.normal?.isVector3
       ? contact.normal.clone()
       : Array.isArray(contact?.normal) ? new THREE.Vector3(...contact.normal.slice(0, 3)) : null;
+    const epoch = Number.isInteger(contact?.epoch) && contact.epoch >= 0 ? contact.epoch : null;
     this.targetContact = point && point.toArray().every(Number.isFinite)
-      ? { point, normal: normal && normal.toArray().every(Number.isFinite) ? normal : null }
+      ? {
+        point,
+        normal: normal && normal.toArray().every(Number.isFinite) ? normal : null,
+        epoch,
+        engaged: contact?.engaged === true,
+      }
       : null;
     return this;
   }
@@ -273,12 +330,7 @@ export class FirstPersonHand {
   applyPose(pose = {}, delta = 0) {
     if (!this.loaded || !pose) return this;
     const seconds = Number.isFinite(delta) ? Math.max(0, delta > 10 ? delta / 1000 : delta) : 0;
-    const requested = pose.handedness === "left" || pose.handedness === "right" ? pose.handedness : this.handedness ?? "right";
-    if (requested !== this.handedness) {
-      if (this.competingHandedness !== requested) { this.competingHandedness = requested; this.competingSince = 0; }
-      this.competingSince += seconds * 1000;
-      if (this.competingSince >= 500) { this._activateModel(requested); this.competingHandedness = null; this.competingSince = null; }
-    } else { this.competingHandedness = null; this.competingSince = null; }
+    if (pose.handedness && pose.handedness !== "left") return this;
 
     const targetOpacity = Number.isFinite(pose.opacity) ? pose.opacity : pose.state === "lost" || pose.state === "unavailable" ? 0 : Number.isFinite(pose.trackingConfidence) ? pose.trackingConfidence : 1;
     const lost = targetOpacity <= 0 || pose.state === "lost" || pose.state === "unavailable";
@@ -298,30 +350,38 @@ export class FirstPersonHand {
     this._setOpacity(targetOpacity);
 
     const center = finitePoint(pose.center ?? [0.5, 0.58, 0]);
-    const side = requested;
-    const anchor = new THREE.Vector3(side === "left" ? -0.42 : 0.42, -0.42, -0.68);
+    const side = "left";
+    const anchor = new THREE.Vector3(-0.42, -0.42, -0.68);
     const eligible = typeof pose.reachEligible === "boolean" ? pose.reachEligible : true;
     const scale = clamp(Number.isFinite(pose.relativeScale) ? pose.relativeScale : 1, 0.6, 1.4);
     const desired = anchor.clone();
     if (eligible) {
-      desired.x += clamp((center[0] - 0.5) * 0.28, -0.2, 0.2);
-      desired.y += clamp((0.58 - center[1]) * 0.34, -0.24, 0.24);
-      desired.z += clamp((scale - 1) * 0.18, -0.12, 0.12);
-      const targetPosition = targetToCameraPosition(this.camera, this.targetContact?.point);
+      desired.x = clamp(desired.x + (center[0] - 0.3) * 0.22, -0.62, -0.16);
+      desired.y = clamp(desired.y + (0.68 - center[1]) * 0.2, -0.62, -0.2);
+      desired.z = clamp(desired.z + (scale - 1) * 0.1, -0.82, -0.56);
+      const contactActive = pose.handedness === "left" && this.targetContact?.engaged === true;
+      const contactPoint = contactActive ? this.targetContact.point.clone() : null;
+      if (contactPoint && this.targetContact.normal?.lengthSq() > 1e-8) {
+        contactPoint.add(this.targetContact.normal.clone().normalize().multiplyScalar(0.04));
+      }
+      const targetPosition = targetToCameraPosition(this.camera, contactPoint);
       const reachProgress = Number.isFinite(pose.reachProgress) ? pose.reachProgress : 1;
       if (targetPosition) desired.lerp(targetPosition, clamp(reachProgress, 0, 1));
     }
     const joints = expandMediaPipeJoints(pose);
     const presentationAdapter = this.presentationAdapters[side] ?? null;
     const mapped = presentationAdapter?.mapJoints(joints, pose) ?? this.adapter?.mapJoints(joints, pose);
-    const palmQ = mapped?.rootQuaternion ?? quaternionFromBasis(pose.wrist);
+    const mappedRootQuaternion = mapped?.rootQuaternion;
+    const palmQ = finiteQuaternion(mappedRootQuaternion)
+      ? mappedRootQuaternion
+      : mappedRootQuaternion ? this.root.quaternion.clone() : quaternionFromBasis(pose.wrist);
     if (!this.poseInitialized) {
       this.root.position.copy(desired);
       this.root.quaternion.copy(palmQ);
       this.poseInitialized = true;
     } else {
-      this.root.position.lerp(desired, dampAlpha(seconds));
-      this.root.quaternion.slerp(palmQ, dampAlpha(seconds, 0.1));
+      this.root.position.lerp(desired, dampAlpha(seconds, 0.045));
+      this.root.quaternion.slerp(palmQ, dampAlpha(seconds, 0.045));
     }
 
     if (presentationAdapter && this.presentationModel) {
@@ -333,8 +393,8 @@ export class FirstPersonHand {
     for (const [name, transform] of Object.entries(mapped?.transforms ?? {})) {
       const bone = activeBones?.[name];
       if (!bone || !transform) continue;
-      if (transform.position) bone.position.copy(transform.position);
-      if (transform.quaternion) bone.quaternion.copy(transform.quaternion);
+      if (finiteVector3(transform.position)) bone.position.copy(transform.position);
+      if (finiteQuaternion(transform.quaternion)) bone.quaternion.copy(transform.quaternion).normalize();
     }
     return this;
   }

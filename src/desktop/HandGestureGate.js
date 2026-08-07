@@ -18,6 +18,7 @@ export class HandGestureGate {
 
   reset({ requireRelease = false } = {}) {
     this.armed = !requireRelease;
+    this.contactEngaged = false;
     this.candidateAt = null;
     this.candidateFrames = 0;
     this.releaseAt = null;
@@ -27,10 +28,11 @@ export class HandGestureGate {
     return this;
   }
 
-  clearCandidate({ clearStrength = true } = {}) {
+  clearCandidate({ clearStrength = true, keepContact = false } = {}) {
     this.candidateAt = null;
     this.candidateFrames = 0;
     if (clearStrength) this.strengthSamples = [];
+    if (!keepContact) this.contactEngaged = false;
   }
 
   medianStrength(rawStrength) {
@@ -52,13 +54,15 @@ export class HandGestureGate {
     const seq = Number.isInteger(sample?.seq) ? sample.seq : pose?.seq;
     const frameKey = Number.isInteger(modeEpoch) && Number.isInteger(seq) ? `${modeEpoch}:${seq}` : null;
     const targetId = typeof target?.id === "string" && target.id.length > 0 ? target.id : null;
+    const targetEpoch = Number.isInteger(target?.epoch) && target.epoch >= 0 ? target.epoch : null;
     const focusStable = targetId !== null
       && target?.focused !== false
       && Number.isFinite(target?.focusedAt)
       && now - target.focusedAt >= this.options.targetStableMs;
-    if (targetId !== this.targetId) {
+    if (targetId !== this.targetId || targetEpoch !== this.targetEpoch) {
       const hadTarget = Boolean(this.targetId);
       this.targetId = targetId;
+      this.targetEpoch = targetEpoch;
       this.reset({ requireRelease: hadTarget });
     }
     const rawStrength = Math.max(
@@ -94,6 +98,7 @@ export class HandGestureGate {
         this.releaseAt ??= now;
         if (now - this.releaseAt >= this.options.releaseMs) {
           this.armed = true;
+          this.contactEngaged = false;
           this.releaseAt = null;
         }
       } else {
@@ -109,6 +114,7 @@ export class HandGestureGate {
     if (this.candidateAt === null) {
       this.candidateAt = now;
       this.candidateFrames = 1;
+      this.contactEngaged = true;
     } else {
       this.candidateFrames += 1;
     }
@@ -117,9 +123,13 @@ export class HandGestureGate {
       || now - this.lastTriggerAt < this.options.cooldownMs) return false;
 
     this.lastTriggerAt = now;
-    this.clearCandidate();
+    this.clearCandidate({ keepContact: true });
     this.armed = false;
     this.releaseAt = null;
     return true;
+  }
+
+  isContactCandidate(targetEpoch = this.targetEpoch) {
+    return this.contactEngaged === true && targetEpoch === this.targetEpoch;
   }
 }

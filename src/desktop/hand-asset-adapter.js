@@ -150,6 +150,10 @@ function discoverEntryMap(entries) {
   return Object.fromEntries((entries ?? []).map((entry) => [entry.name, finitePoint(entry)]));
 }
 
+function discoverEntryData(entries) {
+  return Object.fromEntries((entries ?? []).map((entry) => [entry.name, entry]));
+}
+
 function restWorldPosition(object) {
   object.updateWorldMatrix?.(true, false);
   const position = new THREE.Vector3();
@@ -247,7 +251,7 @@ function createAuthoredFingerPoses(animations, suffix, restQuaternions) {
  * wrist basis and blending each finger between the rig's authored poses.
  */
 export function createArmRigAdapter(root, bones, side = "right", animations = []) {
-  const suffix = side === "right" ? "L" : "R";
+  const suffix = side === "left" ? "L" : "R";
   const otherSuffix = suffix === "L" ? "R" : "L";
   const hand = bones?.[`hand${suffix}`];
   const activeShoulder = bones?.[`shoulder${suffix}`];
@@ -297,12 +301,11 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         shoulder.scale.copy(scale);
         shoulder.position.copy(restShoulderPositions.get(shoulder));
       }
-      inactiveShoulder.position.y -= 20;
-      inactiveShoulder.scale.setScalar(0.0001);
       activeShoulder.scale.copy(restScales.get(activeShoulder));
     },
     mapJoints(entries, pose) {
       const points = discoverEntryMap(entries);
+      const entryData = discoverEntryData(entries);
       if (!points.wrist) return null;
       const targetPalmQuaternion = poseBasisQuaternion(pose);
       const transforms = {};
@@ -319,7 +322,12 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         const child = bone?.children?.[0];
         const authoredPose = authoredFingerPoses[name];
         if (bone && authoredPose && authoredPose.finger !== null) {
-          const curl = clamp(pose?.curls?.[authoredPose.finger] ?? 0, 0, 1);
+          const trackedCurl = entryData[source.start]?.curl;
+          const curl = clamp(
+            Number.isFinite(trackedCurl) ? trackedCurl : pose?.curls?.[authoredPose.finger] ?? 0,
+            0,
+            1,
+          );
           transforms[name] = {
             quaternion: authoredPose.open.clone().slerp(authoredPose.closed, curl).normalize(),
           };
