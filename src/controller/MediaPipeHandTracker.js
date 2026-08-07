@@ -5,6 +5,7 @@ import {
   normalizeMediaPipeHandedness,
   normalizeCameraLandmarks,
   normalizeCameraWorldLandmarks,
+  resolveCameraRotation,
 } from "../shared/hand-pose.js";
 import { createReachState, updateReachState } from "../shared/hand-reach.js";
 
@@ -23,15 +24,25 @@ function frontFacing(video) {
   return video?.srcObject?.getTracks?.()?.some((track) => track?.getSettings?.()?.facingMode === "user");
 }
 
-function videoRotation(video) {
-  const trackRotation = video?.srcObject?.getTracks?.()
-    ?.map((track) => track?.getSettings?.()?.rotation)
-    .find(Number.isFinite);
-  const rotation = video?.cameraRotation ?? video?.videoRotation ?? trackRotation ?? 0;
-  return [0, 90, 180, 270].includes(rotation) ? rotation : 0;
+function cardinalRotation(value) {
+  const normalized = ((Number(value) % 360) + 360) % 360;
+  return [0, 90, 180, 270].includes(normalized) ? normalized : 0;
 }
 
-function pickCandidate(result, previous) {
+function defaultScreenOrientation() {
+  return cardinalRotation(globalThis.screen?.orientation?.angle ?? globalThis.window?.orientation ?? 0);
+}
+
+function trackRotation(video) {
+  const explicitRotation = video?.cameraRotation ?? video?.videoRotation;
+  if (Number.isFinite(explicitRotation)) return cardinalRotation(explicitRotation);
+  const rotation = video?.srcObject?.getTracks?.()
+    ?.map((track) => track?.getSettings?.()?.rotation)
+    .find(Number.isFinite);
+  return cardinalRotation(rotation ?? 0);
+}
+
+export function selectPhysicalLeftCandidate(result, previous) {
   const landmarks = result?.landmarks ?? [];
   if (!landmarks.length) return null;
   let best = null;
@@ -39,13 +50,12 @@ function pickCandidate(result, previous) {
   landmarks.forEach((points, index) => {
     const category = result?.handedness?.[index]?.[0];
     const label = normalizeMediaPipeHandedness(category?.categoryName, false);
-    if (!label) return;
+    if (label !== "left") return;
     const center = points?.[0] ? [points[0].x, points[0].y, points[0].z ?? 0] : [0, 0, 0];
     const prior = previous?.center;
     const distance = prior ? Math.hypot(center[0] - prior[0], center[1] - prior[1]) : 0;
-    const labelBonus = previous?.handedness === label ? 1 : 0;
     const confidence = Number.isFinite(category?.score) ? category.score : 0;
-    const score = previous ? labelBonus * 2 - distance + confidence * 0.01 : confidence;
+    const score = previous ? confidence * 0.35 - distance * 0.65 : confidence;
     if (score > bestScore) {
       bestScore = score;
       best = { index, label };
@@ -67,21 +77,23 @@ export class MediaPipeHandTracker {
     loadModule = () => import("@mediapipe/tasks-vision"),
     landmarkerFactory = null,
     sampleIntervalMs = SAMPLE_INTERVAL_MS,
+    getScreenOrientation = defaultScreenOrientation,
   } = {}) {
     this.getVideo = getVideo;
     this.onFrame = onFrame;
     this.onState = onState;
     this.scheduler = { ...defaultScheduler, ...scheduler };
-    // MediaPipe Tasks Vision 1.0.1 needs a main-thread ModuleFactory in this
-    // deployment. Keep workerFactory injectable for future compatible builds,
-    // but use the proven main-thread runtime by default.
-    this.workerFactory = workerFactory ?? null;
-    this.worker = worker ?? null;
+    const bundledWorkerFactory = typeof Worker === "function"
+      ? () => new Worker(new URL("./hand-tracking.worker.js", import.meta.url), { type: "module" })
+      : null;
+    this.workerFactory = worker === false ? null : (workerFactory ?? bundledWorkerFactory);
+    this.worker = worker && worker !== false ? worker : null;
     this.bitmapFactory = bitmapFactory;
     this.OffscreenCanvas = OffscreenCanvasCtor;
     this.loadModule = loadModule;
     this.landmarkerFactory = landmarkerFactory;
     this.sampleIntervalMs = sampleIntervalMs;
+    this.getScreenOrientation = getScreenOrientation;
     this.modeEpoch = 0;
     this.seq = 0;
     this.active = false;
@@ -93,6 +105,9 @@ export class MediaPipeHandTracker {
     this.initializing = false;
     this.landmarker = null;
     this.timer = null;
+    this.videoFrameCallbackId = null;
+    this.lastPresentedFrames = null;
+    this.nextSampleDeadline = null;
     this.statusTimer = null;
     this.lastResultAt = -Infinity;
     this.lastState = null;
@@ -100,14 +115,16 @@ export class MediaPipeHandTracker {
     this.previous = null;
     this.reachState = createReachState();
     this.calibration = null;
+    this.currentRotation = null;
     this.unavailableEpoch = null;
     this.videoUnavailableSince = null;
+    this.workerFallbackEpoch = null;
     if (this.worker) this.bindWorker(this.worker);
   }
 
   bindWorker(worker) {
     worker.onmessage = (event) => this.handleWorkerMessage(event.data);
-    worker.onerror = () => this.emitUnavailable("worker-error");
+    worker.onerror = () => { void this.fallbackToMainThread("worker-error", this.modeEpoch); };
   }
 
   canUseWorker() {
@@ -134,11 +151,22 @@ export class MediaPipeHandTracker {
     this.landmarker = null;
   }
 
+  disableWorker() {
+    if (this.worker) {
+      this.worker.onmessage = null;
+      this.worker.onerror = null;
+      this.worker.terminate?.();
+    }
+    this.worker = null;
+    this.workerFactory = null;
+    this.workerReadyEpoch = null;
+  }
+
   finishInference(epoch) {
     if (this.inferenceEpoch !== epoch) return;
     this.inferencePending = false;
     this.inferenceEpoch = null;
-    this.schedule();
+    this.scheduleFromDeadline();
   }
 
   async setTask(task = {}) {
@@ -148,14 +176,20 @@ export class MediaPipeHandTracker {
     this.clearTimers();
     this.closeLandmarker();
     this.workerReadyEpoch = null;
+    this.inferencePending = false;
+    this.inferenceEpoch = null;
     this.active = Boolean(task.active);
     this.previous = null;
     this.reachState = createReachState();
     this.calibration = null;
+    this.currentRotation = null;
+    this.lastPresentedFrames = null;
+    this.nextSampleDeadline = null;
     this.lastResultAt = this.scheduler.now();
     this.lastLostAt = -Infinity;
     this.unavailableEpoch = null;
     this.videoUnavailableSince = null;
+    this.workerFallbackEpoch = null;
     if (!this.active) return;
     this.emitState("starting");
     if (frontFacing(this.getVideo())) return this.emitUnavailable("front-camera");
@@ -168,10 +202,15 @@ export class MediaPipeHandTracker {
         this.initializing = false;
       } catch (error) {
         this.initializing = false;
-        this.emitUnavailable(error?.message ?? "worker-init-failed");
+        await this.fallbackToMainThread(error?.message ?? "worker-init-failed", epoch);
       }
       return;
     }
+    await this.initializeMainThread(epoch);
+  }
+
+  async initializeMainThread(epoch) {
+    if (!this.isEpochActive(epoch)) return false;
     this.initializing = true;
     try {
       const module = await this.loadModule();
@@ -190,37 +229,102 @@ export class MediaPipeHandTracker {
       }
       this.landmarker = landmarker;
       this.emitState("calibrating");
+      this.resetSampleDeadline();
       this.schedule(0);
+      return true;
     } catch (error) {
       if (this.isEpochActive(epoch)) this.emitUnavailable(error?.message ?? "init-failed");
+      return false;
     } finally {
       if (this.modeEpoch === epoch) this.initializing = false;
     }
   }
 
+  async fallbackToMainThread(_reason, epoch = this.modeEpoch) {
+    if (!this.isEpochActive(epoch) || this.workerFallbackEpoch === epoch) return false;
+    this.workerFallbackEpoch = epoch;
+    this.clearTimers();
+    this.inferencePending = false;
+    this.inferenceEpoch = null;
+    this.disableWorker();
+    this.closeLandmarker();
+    this.emitState("starting");
+    this.resetSampleDeadline();
+    return this.initializeMainThread(epoch);
+  }
+
   schedule(delay = this.sampleIntervalMs) {
     if (!this.active || this.suspended || this.destroyed) return;
     if (this.worker && this.workerReadyEpoch !== this.modeEpoch) return;
-    this.timer = this.scheduler.setTimeout(() => { this.timer = null; this.sample(); }, delay);
+    if (this.timer != null) this.scheduler.clearTimeout(this.timer);
+    this.timer = this.scheduler.setTimeout(() => {
+      this.timer = null;
+      this.requestPresentedFrame();
+    }, delay);
   }
 
-  async sample() {
+  requestPresentedFrame() {
+    if (!this.active || this.suspended || this.destroyed) return;
+    const video = this.getVideo();
+    if (video?.readyState >= 2 && typeof video.requestVideoFrameCallback === "function") {
+      this.videoFrameCallbackId = video.requestVideoFrameCallback((_now, metadata) => {
+        this.videoFrameCallbackId = null;
+        void this.sample(metadata);
+      });
+      return;
+    }
+    void this.sample();
+  }
+
+  resetSampleDeadline(now = this.scheduler.now()) {
+    this.nextSampleDeadline = now;
+  }
+
+  advanceSampleDeadline(now = this.scheduler.now()) {
+    if (!Number.isFinite(this.nextSampleDeadline)) this.nextSampleDeadline = now;
+    while (this.nextSampleDeadline <= now) this.nextSampleDeadline += this.sampleIntervalMs;
+  }
+
+  scheduleFromDeadline(now = this.scheduler.now()) {
+    if (!this.active || this.suspended || this.destroyed) return;
+    if (!Number.isFinite(this.nextSampleDeadline)) {
+      this.nextSampleDeadline = now + this.sampleIntervalMs;
+    }
+    if (this.nextSampleDeadline <= now) {
+      this.schedule(0);
+      return;
+    }
+    this.schedule(this.nextSampleDeadline - now);
+  }
+
+  async sample(frameMetadata = null) {
     if (!this.active || this.suspended || this.destroyed || this.inferencePending) return;
     if (this.worker && this.workerReadyEpoch !== this.modeEpoch) return;
     const video = this.getVideo();
     if (frontFacing(video)) return this.emitUnavailable("front-camera");
+    const sampleStartedAt = this.scheduler.now();
+    this.advanceSampleDeadline(sampleStartedAt);
+    const presentedFrames = frameMetadata?.presentedFrames;
+    if (Number.isFinite(presentedFrames)) {
+      if (Number.isFinite(this.lastPresentedFrames) && presentedFrames <= this.lastPresentedFrames) {
+        this.scheduleFromDeadline(sampleStartedAt);
+        return;
+      }
+      this.lastPresentedFrames = presentedFrames;
+    }
     if (!video || video.readyState < 2) {
-      const now = this.scheduler.now();
+      const now = sampleStartedAt;
       this.videoUnavailableSince ??= now;
       if (now - this.videoUnavailableSince >= VIDEO_READY_TIMEOUT_MS) {
         return this.emitUnavailable("video-not-ready");
       }
-      this.schedule();
+      this.scheduleFromDeadline(now);
       return;
     }
     this.videoUnavailableSince = null;
-    const capturedAt = this.scheduler.now();
+    const capturedAt = sampleStartedAt;
     const epoch = this.modeEpoch;
+    const rotation = this.resolveVideoRotation(video);
     this.inferencePending = true;
     this.inferenceEpoch = epoch;
     let awaitingWorkerResult = false;
@@ -230,16 +334,17 @@ export class MediaPipeHandTracker {
         if (!bitmap) throw new Error("bitmap-unavailable");
         if (!this.isEpochActive(epoch) || this.suspended) { bitmap.close?.(); return; }
         try {
-          this.worker.postMessage({ type: "detect", bitmap, capturedAt, modeEpoch: epoch }, [bitmap]);
+          this.worker.postMessage({ type: "detect", bitmap, capturedAt, modeEpoch: epoch, rotation }, [bitmap]);
           awaitingWorkerResult = true;
         }
         catch (error) { bitmap.close?.(); throw error; }
       } else if (this.landmarker) {
         const result = this.landmarker.detectForVideo(video, capturedAt);
-        this.handleResult({ type: "result", result, capturedAt, modeEpoch: this.modeEpoch });
+        this.handleResult({ type: "result", result, capturedAt, modeEpoch: this.modeEpoch, rotation });
       }
     } catch (error) {
-      this.emitUnavailable(error?.message ?? "detect-failed");
+      if (this.worker) await this.fallbackToMainThread(error?.message ?? "detect-failed", epoch);
+      else this.emitUnavailable(error?.message ?? "detect-failed");
     } finally {
       if (!awaitingWorkerResult) this.finishInference(epoch);
     }
@@ -248,10 +353,13 @@ export class MediaPipeHandTracker {
   handleWorkerMessage(data) {
     if (!data) return;
     if (data.type === "ready") {
-      if (this.isEpochActive(data.modeEpoch) && !this.suspended) {
+      if (this.isEpochActive(data.modeEpoch)) {
         this.workerReadyEpoch = data.modeEpoch;
-        this.emitState("calibrating");
-        this.schedule(0);
+        if (!this.suspended) {
+          this.emitState("calibrating");
+          this.resetSampleDeadline();
+          this.schedule(0);
+        }
       }
       return;
     }
@@ -260,25 +368,41 @@ export class MediaPipeHandTracker {
       return;
     }
     if (data.type === "unavailable" || data.type === "error") {
-      this.finishInference(data.modeEpoch);
-      this.emitUnavailable(data.reason ?? "worker-error");
+      this.inferencePending = false;
+      this.inferenceEpoch = null;
+      void this.fallbackToMainThread(data.reason ?? "worker-error", data.modeEpoch);
       return;
     }
     if (data.type === "result") this.handleResult(data);
     this.finishInference(data.modeEpoch);
   }
 
-  handleResult({ result, capturedAt }) {
-    const candidate = pickCandidate(result, this.previous);
+  resolveVideoRotation(video = this.getVideo()) {
+    try {
+      return resolveCameraRotation({
+        videoWidth: video?.videoWidth,
+        videoHeight: video?.videoHeight,
+        trackRotation: trackRotation(video),
+        screenAngle: cardinalRotation(this.getScreenOrientation?.() ?? 0),
+      });
+    } catch {
+      return 0;
+    }
+  }
+
+  handleResult({ result, capturedAt, rotation: capturedRotation }) {
+    const candidate = selectPhysicalLeftCandidate(result, this.previous);
     if (!candidate) { this.emitLostIfDue(capturedAt); return; }
     const rawHandedness = result.handedness[candidate.index]?.[0];
-    const center = result.landmarks[candidate.index]?.[0];
-    const nearPrevious = this.previous?.center && center
-      && Math.hypot(center.x - this.previous.center[0], center.y - this.previous.center[1]) < 0.15;
-    const retainedLabel = nearPrevious && this.previous.handedness !== candidate.label
-      ? (this.previous.handedness === "left" ? "Right" : "Left")
-      : rawHandedness?.categoryName;
-    const rotation = videoRotation(this.getVideo());
+    const rotation = [0, 90, 180, 270].includes(capturedRotation)
+      ? capturedRotation
+      : this.resolveVideoRotation();
+    if (this.currentRotation !== null && this.currentRotation !== rotation) {
+      this.previous = null;
+      this.reachState = createReachState();
+      this.calibration = null;
+    }
+    this.currentRotation = rotation;
     const rawLandmarks = result.landmarks[candidate.index];
     const rawWorldLandmarks = result.worldLandmarks?.[candidate.index];
     const sample = {
@@ -286,7 +410,7 @@ export class MediaPipeHandTracker {
       worldLandmarks: rawWorldLandmarks
         ? normalizeCameraWorldLandmarks(rawWorldLandmarks, rotation)
         : normalizeCameraLandmarks(rawLandmarks, rotation),
-      handedness: { ...rawHandedness, categoryName: retainedLabel },
+      handedness: rawHandedness,
       capturedAt,
       inputMirrored: false,
     };
@@ -353,8 +477,21 @@ export class MediaPipeHandTracker {
   emitState(state) { this.lastState = state; this.onState?.(state); }
 
   clearStatusTimer() { if (this.statusTimer != null) this.scheduler.clearTimeout(this.statusTimer); this.statusTimer = null; }
-  clearTimers() { if (this.timer != null) this.scheduler.clearTimeout(this.timer); this.timer = null; this.clearStatusTimer(); }
+  clearTimers() {
+    if (this.timer != null) this.scheduler.clearTimeout(this.timer);
+    this.timer = null;
+    if (this.videoFrameCallbackId != null) this.getVideo()?.cancelVideoFrameCallback?.(this.videoFrameCallbackId);
+    this.videoFrameCallbackId = null;
+    this.clearStatusTimer();
+  }
   suspend() { this.suspended = true; this.videoUnavailableSince = null; this.clearTimers(); }
-  resume() { this.suspended = false; this.videoUnavailableSince = null; if (this.active) this.schedule(0); }
-  destroy() { this.destroyed = true; this.active = false; this.clearTimers(); this.closeLandmarker(); this.worker?.terminate?.(); this.worker = null; }
+  resume() {
+    this.suspended = false;
+    this.videoUnavailableSince = null;
+    if (this.active) {
+      this.resetSampleDeadline();
+      this.schedule(0);
+    }
+  }
+  destroy() { this.destroyed = true; this.active = false; this.clearTimers(); this.closeLandmarker(); this.disableWorker(); }
 }

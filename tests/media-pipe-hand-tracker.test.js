@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MediaPipeHandTracker } from "../src/controller/MediaPipeHandTracker.js";
 
-function handResult({ label = "Left" } = {}) {
+function handResult({ label = "Right" } = {}) {
   const landmarks = Array.from({ length: 21 }, (_, i) => ({ x: (i % 5) / 5, y: Math.floor(i / 5) / 5, z: 0 }));
   return {
     landmarks: [landmarks], worldLandmarks: [landmarks],
@@ -52,14 +52,26 @@ describe("MediaPipeHandTracker", () => {
     expect(worker.postMessage).toHaveBeenCalledOnce();
   });
 
-  it("uses VIDEO mode with one hand, emits a calibrated frame and inputMirrored false", async () => {
+  it("uses VIDEO mode with one physical left hand and emits a left frame", async () => {
     const createFromOptions = vi.fn(async (_fileset, options) => ({ detectForVideo: vi.fn(() => handResult()), close: vi.fn(), options }));
     const { tracker, callbacks } = setup({ worker: false, loadModule: vi.fn(async () => ({ FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) }, HandLandmarker: { createFromOptions } })) });
     await tracker.setTask({ active: true });
     tracker.sample();
     await Promise.resolve();
     expect(createFromOptions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ runningMode: "VIDEO", numHands: 1 }));
-    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "right", palmSpan: expect.any(Number) }));
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "left", palmSpan: expect.any(Number) }));
+  });
+
+  it("drops a physical right hand before reach and transport", () => {
+    const { tracker, callbacks } = setup();
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+
+    tracker.handleResult({ result: handResult({ label: "Left" }), capturedAt: 20 });
+
+    expect(callbacks.onFrame).not.toHaveBeenCalledWith(expect.objectContaining({ state: "tracked" }));
+    expect(tracker.reachState.acquired).toBe(false);
+    expect(tracker.previous).toBeNull();
   });
 
   it("rejects an explicitly front-facing stream before bitmap creation", async () => {
@@ -173,6 +185,58 @@ describe("MediaPipeHandTracker", () => {
     expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250, 750]);
   });
 
+  it("uses only the remaining absolute deadline after inference time", () => {
+    let now = 45;
+    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => now) };
+    const { tracker } = setup({ scheduler, sampleIntervalMs: 1000 / 15 });
+    tracker.active = true;
+    tracker.nextSampleDeadline = 1000 / 15;
+
+    tracker.scheduleFromDeadline();
+
+    expect(scheduler.setTimeout).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.closeTo(1000 / 15 - 45, 5),
+    );
+  });
+
+  it("samples immediately when inference has overrun the next deadline", () => {
+    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 80) };
+    const { tracker } = setup({ scheduler, sampleIntervalMs: 1000 / 15 });
+    tracker.active = true;
+    tracker.nextSampleDeadline = 1000 / 15;
+
+    tracker.scheduleFromDeadline();
+
+    expect(scheduler.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 0);
+  });
+
+  it("does not infer the same presented camera frame twice", async () => {
+    const detectForVideo = vi.fn(() => handResult());
+    const { tracker } = setup({ worker: false });
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+    tracker.landmarker = { detectForVideo };
+
+    await tracker.sample({ presentedFrames: 7 });
+    await tracker.sample({ presentedFrames: 7 });
+
+    expect(detectForVideo).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes a landscape rear-camera frame using the live screen angle", () => {
+    const { tracker, video, callbacks } = setup({ getScreenOrientation: () => 90 });
+    video.videoWidth = 1920;
+    video.videoHeight = 1080;
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+
+    tracker.handleResult({ result: handResult(), capturedAt: 20 });
+
+    expect(tracker.currentRotation).toBe(90);
+    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ handedness: "left" }));
+  });
+
   it("clears reach acquisition and depth calibration after sustained hand loss", () => {
     const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 250) };
     const { tracker } = setup({ scheduler });
@@ -222,6 +286,23 @@ describe("MediaPipeHandTracker", () => {
     expect(tracker.inferencePending).toBe(false);
   });
 
+  it("remembers worker readiness received while suspended and resumes sampling", async () => {
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const { tracker, scheduler } = setup({
+      workerFactory: () => worker,
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
+      OffscreenCanvas: class {},
+    });
+    await tracker.setTask({ active: true });
+    tracker.suspend();
+
+    worker.onmessage({ data: { type: "ready", modeEpoch: tracker.modeEpoch } });
+    expect(tracker.workerReadyEpoch).toBe(tracker.modeEpoch);
+    tracker.resume();
+
+    expect(scheduler.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 0);
+  });
+
   it("closes fallback task creation that resolves after destroy", async () => {
     const pendingLandmarker = deferred();
     const landmarker = { close: vi.fn(), detectForVideo: vi.fn() };
@@ -259,28 +340,36 @@ describe("MediaPipeHandTracker", () => {
     expect(tracker.landmarker).toBe(second);
   });
 
-  it("stops after an explicit worker inference error instead of rescheduling at 15Hz", async () => {
+  it("falls back to the latest-only main-thread tracker after a worker inference error", async () => {
     const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    const detectForVideo = vi.fn(() => handResult());
     const { tracker, scheduler, callbacks } = setup({
       workerFactory: () => worker,
       createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
       OffscreenCanvas: class {},
+      loadModule: vi.fn(async () => ({
+        FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
+        HandLandmarker: { createFromOptions: vi.fn(async () => ({ detectForVideo, close: vi.fn() })) },
+      })),
     });
     await tracker.setTask({ active: true });
     worker.onmessage({ data: { type: "error", modeEpoch: tracker.modeEpoch, reason: "detect" } });
 
-    expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "unavailable" }));
-    expect(scheduler.setTimeout).not.toHaveBeenCalledWith(expect.any(Function), tracker.sampleIntervalMs);
+    await vi.waitFor(() => expect(tracker.landmarker).not.toBeNull());
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(callbacks.onFrame).not.toHaveBeenCalledWith(expect.objectContaining({ state: "unavailable" }));
+    expect(tracker.active).toBe(true);
+    expect(scheduler.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 0);
   });
 
-  it("selects the highest-confidence handed candidate when continuity is absent", () => {
+  it("selects the physical left candidate even when a right hand scores higher", () => {
     const { tracker, callbacks } = setup();
     tracker.active = true;
     tracker.modeEpoch = 1;
-    const result = handResult({ label: "Left" });
+    const result = handResult({ label: "Right" });
     result.landmarks.push(result.landmarks[0]);
     result.worldLandmarks.push(result.worldLandmarks[0]);
-    result.handedness.push([{ categoryName: "Right", score: 0.99 }]);
+    result.handedness.push([{ categoryName: "Left", score: 0.99 }]);
     result.handedness[0][0].score = 0.2;
 
     tracker.handleResult({ result, capturedAt: 1 });
@@ -309,7 +398,7 @@ describe("MediaPipeHandTracker", () => {
     expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "tracked" }));
   });
 
-  it("defaults to the compatible main-thread runtime even when Worker APIs exist", async () => {
+  it("prefers the bundled worker when Worker APIs exist", async () => {
     const workerPostMessage = vi.fn();
     const createdWorkers = [];
     class WorkerStub {
@@ -320,25 +409,19 @@ describe("MediaPipeHandTracker", () => {
       }
     }
     vi.stubGlobal("Worker", WorkerStub);
-    const detectForVideo = vi.fn(() => handResult());
-    const createFromOptions = vi.fn(async () => ({ detectForVideo, close: vi.fn() }));
-    const { tracker, callbacks } = setup({
+    const { tracker } = setup({
       OffscreenCanvas: class {},
       createImageBitmap: vi.fn(async () => ({ close: vi.fn() })),
-      loadModule: vi.fn(async () => ({
-        FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
-        HandLandmarker: { createFromOptions },
-      })),
     });
 
     try {
       await tracker.setTask({ active: true });
-      await tracker.sample();
 
-      expect(createdWorkers).toHaveLength(0);
-      expect(workerPostMessage).not.toHaveBeenCalled();
-      expect(createFromOptions).toHaveBeenCalledOnce();
-      expect(callbacks.onFrame).toHaveBeenCalledWith(expect.objectContaining({ state: "tracked" }));
+      expect(createdWorkers).toHaveLength(1);
+      expect(workerPostMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "init", modeEpoch: 1 }),
+        expect.any(Array),
+      );
     } finally {
       vi.unstubAllGlobals();
     }

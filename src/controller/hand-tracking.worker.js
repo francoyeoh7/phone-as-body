@@ -71,6 +71,7 @@ export function createWorkerHandler({
         type: "result",
         modeEpoch: data.modeEpoch,
         capturedAt: data.capturedAt,
+        rotation: data.rotation,
         result: {
           landmarks: result?.landmarks ?? [],
           worldLandmarks: result?.worldLandmarks ?? [],
