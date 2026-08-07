@@ -3,22 +3,27 @@ import { HandGestureGate } from "../src/desktop/HandGestureGate.js";
 
 const target = (id = "faucet", focusedAt = 0) => ({ id, focused: true, focusedAt });
 
-const sample = (strength, seq, overrides = {}) => ({
-  state: "tracked",
-  fresh: true,
-  modeEpoch: 1,
-  seq,
-  trackingConfidence: 0.9,
-  pose: {
+const sample = (strength, seq, overrides = {}) => {
+  const basePose = {
+    handedness: "left",
     grabStrength: strength,
     pinchStrength: strength,
     reachEligible: true,
     trackingConfidence: 0.9,
     modeEpoch: 1,
     seq,
-  },
-  ...overrides,
-});
+  };
+  return {
+    state: "tracked",
+    fresh: true,
+    modeEpoch: 1,
+    seq,
+    trackingConfidence: 0.9,
+    ...overrides,
+    pose: overrides.pose ?? basePose,
+    gesturePose: overrides.gesturePose ?? overrides.pose ?? basePose,
+  };
+};
 
 describe("HandGestureGate", () => {
   it("requires 100ms of stable target focus and a reach-eligible three-frame grab", () => {
@@ -77,5 +82,28 @@ describe("HandGestureGate", () => {
     expect(gate.update(pinchOnly(6), 580, focused)).toBe(false);
     expect(gate.update(pinchOnly(7), 660, focused)).toBe(false);
     expect(gate.update(pinchOnly(8), 760, focused)).toBe(true);
+  });
+
+  it("uses raw gesture pose instead of the smoothed visual pose", () => {
+    const gate = new HandGestureGate({ candidateMs: 100, targetStableMs: 0 });
+    const focused = target();
+    const rawGrab = (seq) => sample(0.1, seq, {
+      pose: { ...sample(0.1, seq).pose, grabStrength: 0.1, pinchStrength: 0.1 },
+      gesturePose: { ...sample(0.9, seq).gesturePose, grabStrength: 0.9, pinchStrength: 0.9 },
+    });
+
+    expect(gate.update(rawGrab(1), 0, focused)).toBe(false);
+    expect(gate.update(rawGrab(2), 60, focused)).toBe(false);
+    expect(gate.update(rawGrab(3), 120, focused)).toBe(true);
+  });
+
+  it("keeps a candidate through one short confidence gap", () => {
+    const gate = new HandGestureGate({ candidateMs: 160, targetStableMs: 0, gapMs: 120 });
+    const focused = target();
+
+    expect(gate.update(sample(0.9, 1), 0, focused)).toBe(false);
+    expect(gate.update(sample(0.9, 2), 70, focused)).toBe(false);
+    expect(gate.update(sample(0.9, 3, { fresh: false }), 120, focused)).toBe(false);
+    expect(gate.update(sample(0.9, 4), 170, focused)).toBe(true);
   });
 });

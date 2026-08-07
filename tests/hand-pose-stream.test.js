@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { basisQuaternion, HandPoseStream } from "../src/desktop/HandPoseStream.js";
 
 const pose = (overrides = {}) => ({
-  state: "tracked", seq: 1, modeEpoch: 0, receivedAt: 0, handedness: "right", handConfidence: 0.9,
+  state: "tracked", seq: 1, modeEpoch: 0, receivedAt: 0, handedness: "left", handConfidence: 0.9,
   trackingConfidence: 0.9, landmarks: [[0, 0, 0]], worldLandmarks: [[0, 0, 0]], center: [0, 0, 0],
   wrist: { right: [1, 0, 0], up: [0, 1, 0], forward: [0, 0, 1] }, curls: [0, 0, 0, 0, 0],
   openness: 0.9, grabStrength: 0.1, palmFacing: 0.9, relativeScale: 1, velocity: 0, ...overrides,
@@ -31,6 +31,24 @@ describe("HandPoseStream", () => {
     expect(stream.sample(170).pose.wristQuaternion[3]).toBeGreaterThan(0);
   });
 
+  it("rejects right tracked frames without replacing the visual left pose", () => {
+    const stream = new HandPoseStream();
+    stream.accept(pose({ seq: 1, receivedAt: 0, center: [0.2, 0, 0] }));
+
+    expect(stream.accept(pose({ seq: 2, receivedAt: 66, handedness: "right", center: [0.9, 0, 0] }))).toBe(false);
+    expect(stream.sample(66).pose).toMatchObject({ handedness: "left", center: [0.2, 0, 0] });
+  });
+
+  it("renders wrist response within 180ms while retaining raw gesture strength", () => {
+    const stream = new HandPoseStream({ wristTimeConstantMs: 60 });
+    stream.accept(pose({ seq: 1, receivedAt: 0, center: [0, 0, 0], pinchStrength: 0.1 }));
+    stream.accept(pose({ seq: 2, receivedAt: 180, center: [1, 0, 0], pinchStrength: 0.9 }));
+
+    const sampled = stream.sample(180);
+    expect(sampled.pose.center[0]).toBeGreaterThanOrEqual(0.9);
+    expect(sampled.gesturePose.pinchStrength).toBe(0.9);
+  });
+
   it("smooths nested landmarks and exposes low confidence without moving the stable render pose", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0, landmarks: [[0, 0, 0]], worldLandmarks: [[0, 0, 0]], curls: [0, 0, 0, 0, 0] }));
@@ -49,10 +67,10 @@ describe("HandPoseStream", () => {
     stream.accept(pose({ seq: 1, receivedAt: 0, center: [0, 0, 0] }));
     stream.accept(pose({ seq: 2, receivedAt: 100, trackingConfidence: 0.61, center: [50, 0, 0] }));
     stream.accept(pose({ seq: 3, receivedAt: 185, center: [1, 0, 0] }));
-    expect(stream.sample(185).pose.center[0]).toBeCloseTo(1 - Math.exp(-1), 6);
+    expect(stream.sample(185).pose.center[0]).toBeCloseTo(1 - Math.exp(-85 / 60), 6);
   });
 
-  it("freezes and fades, detects silence, handles explicit statuses, epochs, and handedness evidence", () => {
+  it("freezes and fades, detects silence, and handles explicit statuses and epochs", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0 }));
     expect(stream.sample(250).opacity).toBe(1);
@@ -67,45 +85,7 @@ describe("HandPoseStream", () => {
     expect(stream.sample(370).state).toBe("unavailable");
     expect(stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 400, center: [10, 0, 0] }))).toBe(true);
     expect(stream.sample(400).pose.center[0]).toBe(10);
-    expect(stream.accept(pose({ seq: 2, modeEpoch: 1, receivedAt: 500, handedness: "left" }))).toBe(true);
-    expect(stream.sample(500).pose.handedness).toBe("right");
-    expect(stream.accept(pose({ seq: 3, modeEpoch: 1, receivedAt: 999, handedness: "left" }))).toBe(true);
-    expect(stream.sample(999).pose.handedness).toBe("right");
-    expect(stream.accept(pose({ seq: 4, modeEpoch: 1, receivedAt: 1000, handedness: "left" }))).toBe(true);
-    expect(stream.sample(1000).pose.handedness).toBe("left");
-  });
-
-  it("resets competing-handedness evidence when a stale sequence interrupts it", () => {
-    const stream = new HandPoseStream();
-    stream.accept(pose({ seq: 1, receivedAt: 0, handedness: "right" }));
-    stream.accept(pose({ seq: 2, receivedAt: 100, handedness: "left" }));
-    expect(stream.accept(pose({ seq: 2, receivedAt: 200, handedness: "left" }))).toBe(false);
-    stream.accept(pose({ seq: 3, receivedAt: 600, handedness: "left" }));
-    expect(stream.sample(600).pose.handedness).toBe("right");
-    stream.accept(pose({ seq: 4, receivedAt: 1099, handedness: "left" }));
-    expect(stream.sample(1099).pose.handedness).toBe("right");
-    stream.accept(pose({ seq: 5, receivedAt: 1100, handedness: "left" }));
-    expect(stream.sample(1100).pose.handedness).toBe("left");
-  });
-
-  it("resets competing-handedness evidence for a rejected lower epoch", () => {
-    const stream = new HandPoseStream();
-    stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 0, handedness: "right" }));
-    stream.accept(pose({ seq: 2, modeEpoch: 1, receivedAt: 100, handedness: "left" }));
-    expect(stream.accept(pose({ seq: 99, modeEpoch: 0, receivedAt: 200, handedness: "left" }))).toBe(false);
-    stream.accept(pose({ seq: 3, modeEpoch: 1, receivedAt: 600, handedness: "left" }));
-    expect(stream.sample(600).pose.handedness).toBe("right");
-    stream.accept(pose({ seq: 4, modeEpoch: 1, receivedAt: 1100, handedness: "left" }));
-    expect(stream.sample(1100).pose.handedness).toBe("left");
-  });
-
-  it("requires both confidence signals for handedness competition", () => {
-    const stream = new HandPoseStream();
-    stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 0, handedness: "right" }));
-    stream.accept(pose({ seq: 2, modeEpoch: 1, receivedAt: 100, handedness: "left" }));
-    stream.accept(pose({ seq: 3, modeEpoch: 1, receivedAt: 200, handedness: "left", handConfidence: 0.61 }));
-    stream.accept(pose({ seq: 4, modeEpoch: 1, receivedAt: 600, handedness: "left" }));
-    expect(stream.sample(600).pose.handedness).toBe("right");
+    expect(stream.sample(400).pose.handedness).toBe("left");
   });
 
   it("converts identity and quarter-turn wrist bases to canonical quaternions", () => {

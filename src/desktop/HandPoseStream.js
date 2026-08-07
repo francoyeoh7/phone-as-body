@@ -54,11 +54,34 @@ function slerp(a, b, alpha) {
   return canonicalize(a.map((value, index) => value * wa + target[index] * wb));
 }
 
-const NUMERIC_FIELDS = ["center", "curls", "openness", "grabStrength", "palmFacing", "relativeScale", "velocity", "landmarks", "worldLandmarks"];
+const WRIST_FIELDS = ["center", "relativeScale", "velocity", "depth", "palmSpan", "reachProgress"];
+const FINGER_FIELDS = ["curls", "landmarks", "worldLandmarks"];
+
+function smoothingAlpha(interval, timeConstant) {
+  if (!Number.isFinite(timeConstant) || timeConstant <= 0) return 1;
+  return 1 - Math.exp(-Math.max(0, interval) / timeConstant);
+}
+
+function adaptiveWristTimeConstant(frame, configured) {
+  const baseline = clamp(configured, 42, 68);
+  const velocity = Math.max(0, Number(frame?.velocity) || 0);
+  const confidence = clamp(frame?.trackingConfidence);
+  const motionBoost = clamp(velocity / 2) * 18;
+  const confidencePenalty = clamp((0.9 - confidence) / 0.28) * 8;
+  return clamp(baseline - motionBoost + confidencePenalty, 42, 68);
+}
 
 export class HandPoseStream {
   constructor(options = {}) {
-    this.options = { fadeMs: 350, freezeMs: 250, silenceMs: 350, smoothingMs: 85, ...options };
+    const wristTimeConstantMs = options.wristTimeConstantMs ?? options.smoothingMs ?? 60;
+    this.options = {
+      fadeMs: 350,
+      freezeMs: 250,
+      silenceMs: 350,
+      fingerTimeConstantMs: 28,
+      ...options,
+      wristTimeConstantMs,
+    };
     this.reset();
   }
 
@@ -70,22 +93,17 @@ export class HandPoseStream {
     this.lastStableAt = null;
     this.lastFrame = null;
     this.pose = null;
-    this.stableHandedness = null;
-    this.competingHandedness = null;
-    this.competingAt = null;
+    this.gesturePose = null;
   }
 
   accept(frame) {
     if (!frame || !Number.isFinite(frame.receivedAt) || frame.receivedAt < 0
       || !Number.isInteger(frame.seq) || frame.seq < 0 || !Number.isInteger(frame.modeEpoch) || frame.modeEpoch < 0) return false;
+    if (frame.state === "tracked" && frame.handedness !== "left") return false;
     if (this.modeEpoch !== null && frame.modeEpoch < this.modeEpoch) {
-      this.competingHandedness = null;
-      this.competingAt = null;
       return false;
     }
     if (this.modeEpoch !== null && frame.modeEpoch === this.modeEpoch && frame.seq <= this.lastSeq) {
-      this.competingHandedness = null;
-      this.competingAt = null;
       return false;
     }
     if (this.modeEpoch !== null && frame.modeEpoch > this.modeEpoch) this.resetEpoch(frame.modeEpoch);
@@ -94,7 +112,6 @@ export class HandPoseStream {
     this.lastReceivedAt = frame.receivedAt;
     this.lastFrame = clone(frame);
     if (frame.state === "tracked" && frame.trackingConfidence >= 0.62) this.acceptTracked(frame);
-    this.updateHandedness(frame);
     this.previousAcceptedAt = frame.receivedAt;
     return true;
   }
@@ -107,60 +124,38 @@ export class HandPoseStream {
     this.lastStableAt = null;
     this.lastFrame = null;
     this.pose = null;
-    this.stableHandedness = null;
-    this.competingHandedness = null;
-    this.competingAt = null;
+    this.gesturePose = null;
   }
 
   acceptTracked(frame) {
     const target = clone(frame);
-    target.handedness = this.stableHandedness ?? target.handedness;
+    target.handedness = "left";
     target.wristQuaternion = Array.isArray(frame.wristQuaternion)
       ? canonicalize(frame.wristQuaternion) : basisQuaternion(frame.wrist);
+    this.gesturePose = clone(target);
     const prior = this.pose;
     const interval = prior && Number.isFinite(this.previousAcceptedAt)
       ? Math.max(0, frame.receivedAt - this.previousAcceptedAt) : 0;
-    let alpha = prior ? 1 - Math.exp(-interval / this.options.smoothingMs) : 1;
-    if (this.lastStableAt !== null && frame.receivedAt - this.lastStableAt >= this.options.silenceMs) alpha = Math.min(alpha, 0.25);
-    if (!prior || alpha >= 1) this.pose = target;
+    const wristTimeConstant = adaptiveWristTimeConstant(frame, this.options.wristTimeConstantMs);
+    let wristAlpha = prior ? smoothingAlpha(interval, wristTimeConstant) : 1;
+    let fingerAlpha = prior ? smoothingAlpha(interval, this.options.fingerTimeConstantMs) : 1;
+    if (this.lastStableAt !== null && frame.receivedAt - this.lastStableAt >= this.options.silenceMs) {
+      wristAlpha = Math.min(wristAlpha, 0.25);
+      fingerAlpha = Math.min(fingerAlpha, 0.25);
+    }
+    if (!prior || (wristAlpha >= 1 && fingerAlpha >= 1)) this.pose = target;
     else {
       this.pose = { ...prior, ...target };
-      for (const field of NUMERIC_FIELDS) {
-        if (Array.isArray(target[field])) this.pose[field] = lerpArray(prior[field], target[field], alpha);
-        else if (Number.isFinite(target[field]) && Number.isFinite(prior[field])) this.pose[field] = lerp(prior[field], target[field], alpha);
+      for (const field of WRIST_FIELDS) {
+        if (Array.isArray(target[field])) this.pose[field] = lerpArray(prior[field], target[field], wristAlpha);
+        else if (Number.isFinite(target[field]) && Number.isFinite(prior[field])) this.pose[field] = lerp(prior[field], target[field], wristAlpha);
       }
-      this.pose.wristQuaternion = slerp(prior.wristQuaternion ?? basisQuaternion(prior.wrist), target.wristQuaternion, alpha);
+      for (const field of FINGER_FIELDS) {
+        if (Array.isArray(target[field])) this.pose[field] = lerpArray(prior[field], target[field], fingerAlpha);
+      }
+      this.pose.wristQuaternion = slerp(prior.wristQuaternion ?? basisQuaternion(prior.wrist), target.wristQuaternion, wristAlpha);
     }
     this.lastStableAt = frame.receivedAt;
-  }
-
-  updateHandedness(frame) {
-    const label = frame.handedness;
-    const eligible = frame.state === "tracked" && frame.handConfidence >= 0.62 && frame.trackingConfidence >= 0.62;
-    if (!eligible || !label) {
-      this.competingHandedness = null;
-      this.competingAt = null;
-      return;
-    }
-    if (!this.stableHandedness) {
-      this.stableHandedness = label;
-      if (this.pose) this.pose.handedness = label;
-      return;
-    }
-    if (label === this.stableHandedness) {
-      this.competingHandedness = null;
-      this.competingAt = null;
-      return;
-    }
-    if (this.competingHandedness !== label) {
-      this.competingHandedness = label;
-      this.competingAt = frame.receivedAt;
-    } else if (frame.receivedAt - this.competingAt >= 500) {
-      this.stableHandedness = label;
-      this.competingHandedness = null;
-      this.competingAt = null;
-      if (this.pose) this.pose.handedness = label;
-    }
   }
 
   sample(now) {
@@ -172,15 +167,15 @@ export class HandPoseStream {
       trackingConfidence: this.lastFrame.trackingConfidence,
       handConfidence: this.lastFrame.handConfidence,
     };
-    if (this.lastFrame.state === "unavailable") return { state: "unavailable", pose: null, opacity: 0, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+    if (this.lastFrame.state === "unavailable") return { state: "unavailable", pose: null, gesturePose: null, opacity: 0, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
     const silent = ageMs >= this.options.silenceMs;
     const lost = this.lastFrame.state === "lost" || silent;
     const opacity = this.visualOpacity(now);
-    if (lost) return { state: "lost", pose: this.pose ? clone(this.pose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+    if (lost) return { state: "lost", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
     if (this.lastFrame.state === "tracked" && this.lastFrame.trackingConfidence < 0.62) {
-      return { state: "low-confidence", pose: this.pose ? clone(this.pose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+      return { state: "low-confidence", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
     }
-    return { state: "tracked", pose: this.pose ? clone(this.pose) : null, opacity, fresh: true, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+    return { state: "tracked", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity, fresh: true, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
   }
 
   visualOpacity(now) {

@@ -9,7 +9,7 @@ export class HandGestureGate {
       releaseMs: 180,
       cooldownMs: 500,
       targetStableMs: 100,
-      strengthSmoothing: 0.5,
+      gapMs: 120,
       ...options,
     };
     this.lastTriggerAt = -Infinity;
@@ -22,21 +22,38 @@ export class HandGestureGate {
     this.candidateFrames = 0;
     this.releaseAt = null;
     this.lastFrameKey = null;
-    this.smoothedStrength = null;
+    this.lastValidAt = null;
+    this.strengthSamples = [];
     return this;
   }
 
+  clearCandidate({ clearStrength = true } = {}) {
+    this.candidateAt = null;
+    this.candidateFrames = 0;
+    if (clearStrength) this.strengthSamples = [];
+  }
+
+  medianStrength(rawStrength) {
+    this.strengthSamples.push(rawStrength);
+    if (this.strengthSamples.length > 3) this.strengthSamples.shift();
+    const sorted = [...this.strengthSamples].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
   update(sample, now = 0, target = null) {
+    const pose = sample?.gesturePose ?? sample?.pose;
     const confidence = Number.isFinite(sample?.trackingConfidence)
       ? sample.trackingConfidence
-      : sample?.pose?.trackingConfidence;
-    const grabStrength = sample?.pose?.grabStrength;
-    const pinchStrength = sample?.pose?.pinchStrength;
-    const modeEpoch = Number.isInteger(sample?.modeEpoch) ? sample.modeEpoch : sample?.pose?.modeEpoch;
-    const seq = Number.isInteger(sample?.seq) ? sample.seq : sample?.pose?.seq;
+      : pose?.trackingConfidence;
+    const grabStrength = pose?.grabStrength;
+    const pinchStrength = pose?.pinchStrength;
+    const modeEpoch = Number.isInteger(sample?.modeEpoch) ? sample.modeEpoch : pose?.modeEpoch;
+    const seq = Number.isInteger(sample?.seq) ? sample.seq : pose?.seq;
     const frameKey = Number.isInteger(modeEpoch) && Number.isInteger(seq) ? `${modeEpoch}:${seq}` : null;
     const targetId = typeof target?.id === "string" && target.id.length > 0 ? target.id : null;
     const focusStable = targetId !== null
+      && target?.focused !== false
       && Number.isFinite(target?.focusedAt)
       && now - target.focusedAt >= this.options.targetStableMs;
     if (targetId !== this.targetId) {
@@ -48,25 +65,29 @@ export class HandGestureGate {
       Number.isFinite(grabStrength) ? grabStrength : 0,
       Number.isFinite(pinchStrength) ? pinchStrength : 0,
     );
+    const semanticEligible = pose?.handedness === "left" && pose?.reachEligible === true;
     const valid = sample?.state === "tracked"
       && sample?.fresh === true
       && Number.isFinite(confidence)
       && confidence >= this.options.trackingConfidence
-      && sample?.pose?.reachEligible === true
+      && semanticEligible
       && focusStable
       && Number.isFinite(rawStrength);
     if (!valid) {
-      this.candidateAt = null;
-      this.candidateFrames = 0;
       this.releaseAt = null;
+      const transientGap = targetId !== null
+        && focusStable
+        && semanticEligible
+        && this.candidateAt !== null
+        && this.lastValidAt !== null
+        && now - this.lastValidAt <= this.options.gapMs;
+      if (!transientGap) this.clearCandidate();
       return false;
     }
     if (!frameKey || frameKey === this.lastFrameKey) return false;
     this.lastFrameKey = frameKey;
-    this.smoothedStrength = this.smoothedStrength === null
-      ? rawStrength
-      : this.smoothedStrength + (rawStrength - this.smoothedStrength) * this.options.strengthSmoothing;
-    const strength = this.smoothedStrength;
+    this.lastValidAt = now;
+    const strength = this.medianStrength(rawStrength);
 
     if (!this.armed) {
       if (rawStrength <= this.options.grabExit) {
@@ -82,8 +103,7 @@ export class HandGestureGate {
     }
 
     if (strength < this.options.grabEnter) {
-      this.candidateAt = null;
-      this.candidateFrames = 0;
+      this.clearCandidate({ clearStrength: false });
       return false;
     }
     if (this.candidateAt === null) {
@@ -97,8 +117,7 @@ export class HandGestureGate {
       || now - this.lastTriggerAt < this.options.cooldownMs) return false;
 
     this.lastTriggerAt = now;
-    this.candidateAt = null;
-    this.candidateFrames = 0;
+    this.clearCandidate();
     this.armed = false;
     this.releaseAt = null;
     return true;

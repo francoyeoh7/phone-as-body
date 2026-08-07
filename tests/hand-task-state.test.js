@@ -3,7 +3,7 @@ import { HAND_TASK_DEFAULTS, HandTaskStateMachine, scoreHandAction } from "../sr
 
 const obs = (overrides = {}) => ({
   state: "tracked", fresh: true, trackingConfidence: 0.9, handConfidence: 0.9,
-  pose: { openness: 0.9, palmFacing: 0.8, grabStrength: 0.1, curls: [0, 0, 0, 0, 0], velocity: 0 },
+  pose: { handedness: "left", reachEligible: true, openness: 0.9, palmFacing: 0.8, grabStrength: 0.1, curls: [0, 0, 0, 0, 0], velocity: 0 },
   ...overrides,
 });
 
@@ -73,7 +73,7 @@ describe("HandTaskStateMachine", () => {
   });
 
   it("requires the exact calibration and release boundaries", () => {
-    expect(HAND_TASK_DEFAULTS).toMatchObject({ trackingMs: 120, calibrationMs: 900, candidateMs: 220, releaseMs: 180, lossGraceMs: 250 });
+    expect(HAND_TASK_DEFAULTS).toMatchObject({ trackingMs: 120, calibrationMs: 900, candidateMs: 220, releaseMs: 180, lossGraceMs: 120 });
     const machine = new HandTaskStateMachine();
     machine.begin({ context: "found-phone", requiredAction: "grab", now: 0 });
     machine.update(obs(), 0);
@@ -102,9 +102,9 @@ describe("HandTaskStateMachine", () => {
     machine.update(grab, 1020); machine.update(grab, 1240); machine.update(grab, 1241); machine.update(grab, 1242);
     machine.update({ ...grab, trackingConfidence: 0.4 }, 1243);
     expect(machine.snapshot().phase).toBe("held");
-    machine.update({ ...grab, trackingConfidence: 0.4 }, 1492);
+    machine.update({ ...grab, trackingConfidence: 0.4 }, 1362);
     expect(machine.snapshot().phase).toBe("held");
-    machine.update({ ...grab, trackingConfidence: 0.4 }, 1493);
+    machine.update({ ...grab, trackingConfidence: 0.4 }, 1363);
     expect(machine.snapshot().phase).toBe("unstable");
   });
 
@@ -154,5 +154,19 @@ describe("HandTaskStateMachine", () => {
     machine.update(obs(), 120); machine.update(obs(), 1020);
     machine.reset();
     expect(machine.snapshot()).toMatchObject({ context: null, requiredAction: null, phase: "untracked", calibrated: false, calibrationProgress: 0 });
+  });
+
+  it("uses raw gesture pose and keeps a confirmed candidate through a short loss", () => {
+    const machine = new HandTaskStateMachine({ candidateMs: 0, lossGraceMs: 120 });
+    machine.begin({ context: "found-phone", requiredAction: "grab", preCalibrated: true, now: 0 });
+    const rawGrab = {
+      state: "tracked", fresh: true, trackingConfidence: 0.9,
+      pose: { ...obs().pose, grabStrength: 0.1 },
+      gesturePose: { ...obs().pose, grabStrength: 0.9 },
+    };
+
+    expect(machine.update(rawGrab, 1).phase).toBe("confirmed");
+    expect(machine.update({ state: "lost", fresh: false, gesturePose: rawGrab.gesturePose }, 60).phase).toBe("confirmed");
+    expect(machine.update(rawGrab, 100).phase).toBe("held");
   });
 });

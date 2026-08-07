@@ -8,7 +8,7 @@ export const HAND_TASK_DEFAULTS = Object.freeze({
   calibrationMs: 900,
   candidateMs: 220,
   releaseMs: 180,
-  lossGraceMs: 250,
+  lossGraceMs: 120,
   trackingMs: 120,
 });
 
@@ -91,8 +91,9 @@ export class HandTaskStateMachine {
   }
 
   update(observation = {}, now = 0) {
-    const pose = observation.pose ?? observation;
-    const fresh = observation.fresh === true && observation.state === "tracked";
+    const pose = observation.gesturePose ?? observation.pose ?? observation;
+    const poseEligible = pose?.handedness === "left" && pose?.reachEligible === true;
+    const fresh = observation.fresh === true && observation.state === "tracked" && poseEligible;
     const confidence = Number.isFinite(observation.trackingConfidence)
       ? observation.trackingConfidence
       : Number.isFinite(pose.trackingConfidence) ? pose.trackingConfidence : 0;
@@ -102,9 +103,10 @@ export class HandTaskStateMachine {
 
     if (this.state.phase === "untracked") return this.updateUntracked(fresh, confidence, pose, now);
     if (this.state.phase === "failed") {
-      if (fresh && confidence >= this.defaults.trackingExit) {
+      if (fresh && confidence >= this.defaults.trackingEnter) {
         this.state.phase = "tracking";
         this.state.enteredAt = now;
+        this.lossAt = null;
       }
       return this.snapshot();
     }
@@ -115,10 +117,18 @@ export class HandTaskStateMachine {
       if (this.validAction(fresh, confidence, score, this.defaults.actionEnter)) {
         this.state.phase = "held";
         this.state.enteredAt = now;
+        this.lossAt = null;
+      } else if (!fresh || confidence < this.defaults.trackingEnter) {
+        if (this.lossExpired(now)) {
+          this.state.phase = "failed";
+          this.state.enteredAt = now;
+          this.candidateAt = null;
+        }
       } else {
         this.state.phase = "failed";
         this.state.enteredAt = now;
         this.candidateAt = null;
+        this.lossAt = null;
       }
       return this.snapshot();
     }
@@ -145,16 +155,25 @@ export class HandTaskStateMachine {
     return fresh && confidence >= this.defaults.trackingEnter && score >= threshold;
   }
 
+  lossExpired(now) {
+    this.lossAt ??= now;
+    return now - this.lossAt >= this.defaults.lossGraceMs;
+  }
+
   updateTracking(fresh, confidence, score, pose, now) {
-    if (fresh && confidence < this.defaults.trackingExit) {
-      this.state.phase = "untracked";
-      this.state.enteredAt = now;
-      this.state.calibrated = false;
-      this.state.calibrationProgress = 0;
-      this.calibrationAt = null;
-      this.trackingCandidateAt = null;
+    if (!fresh || confidence < this.defaults.trackingExit) {
+      if (this.lossExpired(now)) {
+        this.state.phase = "untracked";
+        this.state.enteredAt = now;
+        this.state.calibrated = false;
+        this.state.calibrationProgress = 0;
+        this.calibrationAt = null;
+        this.trackingCandidateAt = null;
+        this.lossAt = null;
+      }
       return this.snapshot();
     }
+    this.lossAt = null;
     const calibrationValid = fresh && confidence >= 0.65
       && clamp(pose.openness) >= 0.72 && clamp(pose.palmFacing) >= 0.45;
     if (!this.state.calibrated) {
@@ -185,13 +204,18 @@ export class HandTaskStateMachine {
 
   updateCandidate(fresh, confidence, score, now) {
     if (!this.validAction(fresh, confidence, score, this.defaults.actionEnter)) {
+      if ((!fresh || confidence < this.defaults.trackingEnter) && !this.lossExpired(now)) {
+        return this.snapshot();
+      }
       this.candidateAt = null;
       this.state.phase = "failed";
       this.state.enteredAt = now;
+      this.lossAt = null;
       return this.snapshot();
     }
     this.state.phase = "confirmed";
     this.state.enteredAt = now;
+    this.lossAt = null;
     return this.snapshot();
   }
 
@@ -215,6 +239,8 @@ export class HandTaskStateMachine {
         this.state.enteredAt = now;
         return this.snapshot();
       }
+      this.lossAt = null;
+      return this.snapshot();
     } else {
       this.releaseAt = null;
     }
