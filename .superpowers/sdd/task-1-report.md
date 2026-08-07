@@ -60,3 +60,26 @@
 ## Concerns
 
 - The full suite and Vite build emit existing warnings about Tailwind content configuration, large chunks, and test-time GLTF blob textures. They do not fail verification and are outside this task's scope.
+
+## Settings Validation Fix
+
+### Root Cause
+
+- The action-level allowlist permitted the top-level `settings` key, but did not validate its nested object. ControllerApp only emits finite `sensitivity` in `[0.6, 1.6]` and finite `smoothing` in `[0, 1]`; arbitrary nested values could therefore bypass the action-media boundary.
+
+### Fix Evidence
+
+1. RED: `npm test -- tests/protocol.test.js`
+   - Failed as expected: 7 failures. Nested raw media, nested base64 media, unknown keys, wrong types, non-finite numbers, and out-of-range settings were accepted.
+2. GREEN: `npm test -- tests/protocol.test.js`
+   - Passed: 60 tests.
+3. Required focused verification: `npm test -- tests/protocol.test.js tests/controller-app.test.js tests/desktop-app.test.js`
+   - Passed: 3 files, 133 tests.
+4. Full verification: `npm test`
+   - Passed: 36 files, 454 tests.
+
+### Fix Self-Review
+
+- `settings` now accepts exactly the two values ControllerApp emits: `sensitivity` and `smoothing`.
+- Both values must be finite numbers within the current UI bounds, and unknown nested keys are rejected. This closes the raw/base64 media bypass without changing other action validation or controller behavior.
+- `.release/` remains untouched.

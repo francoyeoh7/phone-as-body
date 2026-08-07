@@ -210,6 +210,28 @@ describe("voice and inventory transient protocol", () => {
   );
 });
 
+describe("controller settings action protocol", () => {
+  it("accepts the exact settings shape emitted by ControllerApp", () => {
+    expect(protocol.isControllerAction({
+      action: "settings",
+      sentAt: 10,
+      settings: { sensitivity: 1.3, smoothing: 0.2 },
+    })).toBe(true);
+  });
+
+  it.each([
+    ["nested raw media", { sensitivity: 1, smoothing: 0.2, data: "raw" }],
+    ["nested base64 media", { sensitivity: 1, smoothing: 0.2, dataUrl: "AQID" }],
+    ["unknown setting", { sensitivity: 1, smoothing: 0.2, debug: true }],
+    ["wrong sensitivity type", { sensitivity: "1", smoothing: 0.2 }],
+    ["non-finite smoothing", { sensitivity: 1, smoothing: Number.POSITIVE_INFINITY }],
+    ["low sensitivity", { sensitivity: 0.59, smoothing: 0.2 }],
+    ["high smoothing", { sensitivity: 1, smoothing: 1.01 }],
+  ])("rejects settings actions with %s", (_label, settings) => {
+    expect(protocol.isControllerAction({ action: "settings", settings })).toBe(false);
+  });
+});
+
 describe("sustained gesture actions", () => {
   it("accepts a complete gesture-presence action", () => {
     expect(protocol.isControllerAction({

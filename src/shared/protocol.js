@@ -30,6 +30,7 @@ export const MAX_VOICE_CLIP_BYTES = 256 * 1024;
 export const INVENTORY_DELTA_LIMIT = 96;
 
 const isFiniteNumber = (value) => Number.isFinite(value);
+const CONTROLLER_SETTINGS_KEYS = new Set(["sensitivity", "smoothing"]);
 const HAND_RAW_MEDIA_KEYS = ["image", "video", "pixels", "frame", "blob", "dataUrl"];
 const HAND_TRACKED_KEYS = new Set([
   "version", "seq", "capturedAt", "modeEpoch", "state", "handedness",
@@ -115,6 +116,15 @@ export function isVoiceClip(value) {
 
 function isFiniteTriple(value) {
   return Array.isArray(value) && value.length === 3 && value.every(isFiniteNumber);
+}
+
+function isControllerSettings(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === CONTROLLER_SETTINGS_KEYS.size
+    && keys.every((key) => CONTROLLER_SETTINGS_KEYS.has(key))
+    && isFiniteNumber(value.sensitivity) && value.sensitivity >= 0.6 && value.sensitivity <= 1.6
+    && isFiniteNumber(value.smoothing) && value.smoothing >= 0 && value.smoothing <= 1;
 }
 
 function isLandmarkArray(value) {
@@ -205,6 +215,7 @@ export function isControllerAction(value) {
       && ["door-defense", "found-phone"].includes(value.context);
   }
   if (value.action === "voice-recording") return typeof value.active === "boolean";
+  if (value.action === "settings") return isControllerSettings(value.settings);
   if (value.action === "inventory-pointer") {
     if (!["open", "move", "commit", "cancel"].includes(value.phase)) return false;
     if (value.phase !== "move") return value.dx === undefined && value.dy === undefined;
