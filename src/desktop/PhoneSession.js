@@ -1,12 +1,13 @@
 import QRCode from "qrcode";
 import { io } from "socket.io-client";
-import { EVENTS, isControllerInput, isHandFrame } from "../shared/protocol.js";
+import { EVENTS, isControllerInput, isHandFrame, isVoiceClip } from "../shared/protocol.js";
 
 const stoppedInput = () => ({
   seq: -1,
   move: { x: 0, y: 0 },
   viewDelta: { yaw: 0, pitch: 0 },
   clutch: false,
+  crouch: false,
   receivedAt: 0,
 });
 
@@ -33,6 +34,7 @@ export class PhoneSession extends EventTarget {
     this.socket.on(EVENTS.peerStatus, ({ connected }) => this.setPeerConnected(Boolean(connected)));
     this.socket.on(EVENTS.controllerInput, (input) => this.acceptInput(input));
     this.socket.on(EVENTS.controllerHand, (frame) => this.acceptHandFrame(frame));
+    this.socket.on(EVENTS.controllerVoiceClip, (clip) => this.acceptVoiceClip(clip));
     this.socket.on(EVENTS.controllerAction, (action) => {
       this.dispatchEvent(new CustomEvent("action", { detail: action }));
     });
@@ -50,6 +52,7 @@ export class PhoneSession extends EventTarget {
       move: { ...input.move },
       viewDelta: { ...input.viewDelta },
       clutch: input.clutch,
+      crouch: input.crouch === true,
       receivedAt: performance.now(),
     };
     this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
@@ -64,6 +67,12 @@ export class PhoneSession extends EventTarget {
     this.dispatchEvent(new CustomEvent("hand", {
       detail: { ...frame, receivedAt: performance.now() },
     }));
+    return true;
+  }
+
+  acceptVoiceClip(clip) {
+    if (!isVoiceClip(clip)) return false;
+    this.dispatchEvent(new CustomEvent("voice-clip", { detail: { ...clip } }));
     return true;
   }
 
@@ -117,6 +126,7 @@ export class PhoneSession extends EventTarget {
         move: { x: 0, y: 0 },
         viewDelta: { yaw: 0, pitch: 0 },
         clutch: false,
+        crouch: false,
       };
       this.pendingViewDelta = { yaw: 0, pitch: 0 };
       this.resetHandOrdering();
@@ -218,6 +228,7 @@ export class PhoneSession extends EventTarget {
         move: { x: 0, y: 0 },
         viewDelta,
         clutch: false,
+        crouch: false,
       };
     }
     return { ...this.input, viewDelta };

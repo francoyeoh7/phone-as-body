@@ -3,6 +3,10 @@ import { ControllerSocket } from "../src/controller/ControllerSocket.js";
 import { PhoneSession } from "../src/desktop/PhoneSession.js";
 import * as protocol from "../src/shared/protocol.js";
 
+const { socketIoMock } = vi.hoisted(() => ({ socketIoMock: vi.fn() }));
+
+vi.mock("socket.io-client", () => ({ io: socketIoMock }));
+
 const controllerInput = (overrides = {}) => ({
   seq: 1,
   sentAt: 100,
@@ -73,6 +77,12 @@ describe("strict hand frame protocol", () => {
     expect(protocol.isHandFrame(handFrame())).toBe(true);
   });
 
+  it("keeps legacy input valid while accepting only boolean crouch state", () => {
+    expect(protocol.isControllerInput(controllerInput())).toBe(true);
+    expect(protocol.isControllerInput(controllerInput({ crouch: true }))).toBe(true);
+    expect(protocol.isControllerInput(controllerInput({ crouch: "true" }))).toBe(false);
+  });
+
   it("rejects physical-right tracked envelopes while retaining status frames", () => {
     expect(protocol.isHandFrame(handFrame({ handedness: "right" }))).toBe(false);
     expect(protocol.isHandFrame({
@@ -105,6 +115,99 @@ describe("strict hand frame protocol", () => {
       version: 1, seq: 2, capturedAt: 1, modeEpoch: 0, state: "unavailable", landmarks: [],
     })).toBe(false);
   });
+});
+
+describe("voice and inventory transient protocol", () => {
+  const voiceClip = (overrides = {}) => ({
+    version: 1,
+    seq: 0,
+    durationMs: 900,
+    mimeType: "audio/webm;codecs=opus",
+    data: new Uint8Array([1, 2, 3]),
+    ...overrides,
+  });
+
+  it("accepts bounded binary voice clips and exposes their event", () => {
+    expect(protocol.EVENTS.controllerVoiceClip).toBe("controller:voice-clip");
+    expect(protocol.isVoiceClip(voiceClip())).toBe(true);
+  });
+
+  it.each([
+    ["raw media", { data: "raw" }],
+    ["base64 media", { data: "AQID" }],
+    ["unapproved mime", { mimeType: "audio/wav" }],
+    ["too long", { durationMs: 10_001 }],
+    ["empty data", { data: new Uint8Array() }],
+  ])("rejects voice clips with %s", (_label, overrides) => {
+    expect(protocol.isVoiceClip(voiceClip(overrides))).toBe(false);
+  });
+
+  it("accepts only exact voice-recording action keys", () => {
+    expect(protocol.isControllerAction({ action: "voice-recording", active: true, sentAt: 10 })).toBe(true);
+    expect(protocol.isControllerAction({ action: "voice-recording", active: true, data: "raw" })).toBe(false);
+    expect(protocol.isControllerAction({ action: "voice-recording", active: true, dataUrl: "AQID" })).toBe(false);
+  });
+
+  it("bounds inventory pointer movement and rejects deltas for other phases", () => {
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "open" })).toBe(true);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "move", dx: 12, dy: -4 })).toBe(true);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "move", dx: 999, dy: 0 })).toBe(false);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "commit", dx: 0, dy: 0 })).toBe(false);
+  });
+
+  it("sends validated clips only through the reliable Socket.IO channel", () => {
+    const socket = new ControllerSocket({ room: "617042" });
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+    socket.handChannel = { readyState: "open", send: vi.fn() };
+
+    expect(socket.sendVoiceClip(voiceClip())).toBe(true);
+    expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerVoiceClip, voiceClip());
+    expect(socket.handChannel.send).not.toHaveBeenCalled();
+    expect(socket.sendVoiceClip(voiceClip({ data: "raw" }))).toBe(false);
+  });
+
+  it("validates voice clips again before dispatching a desktop event", () => {
+    const session = new PhoneSession();
+    const receive = vi.fn();
+    session.addEventListener("voice-clip", receive);
+
+    expect(session.acceptVoiceClip(voiceClip())).toBe(true);
+    expect(receive).toHaveBeenCalledWith(expect.objectContaining({ detail: voiceClip() }));
+    expect(session.acceptVoiceClip(voiceClip({ data: "raw" }))).toBe(false);
+    expect(receive).toHaveBeenCalledOnce();
+  });
+
+  it("clears crouch with movement when the desktop peer disconnects", () => {
+    const session = new PhoneSession();
+    session.connected = true;
+    session.acceptInput(controllerInput({ crouch: true }));
+
+    session.setPeerConnected(false);
+
+    expect(session.currentInput(10_000)).toMatchObject({ move: { x: 0, y: 0 }, crouch: false });
+  });
+
+  it.each(["disconnect", protocol.EVENTS.controllerReplaced, protocol.EVENTS.sessionEnded])(
+    "clears crouch when the controller receives %s",
+    (event) => {
+      const listeners = new Map();
+      socketIoMock.mockReturnValue({
+        on: vi.fn((name, listener) => listeners.set(name, listener)),
+        emit: vi.fn(),
+        disconnect: vi.fn(),
+      });
+      vi.stubGlobal("window", { setInterval: vi.fn() });
+      const socket = new ControllerSocket({ room: "617042" });
+      socket.connect();
+      socket.setInput({ move: { x: 0.5, y: 1 }, crouch: true });
+
+      listeners.get(event)();
+
+      expect(socket.latest).toEqual({ move: { x: 0, y: 0 }, clutch: false, crouch: false });
+      vi.unstubAllGlobals();
+    },
+  );
 });
 
 describe("sustained gesture actions", () => {

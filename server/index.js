@@ -11,7 +11,7 @@ import { EVENTS, isDesktopEvent, isRoomCode } from "../src/shared/protocol.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = express();
 const server = createServer(app);
-const io = new SocketIOServer(server, { serveClient: false });
+const io = new SocketIOServer(server, { serveClient: false, maxHttpBufferSize: 384 * 1024 });
 const sessions = createSessionRegistry();
 const port = Number(process.env.PORT) || 4174;
 const publicControllerOrigin = process.env.PUBLIC_CONTROLLER_ORIGIN || null;
@@ -77,13 +77,19 @@ io.on("connection", (socket) => {
   socket.on(EVENTS.controllerInput, (payload, acknowledge) => {
     const code = socket.data.roomCode;
     const accepted = sessions.acceptInput(code, socket.id, payload);
-    if (accepted.ok) io.to(accepted.room.desktopId).emit(EVENTS.controllerInput, payload);
+    if (accepted.ok) io.to(accepted.room.desktopId).emit(EVENTS.controllerInput, accepted.room.input);
     if (typeof acknowledge === "function") acknowledge({ ok: accepted.ok, reason: accepted.reason });
   });
 
   socket.on(EVENTS.controllerAction, (payload, acknowledge) => {
     const accepted = sessions.acceptAction(socket.data.roomCode, socket.id, payload);
     if (accepted.ok) io.to(accepted.room.desktopId).emit(EVENTS.controllerAction, payload);
+    if (typeof acknowledge === "function") acknowledge({ ok: accepted.ok, reason: accepted.reason });
+  });
+
+  socket.on(EVENTS.controllerVoiceClip, (payload, acknowledge) => {
+    const accepted = sessions.acceptVoiceClip(socket.data.roomCode, socket.id, payload);
+    if (accepted.ok) io.to(accepted.room.desktopId).emit(EVENTS.controllerVoiceClip, accepted.clip);
     if (typeof acknowledge === "function") acknowledge({ ok: accepted.ok, reason: accepted.reason });
   });
 

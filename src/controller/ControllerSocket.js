@@ -1,5 +1,5 @@
 import { io } from "socket.io-client";
-import { EVENTS, isHandFrame } from "../shared/protocol.js";
+import { EVENTS, isHandFrame, isVoiceClip } from "../shared/protocol.js";
 
 export class ControllerSocket {
   constructor({ room, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
@@ -14,6 +14,7 @@ export class ControllerSocket {
     this.latest = {
       move: { x: 0, y: 0 },
       clutch: false,
+      crouch: false,
     };
     this.pendingViewDelta = { yaw: 0, pitch: 0 };
     this.sentAtBySequence = new Map();
@@ -45,7 +46,7 @@ export class ControllerSocket {
     });
     this.socket.on("disconnect", () => {
       this.joined = false;
-      this.latest = { move: { x: 0, y: 0 }, clutch: false };
+      this.latest = { move: { x: 0, y: 0 }, clutch: false, crouch: false };
       this.clearPendingViewDelta();
       this.closePeerConnection();
       this.onStatus?.("disconnected");
@@ -53,11 +54,15 @@ export class ControllerSocket {
     this.socket.on("connect_error", () => this.onStatus?.("connect-error"));
     this.socket.on(EVENTS.controllerReplaced, () => {
       this.joined = false;
+      this.latest = { move: { x: 0, y: 0 }, clutch: false, crouch: false };
+      this.clearPendingViewDelta();
       this.closePeerConnection();
       this.onStatus?.("replaced");
     });
     this.socket.on(EVENTS.sessionEnded, () => {
       this.joined = false;
+      this.latest = { move: { x: 0, y: 0 }, clutch: false, crouch: false };
+      this.clearPendingViewDelta();
       this.closePeerConnection();
       this.onStatus?.("session-ended");
     });
@@ -70,6 +75,7 @@ export class ControllerSocket {
   setInput(input, { immediate = false } = {}) {
     if (input.move) this.latest.move = { ...input.move };
     if (typeof input.clutch === "boolean") this.latest.clutch = input.clutch;
+    if (typeof input.crouch === "boolean") this.latest.crouch = input.crouch;
     if (input.viewDelta) {
       const delta = input.viewDelta;
       this.pendingViewDelta = {
@@ -173,6 +179,12 @@ export class ControllerSocket {
       return true;
     }
     this.socket.emit(EVENTS.controllerHand, frame);
+    return true;
+  }
+
+  sendVoiceClip(clip) {
+    if (!this.joined || !this.socket?.connected || !isVoiceClip(clip)) return false;
+    this.socket.emit(EVENTS.controllerVoiceClip, clip);
     return true;
   }
 

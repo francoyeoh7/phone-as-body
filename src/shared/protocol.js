@@ -4,6 +4,7 @@ export const EVENTS = Object.freeze({
   controllerInput: "controller:input",
   controllerHand: "controller:hand",
   controllerAction: "controller:action",
+  controllerVoiceClip: "controller:voice-clip",
   desktopEvent: "desktop:event",
   rtcSignal: "rtc:signal",
   peerStatus: "peer:status",
@@ -20,7 +21,13 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "pause",
   "resume",
   "settings",
+  "voice-recording",
+  "inventory-pointer",
 ]);
+
+export const MAX_VOICE_DURATION_MS = 10_000;
+export const MAX_VOICE_CLIP_BYTES = 256 * 1024;
+export const INVENTORY_DELTA_LIMIT = 96;
 
 const isFiniteNumber = (value) => Number.isFinite(value);
 const HAND_RAW_MEDIA_KEYS = ["image", "video", "pixels", "frame", "blob", "dataUrl"];
@@ -80,8 +87,30 @@ export function isControllerInput(value) {
     value.sentAt >= 0 &&
     isJoystickVector(value.move) &&
     isViewDelta(value.viewDelta) &&
-    typeof value.clutch === "boolean"
+    typeof value.clutch === "boolean" &&
+    (!Object.hasOwn(value, "crouch") || typeof value.crouch === "boolean")
   );
+}
+
+function binaryByteLength(value) {
+  if (typeof Blob !== "undefined" && value instanceof Blob) return value.size;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  return 0;
+}
+
+export function isVoiceClip(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.every((key) => ["version", "seq", "durationMs", "mimeType", "data"].includes(key))) return false;
+  const bytes = binaryByteLength(value.data);
+  const mime = String(value.mimeType ?? "").split(";")[0].toLowerCase();
+  return value.version === 1
+    && Number.isInteger(value.seq) && value.seq >= 0
+    && isFiniteNumber(value.durationMs) && value.durationMs > 0
+    && value.durationMs <= MAX_VOICE_DURATION_MS
+    && ["audio/webm", "audio/ogg", "audio/mp4"].includes(mime)
+    && bytes > 0 && bytes <= MAX_VOICE_CLIP_BYTES;
 }
 
 function isFiniteTriple(value) {
@@ -149,20 +178,40 @@ export function isHandFrame(value) {
 }
 
 export function isControllerAction(value) {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    CONTROLLER_ACTIONS.includes(value.action) &&
-    (value.sentAt === undefined || isFiniteNumber(value.sentAt)) &&
-    (value.action !== "task-hold" || (
-      value.context === "door-defense" && typeof value.active === "boolean"
-    )) &&
-    (value.action !== "gesture-presence" || (
-      typeof value.ready === "boolean" &&
-      typeof value.active === "boolean" &&
-      ["door-defense", "found-phone"].includes(value.context)
-    ))
-  );
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!CONTROLLER_ACTIONS.includes(value.action)) return false;
+  if (value.sentAt !== undefined && !isFiniteNumber(value.sentAt)) return false;
+
+  const allowedKeys = {
+    interact: ["action", "sentAt"],
+    flashlight: ["action", "sentAt"],
+    recenter: ["action", "sentAt"],
+    pause: ["action", "sentAt"],
+    resume: ["action", "sentAt"],
+    settings: ["action", "sentAt", "settings"],
+    "task-hold": ["action", "sentAt", "context", "active"],
+    "gesture-presence": ["action", "sentAt", "ready", "active", "context"],
+    "voice-recording": ["action", "sentAt", "active"],
+    "inventory-pointer": ["action", "sentAt", "phase", "dx", "dy"],
+  };
+  if (Object.keys(value).some((key) => !allowedKeys[value.action].includes(key))) return false;
+
+  if (value.action === "task-hold") {
+    return value.context === "door-defense" && typeof value.active === "boolean";
+  }
+  if (value.action === "gesture-presence") {
+    return typeof value.ready === "boolean"
+      && typeof value.active === "boolean"
+      && ["door-defense", "found-phone"].includes(value.context);
+  }
+  if (value.action === "voice-recording") return typeof value.active === "boolean";
+  if (value.action === "inventory-pointer") {
+    if (!["open", "move", "commit", "cancel"].includes(value.phase)) return false;
+    if (value.phase !== "move") return value.dx === undefined && value.dy === undefined;
+    return isFiniteNumber(value.dx) && Math.abs(value.dx) <= INVENTORY_DELTA_LIMIT
+      && isFiniteNumber(value.dy) && Math.abs(value.dy) <= INVENTORY_DELTA_LIMIT;
+  }
+  return true;
 }
 
 export function isDesktopEvent(value) {

@@ -1,4 +1,6 @@
-import { isControllerAction, isControllerInput, isHandFrame, isRoomCode } from "../src/shared/protocol.js";
+import {
+  isControllerAction, isControllerInput, isHandFrame, isRoomCode, isVoiceClip,
+} from "../src/shared/protocol.js";
 
 const stoppedInput = () => ({
   seq: -1,
@@ -6,13 +8,14 @@ const stoppedInput = () => ({
   move: { x: 0, y: 0 },
   viewDelta: { yaw: 0, pitch: 0 },
   clutch: false,
+  crouch: false,
 });
 
 function defaultRandomCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
+export function createSessionRegistry({ randomCode = defaultRandomCode, now = () => Date.now() } = {}) {
   const rooms = new Map();
 
   function createDesktop(desktopId) {
@@ -33,6 +36,8 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
       input: stoppedInput(),
       handSeq: -1,
       handEpoch: 0,
+      voiceSeq: -1,
+      lastVoiceAcceptedAt: null,
     };
     rooms.set(code, room);
     return { code };
@@ -47,6 +52,8 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     room.input = stoppedInput();
     room.handSeq = -1;
     room.handEpoch = 0;
+    room.voiceSeq = -1;
+    room.lastVoiceAcceptedAt = null;
     return { ok: true, replacedId };
   }
 
@@ -63,6 +70,7 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
       move: { x: input.move.x, y: input.move.y },
       viewDelta: { yaw: input.viewDelta.yaw, pitch: input.viewDelta.pitch },
       clutch: input.clutch,
+      crouch: input.crouch === true,
     };
     return { ok: true, room };
   }
@@ -73,6 +81,32 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     if (room.controllerId !== controllerId) return { ok: false, reason: "not-controller" };
     if (!isControllerAction(action)) return { ok: false, reason: "invalid-action" };
     return { ok: true, room };
+  }
+
+  function acceptVoiceClip(code, controllerId, clip) {
+    const room = rooms.get(code);
+    if (!room) return { ok: false, reason: "room-not-found" };
+    if (room.controllerId !== controllerId) return { ok: false, reason: "not-controller" };
+    if (!isVoiceClip(clip)) return { ok: false, reason: "invalid-voice" };
+    if (clip.seq <= room.voiceSeq) return { ok: false, reason: "stale-voice" };
+    const acceptedAt = now();
+    if (room.lastVoiceAcceptedAt !== null && acceptedAt - room.lastVoiceAcceptedAt < 1_000) {
+      return { ok: false, reason: "voice-rate-limited" };
+    }
+
+    room.voiceSeq = clip.seq;
+    room.lastVoiceAcceptedAt = acceptedAt;
+    return {
+      ok: true,
+      room,
+      clip: {
+        version: clip.version,
+        seq: clip.seq,
+        durationMs: clip.durationMs,
+        mimeType: String(clip.mimeType).split(";")[0].toLowerCase(),
+        data: clip.data,
+      },
+    };
   }
 
   function acceptHand(code, controllerId, frame) {
@@ -100,6 +134,8 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
         room.input = stoppedInput();
         room.handSeq = -1;
         room.handEpoch = 0;
+        room.voiceSeq = -1;
+        room.lastVoiceAcceptedAt = null;
         return { role: "controller", roomCode: code, peerId: room.desktopId };
       }
     }
@@ -111,6 +147,7 @@ export function createSessionRegistry({ randomCode = defaultRandomCode } = {}) {
     attachController,
     acceptInput,
     acceptAction,
+    acceptVoiceClip,
     acceptHand,
     disconnect,
     get: (code) => rooms.get(code) ?? null,

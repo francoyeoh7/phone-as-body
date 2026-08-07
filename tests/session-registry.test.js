@@ -18,6 +18,17 @@ function sampleHand(overrides = {}) {
   };
 }
 
+function sampleVoiceClip(overrides = {}) {
+  return {
+    version: 1,
+    seq: 0,
+    durationMs: 800,
+    mimeType: "audio/webm",
+    data: new Uint8Array([1, 2, 3]),
+    ...overrides,
+  };
+}
+
 describe("session registry", () => {
   it("accepts only newer room-owned hand frames and stores ordering scalars", () => {
     const registry = createSessionRegistry({ randomCode: () => "617042" });
@@ -74,5 +85,48 @@ describe("session registry", () => {
     expect(registry.acceptInput("617042", "phone", sampleInput()).reason).toBe("stale-input");
     expect(registry.acceptInput("617042", "phone", sampleInput({ seq: 2, viewDelta: { yaw: 999, pitch: 0 } })).reason)
       .toBe("invalid-input");
+  });
+
+  it("normalizes optional crouch state and copies accepted input", () => {
+    const registry = createSessionRegistry({ randomCode: () => "617042" });
+    registry.createDesktop("desktop");
+    registry.attachController("617042", "phone");
+    const input = sampleInput({ crouch: true });
+
+    expect(registry.acceptInput("617042", "phone", input).room.input.crouch).toBe(true);
+    input.move.x = 0.8;
+    expect(registry.get("617042").input).toMatchObject({ move: { x: 0, y: 1 }, crouch: true });
+    expect(registry.acceptInput("617042", "phone", sampleInput({ seq: 2 })).room.input.crouch).toBe(false);
+  });
+
+  it("accepts only controller-owned ordered and rate-limited voice clips without storing bytes", () => {
+    let now = 10_000;
+    const registry = createSessionRegistry({ randomCode: () => "617042", now: () => now });
+    registry.createDesktop("desktop");
+    registry.attachController("617042", "phone");
+
+    expect(registry.acceptVoiceClip("617042", "intruder", sampleVoiceClip()).reason).toBe("not-controller");
+    const accepted = registry.acceptVoiceClip("617042", "phone", sampleVoiceClip());
+    expect(accepted).toMatchObject({ ok: true, clip: { seq: 0, mimeType: "audio/webm" } });
+    expect(registry.get("617042")).toMatchObject({ voiceSeq: 0, lastVoiceAcceptedAt: 10_000 });
+    expect(registry.get("617042").voiceClip).toBeUndefined();
+    expect(registry.acceptVoiceClip("617042", "phone", sampleVoiceClip()).reason).toBe("stale-voice");
+    now += 500;
+    expect(registry.acceptVoiceClip("617042", "phone", sampleVoiceClip({ seq: 1 })).reason).toBe("voice-rate-limited");
+    now += 500;
+    expect(registry.acceptVoiceClip("617042", "phone", sampleVoiceClip({ seq: 1 })).ok).toBe(true);
+  });
+
+  it("resets voice ordering and rate state on controller replacement and disconnect", () => {
+    const registry = createSessionRegistry({ randomCode: () => "617042", now: () => 10_000 });
+    registry.createDesktop("desktop");
+    registry.attachController("617042", "phone-a");
+    registry.acceptVoiceClip("617042", "phone-a", sampleVoiceClip({ seq: 8 }));
+
+    registry.attachController("617042", "phone-b");
+    expect(registry.get("617042")).toMatchObject({ controllerId: "phone-b", voiceSeq: -1, lastVoiceAcceptedAt: null });
+    expect(registry.acceptVoiceClip("617042", "phone-b", sampleVoiceClip()).ok).toBe(true);
+    registry.disconnect("phone-b");
+    expect(registry.get("617042")).toMatchObject({ controllerId: null, voiceSeq: -1, lastVoiceAcceptedAt: null });
   });
 });
