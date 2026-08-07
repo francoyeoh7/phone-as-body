@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { FirstPersonHand, WEBXR_JOINTS, expandMediaPipeJoints } from "../src/desktop/FirstPersonHand.js";
+import { deriveHandFeatures } from "../src/shared/hand-pose.js";
 import { openHand, curledHand } from "./fixtures/hand-landmarks.js";
 
 function fakeScene() {
@@ -29,6 +30,7 @@ function loaderFor(scenes, reject = false) {
 }
 
 function assetLoader() {
+  globalThis.self ??= globalThis;
   const parser = new GLTFLoader();
   return { loadAsync: vi.fn(async (url) => {
     const file = path.resolve("public", url.replace(/^\//, ""));
@@ -50,26 +52,42 @@ describe("FirstPersonHand", () => {
     expect(expanded.find((joint) => joint.name === "index-finger-metacarpal").position).not.toEqual(expanded.find((joint) => joint.name === "wrist").position);
   });
 
-  it("maps center and relative scale into bounded camera-local root motion/depth", async () => {
+  it("anchors the hand at the lower edge and preserves the authored wrist position", async () => {
     const left = fakeScene();
     const right = fakeScene();
     const camera = new THREE.Group();
     const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/left.glb": left.root, "/assets/hands/right.glb": right.root }), cloneScene: (scene) => scene.clone(true) });
     await hand.load();
-    hand.applyPose({ ...openHand(), handedness: "left", center: [0.2, 0.2, 0], relativeScale: 0.5, trackingConfidence: 1 }, 0.016);
+    const wristRest = hand.bones.wrist.position.clone();
+    hand.applyPose({ ...openHand(), handedness: "left", center: [0.2, 0.2, 0], palmSpan: 0.2, reachEligible: false, trackingConfidence: 1 }, 0.016);
     const first = hand.root.position.clone();
-    hand.applyPose({ ...openHand(), handedness: "left", center: [0.8, 0.8, 0], relativeScale: 1.5, trackingConfidence: 1 }, 0.016);
+    expect(first.x).toBeLessThan(0);
+    expect(first.y).toBeLessThan(-0.2);
+    hand.applyPose({ ...openHand(), handedness: "left", center: [0.8, 0.45, 0], palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.016);
     expect(hand.root.position.x).toBeGreaterThan(first.x);
     expect(hand.root.position.y).toBeGreaterThan(first.y);
-    expect(hand.root.position.z).toBeGreaterThan(first.z);
-    expect(hand.root.position.x).toBeGreaterThanOrEqual(-0.31);
-    expect(hand.root.position.x).toBeLessThanOrEqual(0.31);
-    expect(hand.root.position.y).toBeGreaterThanOrEqual(-0.21);
-    expect(hand.root.position.y).toBeLessThanOrEqual(0.21);
-    hand.applyPose({ ...openHand(), handedness: "left", center: [0.5, 0.5, 0], relativeScale: 0.5, trackingConfidence: 1 }, 0.016);
-    expect(hand.root.position.z).toBeCloseTo(-0.86, 6);
-    hand.applyPose({ ...openHand(), handedness: "left", center: [0.5, 0.5, 0], relativeScale: 1.5, trackingConfidence: 1 }, 0.016);
-    expect(hand.root.position.z).toBeCloseTo(-0.42, 6);
+    expect(hand.bones.wrist.position.distanceTo(wristRest)).toBeLessThan(1e-6);
+  });
+
+  it("places a fully extended wrist on the focused screen contact without changing tracked fingers", async () => {
+    const right = fakeScene();
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 10);
+    camera.lookAt(0, 0, -1);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+    const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/right.glb": right.root, "/assets/hands/left.glb": right.root }), cloneScene: (scene) => scene.clone(true) });
+    await hand.load();
+    const contact = new THREE.Vector3(0.18, 0.12, -1);
+    hand.setTargetContact({ point: contact });
+    hand.applyPose({ ...openHand(), handedness: "right", palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.2);
+    const wristScreen = hand.root.position.clone().project(camera);
+    const contactScreen = contact.clone().project(camera);
+    expect(wristScreen.x).toBeCloseTo(contactScreen.x, 5);
+    expect(wristScreen.y).toBeCloseTo(contactScreen.y, 5);
+    expect(hand.root.position.y).toBeGreaterThan(-0.2);
+    const beforeFinger = hand.bones["index-finger-phalanx-proximal"].quaternion.clone();
+    hand.applyPose({ ...openHand(), handedness: "right", palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.2);
+    expect(hand.bones["index-finger-phalanx-proximal"].quaternion.equals(beforeFinger)).toBe(true);
   });
 
   it("deforms phalanxes from curl, fades loss without moving, and switches handedness after stabilization", async () => {
@@ -135,6 +153,15 @@ describe("FirstPersonHand", () => {
     expect(hand.boneSets.right.wrist.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.1);
     expect(hand.boneSets.left.wrist.position.x).toBeLessThan(0);
     expect(hand.boneSets.right.wrist.position.x).toBeGreaterThan(0);
+    expect(hand.presentationLoadError?.message).toBeUndefined();
+    expect(hand.presentationBones).not.toBeNull();
+
+    const tracked = deriveHandFeatures(openHand());
+    hand.applyPose({ ...tracked, curls: [0, 0, 0, 0, 0], trackingConfidence: 1, reachEligible: true }, 0.016);
+    const openIndex = hand.presentationBones.f_index01L.quaternion.clone();
+    hand.applyPose({ ...tracked, curls: [1, 1, 1, 1, 1], trackingConfidence: 1, reachEligible: true }, 0.016);
+    expect(hand.presentationBones.f_index01L.quaternion.angleTo(openIndex)).toBeGreaterThan(0.8);
+    expect(hand.presentationBones.f_index01L.quaternion.toArray().every(Number.isFinite)).toBe(true);
   });
 
   it("disposes clone-owned geometry and materials during destroy", async () => {

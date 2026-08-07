@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
+import { createArmRigAdapter, createFlatWebXRAdapter } from "./hand-asset-adapter.js";
 
 export const WEBXR_JOINTS = [
   "wrist", "thumb-metacarpal", "thumb-phalanx-proximal", "thumb-phalanx-distal", "thumb-tip",
@@ -32,6 +33,26 @@ function quaternionFromBasis(basis) {
   const forward = normalize(basis?.forward ?? [0, 0, 1], [0, 0, 1]);
   const matrix = new THREE.Matrix4().makeBasis(new THREE.Vector3(...right), new THREE.Vector3(...up), new THREE.Vector3(...forward));
   return new THREE.Quaternion().setFromRotationMatrix(matrix).normalize();
+}
+
+function dampAlpha(seconds, timeConstant = 0.15) {
+  return 1 - Math.exp(-Math.max(0, seconds) / timeConstant);
+}
+
+function targetToCameraPosition(camera, point) {
+  if (!camera?.isCamera || !point?.isVector3) return null;
+  camera.updateMatrixWorld?.();
+  camera.updateProjectionMatrix?.();
+  const local = camera.worldToLocal(point.clone());
+  const distance = -local.z;
+  if (!Number.isFinite(distance) || distance <= 0.05) return null;
+  const depth = clamp(distance * 0.58, 0.55, 0.9);
+  const screenScale = depth / distance;
+  return new THREE.Vector3(
+    local.x * screenScale,
+    local.y * screenScale,
+    -depth,
+  );
 }
 
 export function jointQuaternion(joint, child, palmBasis = {}) {
@@ -122,6 +143,19 @@ function discoverBones(root) {
   return bones;
 }
 
+function discoverArmBones(root) {
+  const bones = {};
+  root.traverse?.((object) => {
+    if (object.isBone || object.type === "Bone") bones[object.name] = object;
+  });
+  for (const suffix of ["L", "R"]) {
+    for (const name of ["shoulder", "hand", "palm01", "palm02", "palm03", "palm04", "thumb01", "thumb02", "thumb03", "f_index01", "f_index02", "f_index03", "f_middle01", "f_middle02", "f_middle03", "f_ring01", "f_ring02", "f_ring03", "f_pinky01", "f_pinky02", "f_pinky03"]) {
+      if (!bones[`${name}${suffix}`]) throw new Error("arm asset missing required bone");
+    }
+  }
+  return bones;
+}
+
 export class FirstPersonHand {
   constructor(options = {}) {
     this.camera = options.camera ?? null;
@@ -133,8 +167,13 @@ export class FirstPersonHand {
     if (typeof this.camera?.add === "function") this.camera.add(this.root);
     this.models = {};
     this.boneSets = {};
+    this.adapters = {};
+    this.presentationModel = null;
+    this.presentationBones = null;
+    this.presentationAdapters = {};
     this.materialRoots = {};
     this.bones = {};
+    this.adapter = null;
     this.handedness = null;
     this.competingHandedness = null;
     this.competingSince = null;
@@ -147,6 +186,8 @@ export class FirstPersonHand {
     this.lossFadeStartOpacity = 0;
     this.lossActive = false;
     this.fallbackPose = "open";
+    this.targetContact = null;
+    this.poseInitialized = false;
   }
 
   async load() {
@@ -158,10 +199,29 @@ export class FirstPersonHand {
         const scene = this.cloneScene(gltf.scene ?? gltf.scenes?.[0]);
         this.models[side] = scene;
         this.boneSets[side] = discoverBones(scene);
+        this.adapters[side] = createFlatWebXRAdapter(this.boneSets[side], side);
         this.materialRoots[side] = scene;
         setMaterialOpacity(scene, 0);
         scene.visible = false;
         this.root.add(scene);
+      }
+      try {
+        const gltf = await loadOne("/assets/hands/psx-arms.glb");
+        const scene = this.cloneScene(gltf.scene ?? gltf.scenes?.[0]);
+        const bones = discoverArmBones(scene);
+        this.presentationModel = scene;
+        this.presentationBones = bones;
+        this.presentationAdapters.left = createArmRigAdapter(scene, bones, "left", gltf.animations);
+        this.presentationAdapters.right = createArmRigAdapter(scene, bones, "right", gltf.animations);
+        this.materialRoots.presentation = scene;
+        setMaterialOpacity(scene, 0);
+        scene.visible = false;
+        this.root.add(scene);
+      } catch (error) {
+        this.presentationModel = null;
+        this.presentationBones = null;
+        this.presentationAdapters = {};
+        this.presentationLoadError = error;
       }
       this.loaded = true;
       this.fallback = false;
@@ -178,9 +238,14 @@ export class FirstPersonHand {
 
   _activateModel(side) {
     if (!this.models[side]) return;
-    for (const [name, model] of Object.entries(this.models)) model.visible = name === side;
+    for (const [name, model] of Object.entries(this.models)) model.visible = !this.presentationModel && name === side;
+    if (this.presentationModel) {
+      this.presentationModel.visible = true;
+      this.presentationAdapters[side]?.prepareModel?.();
+    }
     this.handedness = side;
     this.bones = this.boneSets[side];
+    this.adapter = this.adapters[side] ?? null;
     this._setOpacity(this.opacity);
   }
 
@@ -191,6 +256,19 @@ export class FirstPersonHand {
   }
 
   setContext(context) { this.context = context; return this; }
+
+  setTargetContact(contact = null) {
+    const point = contact?.point?.isVector3
+      ? contact.point.clone()
+      : Array.isArray(contact?.point) ? new THREE.Vector3(...contact.point.slice(0, 3)) : null;
+    const normal = contact?.normal?.isVector3
+      ? contact.normal.clone()
+      : Array.isArray(contact?.normal) ? new THREE.Vector3(...contact.normal.slice(0, 3)) : null;
+    this.targetContact = point && point.toArray().every(Number.isFinite)
+      ? { point, normal: normal && normal.toArray().every(Number.isFinite) ? normal : null }
+      : null;
+    return this;
+  }
 
   applyPose(pose = {}, delta = 0) {
     if (!this.loaded || !pose) return this;
@@ -219,32 +297,44 @@ export class FirstPersonHand {
     this.lossFadeStartOpacity = 0;
     this._setOpacity(targetOpacity);
 
-    const center = finitePoint(pose.center ?? [0.5, 0.5, 0]);
-    const biasY = this.context === "door-defense" ? -0.06 : 0;
-    this.root.position.x = clamp((center[0] - 0.5) * 0.62, -0.31, 0.31);
-    this.root.position.y = clamp((center[1] - 0.5) * 0.42 + biasY, -0.21, 0.21);
-    const scale = clamp(Number.isFinite(pose.relativeScale) ? pose.relativeScale : 1, 0.5, 1.5);
-    this.root.position.z = THREE.MathUtils.lerp(-0.86, -0.42, scale - 0.5);
-
-    const joints = expandMediaPipeJoints(pose);
-    const palmQ = quaternionFromBasis(pose.wrist);
-    for (const joint of joints) {
-      const bone = this.bones[joint.name];
-      if (!bone) continue;
-      bone.position.fromArray(joint.position);
-      const target = new THREE.Quaternion(...joint.quaternion).normalize();
-      if (joint.name === "wrist") target.premultiply(palmQ);
-      const rest = bone.userData.restQuaternion ?? new THREE.Quaternion();
-      bone.quaternion.copy(rest).multiply(target).normalize();
+    const center = finitePoint(pose.center ?? [0.5, 0.58, 0]);
+    const side = requested;
+    const anchor = new THREE.Vector3(side === "left" ? -0.42 : 0.42, -0.42, -0.68);
+    const eligible = typeof pose.reachEligible === "boolean" ? pose.reachEligible : true;
+    const scale = clamp(Number.isFinite(pose.relativeScale) ? pose.relativeScale : 1, 0.6, 1.4);
+    const desired = anchor.clone();
+    if (eligible) {
+      desired.x += clamp((center[0] - 0.5) * 0.28, -0.2, 0.2);
+      desired.y += clamp((0.58 - center[1]) * 0.34, -0.24, 0.24);
+      desired.z += clamp((scale - 1) * 0.18, -0.12, 0.12);
+      const targetPosition = targetToCameraPosition(this.camera, this.targetContact?.point);
+      const reachProgress = Number.isFinite(pose.reachProgress) ? pose.reachProgress : 1;
+      if (targetPosition) desired.lerp(targetPosition, clamp(reachProgress, 0, 1));
     }
-    const curls = Array.isArray(pose.curls) ? pose.curls : [];
-    for (let finger = 0; finger < 5; finger += 1) {
-      const prefix = ["thumb", "index-finger", "middle-finger", "ring-finger", "pinky-finger"][finger];
-      const curl = clamp(curls[finger], 0, 1);
-      for (const segment of ["phalanx-proximal", "phalanx-intermediate", "phalanx-distal"]) {
-        const bone = this.bones[`${prefix}-${segment}`];
-        if (bone) bone.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), curl * Math.PI * 0.42)).normalize();
-      }
+    const joints = expandMediaPipeJoints(pose);
+    const presentationAdapter = this.presentationAdapters[side] ?? null;
+    const mapped = presentationAdapter?.mapJoints(joints, pose) ?? this.adapter?.mapJoints(joints, pose);
+    const palmQ = mapped?.rootQuaternion ?? quaternionFromBasis(pose.wrist);
+    if (!this.poseInitialized) {
+      this.root.position.copy(desired);
+      this.root.quaternion.copy(palmQ);
+      this.poseInitialized = true;
+    } else {
+      this.root.position.lerp(desired, dampAlpha(seconds));
+      this.root.quaternion.slerp(palmQ, dampAlpha(seconds, 0.1));
+    }
+
+    if (presentationAdapter && this.presentationModel) {
+      const modelScale = clamp(mapped?.scale ?? 1, 0.65, 1.35);
+      this.presentationModel.scale.setScalar(modelScale);
+      this.presentationModel.position.copy(presentationAdapter.restHandPosition).multiplyScalar(-modelScale);
+    }
+    const activeBones = presentationAdapter ? this.presentationBones : this.bones;
+    for (const [name, transform] of Object.entries(mapped?.transforms ?? {})) {
+      const bone = activeBones?.[name];
+      if (!bone || !transform) continue;
+      if (transform.position) bone.position.copy(transform.position);
+      if (transform.quaternion) bone.quaternion.copy(transform.quaternion);
     }
     return this;
   }
@@ -255,11 +345,19 @@ export class FirstPersonHand {
   destroy() {
     if (typeof this.camera?.remove === "function") this.camera.remove(this.root);
     for (const model of Object.values(this.models)) disposeResources(model);
+    if (this.presentationModel) disposeResources(this.presentationModel);
     this.root.clear();
     this.models = {};
     this.boneSets = {};
+    this.adapters = {};
+    this.presentationModel = null;
+    this.presentationBones = null;
+    this.presentationAdapters = {};
     this.materialRoots = {};
     this.bones = {};
+    this.adapter = null;
+    this.targetContact = null;
+    this.poseInitialized = false;
     this.camera = null;
     this.loaded = false;
   }
