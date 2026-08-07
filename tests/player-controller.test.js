@@ -119,6 +119,52 @@ describe("player phone view deltas", () => {
     expect(focused[0].focusedAt).toEqual(expect.any(Number));
   });
 
+  it("rejects a direct interactable hit when a static wall is closer", () => {
+    const targetObject = {
+      userData: { interactableId: "faucet" },
+      matrixWorld: new THREE.Matrix4(),
+    };
+    const targetRoot = {
+      visible: true,
+      getWorldPosition: (target) => target.set(0, 0, -1.4),
+    };
+    targetObject.parent = targetRoot;
+    const onTarget = vi.fn();
+    const player = Object.assign(Object.create(PlayerController.prototype), {
+      camera: {
+        position: new THREE.Vector3(0, 0, 0),
+        getWorldDirection: (target) => target.set(0, 0, -1),
+      },
+      raycaster: {
+        setFromCamera: vi.fn(),
+        intersectObjects: vi.fn(() => [{
+          distance: 1.4,
+          object: targetObject,
+          point: new THREE.Vector3(0, 0, -1.4),
+          face: { normal: new THREE.Vector3(0, 0, 1) },
+        }]),
+      },
+      occlusionRaycaster: {
+        set: vi.fn(),
+        intersectObjects: vi.fn(() => [{ distance: 0.6 }]),
+      },
+      staticOccluderRoots: [{ visible: true }],
+      interactables: [{ id: "faucet", label: "faucet", enabled: true, root: targetRoot, halo: { visible: false } }],
+      targetPosition: new THREE.Vector3(),
+      forward: new THREE.Vector3(),
+      selected: null,
+      aimAssist: null,
+      onPrompt: vi.fn(),
+      onTarget,
+    });
+
+    player.updateInteraction();
+
+    expect(player.selected).toBeNull();
+    expect(player.aimAssist).toBeNull();
+    expect(onTarget).not.toHaveBeenCalled();
+  });
+
   it("switches to keyboard fallback without applying a stale phone delta", () => {
     const player = createPlayer();
     player.phoneInput = { seq: 7, viewDelta: { yaw: 40, pitch: 10 }, move: { x: 0, y: 0 }, clutch: false };

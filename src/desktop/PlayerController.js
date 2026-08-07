@@ -339,6 +339,7 @@ export class PlayerController {
         approachDirection: null,
       });
       if (selected && hit.distance > interaction.maxUseDistance) selected = null;
+      if (selected && this.isAnchorOccluded(cloneVector(hit.point), interaction.contactRadius)) selected = null;
       if (selected) {
         contactPoint = cloneVector(hit.point);
         contactNormal = cloneVector(hit.face?.normal);
