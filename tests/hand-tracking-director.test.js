@@ -330,4 +330,24 @@ describe("HandTrackingDirector", () => {
     expect(session.acceptHandFrame(status(2, 0))).toBe(true);
     expect(hand).toHaveBeenCalledTimes(2);
   });
+
+  it("forwards cancellation to a pending hand load without enabling the late hand", async () => {
+    let resolveLoad;
+    const hand = {
+      fallback: false,
+      load: vi.fn(() => new Promise((resolve) => { resolveLoad = resolve; })),
+      setVisible: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const director = new HandTrackingDirector({ hand });
+    const controller = new AbortController();
+    const loading = director.load({ signal: controller.signal });
+
+    controller.abort(new DOMException("retry", "AbortError"));
+    resolveLoad(true);
+
+    await expect(loading).rejects.toMatchObject({ name: "AbortError" });
+    expect(hand.load).toHaveBeenCalledWith({ signal: controller.signal });
+    expect(hand.setVisible).not.toHaveBeenCalled();
+  });
 });

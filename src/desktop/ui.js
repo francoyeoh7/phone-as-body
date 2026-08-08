@@ -1,6 +1,6 @@
-import { createIcons, Keyboard, Mic, Package, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
+import { createIcons, Keyboard, Mic, Package, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
 
-const icons = { Keyboard, Mic, Package, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
+const icons = { Keyboard, Mic, Package, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
 const INVENTORY_WIDTH = 360;
 const INVENTORY_HEIGHT = 72;
 const INVENTORY_SLOT_SIZE = 52;
@@ -56,6 +56,7 @@ export function createDesktopUI(root) {
           <div class="pairing-status" id="pairing-status"><span></span>正在创建安全会话</div>
           <button class="start-button" id="start-button" hidden><i data-lucide="volume-2"></i>进入走廊</button>
           <button class="fallback-button" id="fallback-button"><i data-lucide="keyboard"></i>使用键鼠测试</button>
+          <button class="scene-retry-button" id="scene-retry-button" hidden><i data-lucide="rotate-ccw"></i>重试</button>
         </div>
         <div class="qr-panel">
           <div class="qr-frame">
@@ -85,6 +86,7 @@ export function createDesktopUI(root) {
     pairingStatus: root.querySelector("#pairing-status"),
     startButton: root.querySelector("#start-button"),
     fallbackButton: root.querySelector("#fallback-button"),
+    sceneRetryButton: root.querySelector("#scene-retry-button"),
     connection: root.querySelector(".desktop-connection"),
     objective: root.querySelector("#objective strong"),
     reticle: root.querySelector("#reticle"),
@@ -154,6 +156,11 @@ export function createDesktopUI(root) {
       elements.pairingStatus.innerHTML = connected ? "<span></span>控制器已就绪" : "<span></span>等待手机重新连接";
       elements.startButton.hidden = !connected;
       createIcons({ icons, attrs: { "stroke-width": 1.8 } });
+    },
+    showSceneError(error = null) {
+      elements.pairingStatus.dataset.state = error ? "error" : "idle";
+      if (error?.message) elements.pairingStatus.textContent = error.message;
+      elements.sceneRetryButton.hidden = error?.retryable !== true;
     },
     setObjective(text) {
       elements.objective.textContent = text;

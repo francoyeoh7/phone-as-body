@@ -186,13 +186,20 @@ export class HandTrackingDirector {
     this.hand?.setHolding?.(false);
   }
 
-  async load() {
+  async load({ signal } = {}) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
     try {
-      const loaded = await this.hand?.load?.();
+      const loaded = await this.hand?.load?.({ signal });
+      if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+      if (this.destroyed) {
+        this.hand?.destroy?.();
+        return false;
+      }
       if (loaded === false) this.fallback = true;
       else this.hand?.setVisible?.(true);
       return loaded !== false;
-    } catch {
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
       this.fallback = true;
       return false;
     }

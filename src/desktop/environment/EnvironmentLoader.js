@@ -12,7 +12,7 @@ const ERROR_CODES = new Set([
 const FALLBACK_ORIGIN = "http://localhost/";
 
 export class EnvironmentLoadError extends Error {
-  constructor(code, message, { cause, chunkId, url } = {}) {
+  constructor(code, message, { cause, chunkId, url, status, phase } = {}) {
     if (!ERROR_CODES.has(code)) throw new TypeError(`Unknown environment load error code: ${code}`);
     super(message);
     this.name = "EnvironmentLoadError";
@@ -21,6 +21,8 @@ export class EnvironmentLoadError extends Error {
     if (cause !== undefined) this.cause = cause;
     if (chunkId !== undefined) this.chunkId = chunkId;
     if (url !== undefined) this.url = url;
+    if (status !== undefined) this.status = status;
+    if (phase !== undefined) this.phase = phase;
   }
 }
 
@@ -40,6 +42,12 @@ function absoluteUrl(value, base = globalThis.location?.href ?? FALLBACK_ORIGIN)
   return new URL(value, base).href;
 }
 
+async function digestSha256(buffer) {
+  if (!globalThis.crypto?.subtle?.digest) return null;
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
 async function fetchManifest({ manifestUrl, fetchImpl, signal, validateManifest }) {
   const resolvedUrl = absoluteUrl(manifestUrl);
   let response;
@@ -51,13 +59,14 @@ async function fetchManifest({ manifestUrl, fetchImpl, signal, validateManifest 
     throw new EnvironmentLoadError("manifest-fetch", "Unable to fetch the environment manifest", {
       cause,
       url: resolvedUrl,
+      phase: isAbort(cause, signal) ? "abort" : "request",
     });
   }
   if (!response?.ok) {
     throw new EnvironmentLoadError(
       "manifest-fetch",
       `Environment manifest request failed with status ${response?.status ?? "unknown"}`,
-      { url: resolvedUrl },
+      { url: resolvedUrl, status: response?.status, phase: "response" },
     );
   }
 
@@ -68,6 +77,7 @@ async function fetchManifest({ manifestUrl, fetchImpl, signal, validateManifest 
     throw new EnvironmentLoadError("manifest-invalid", "Environment manifest is not valid JSON", {
       cause,
       url: resolvedUrl,
+      phase: "decode",
     });
   }
 
@@ -80,6 +90,7 @@ async function fetchManifest({ manifestUrl, fetchImpl, signal, validateManifest 
     throw new EnvironmentLoadError("manifest-invalid", "Environment manifest failed validation", {
       cause,
       url: resolvedUrl,
+      phase: "validate",
     });
   }
 }
@@ -212,15 +223,22 @@ async function loadChunk({ chunk, baseUrl, fetchImpl, loader, signal }) {
     response = await fetchImpl(url, { signal });
     throwIfAborted(signal);
     if (!response?.ok) {
-      throw new Error(`request failed with status ${response?.status ?? "unknown"}`);
+      throw new EnvironmentLoadError("chunk-load", `Unable to load environment chunk ${chunk.id}`, {
+        chunkId: chunk.id,
+        url,
+        status: response?.status,
+        phase: "response",
+      });
     }
     buffer = await response.arrayBuffer();
     throwIfAborted(signal);
   } catch (cause) {
+    if (cause instanceof EnvironmentLoadError) throw cause;
     throw new EnvironmentLoadError("chunk-load", `Unable to load environment chunk ${chunk.id}`, {
       cause,
       chunkId: chunk.id,
       url,
+      phase: isAbort(cause, signal) ? "abort" : "request",
     });
   }
 
@@ -228,8 +246,24 @@ async function loadChunk({ chunk, baseUrl, fetchImpl, loader, signal }) {
     throw new EnvironmentLoadError(
       "chunk-invalid",
       `Environment chunk ${chunk.id} has an unexpected byte length`,
-      { chunkId: chunk.id, url },
+      { chunkId: chunk.id, url, phase: "validate" },
     );
+  }
+
+  try {
+    const digest = await digestSha256(buffer);
+    throwIfAborted(signal);
+    if (digest && digest !== chunk.artifact.sha256) {
+      throw new Error("Environment chunk SHA-256 does not match its manifest");
+    }
+  } catch (cause) {
+    const aborted = isAbort(cause, signal);
+    throw new EnvironmentLoadError(aborted ? "chunk-load" : "chunk-invalid", `Environment chunk ${chunk.id} failed integrity validation`, {
+      cause,
+      chunkId: chunk.id,
+      url,
+      phase: aborted ? "abort" : "integrity",
+    });
   }
 
   let gltf;
@@ -250,6 +284,7 @@ async function loadChunk({ chunk, baseUrl, fetchImpl, loader, signal }) {
       cause,
       chunkId: chunk.id,
       url,
+      phase: isAbort(cause, signal) ? "abort" : "decode",
     });
   }
 }

@@ -421,7 +421,8 @@ button {
 }
 
 .start-button,
-.fallback-button {
+.fallback-button,
+.scene-retry-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -436,7 +437,8 @@ button {
 }
 
 .start-button svg,
-.fallback-button svg {
+.fallback-button svg,
+.scene-retry-button svg {
   width: 18px;
 }
 
@@ -445,6 +447,17 @@ button {
   color: #c6c7c0;
   border-color: #3c403b;
   background: transparent;
+}
+
+.scene-retry-button {
+  margin-left: 10px;
+  color: #e4ddd0;
+  border-color: #66564b;
+  background: rgba(35, 29, 25, 0.72);
+}
+
+.pairing-status[data-state="error"] {
+  color: #dfb8a8;
 }
 
 .qr-panel {

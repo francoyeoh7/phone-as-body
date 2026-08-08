@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DesktopApp } from "../src/desktop/DesktopApp.js";
+import { DesktopApp, classifySceneError } from "../src/desktop/DesktopApp.js";
 import { FoundPhoneDirector } from "../src/desktop/FoundPhoneDirector.js";
+import { HandTrackingDirector } from "../src/desktop/HandTrackingDirector.js";
 import { InventoryState } from "../src/desktop/InventoryState.js";
 import { createGameAudio } from "../src/desktop/audio.js";
 import { createDesktopUI } from "../src/desktop/ui.js";
+import { EnvironmentLoadError } from "../src/desktop/environment/EnvironmentLoader.js";
+import { VillageDirector } from "../src/desktop/VillageDirector.js";
 
 const { createSceneMock } = vi.hoisted(() => ({ createSceneMock: vi.fn() }));
 
@@ -14,6 +17,7 @@ vi.mock("lucide", () => ({
   Keyboard: {},
   Mic: {},
   Package: {},
+  RotateCcw: {},
   ScanLine: {},
   Smartphone: {},
   Volume2: {},
@@ -71,6 +75,98 @@ function createRoot() {
     }),
   };
   return { root, elements };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function createSceneStartHarness() {
+  const fakeWindow = createEventTarget();
+  fakeWindow.matchMedia = vi.fn(() => ({ matches: false }));
+  const fakeDocument = createEventTarget();
+  vi.stubGlobal("window", fakeWindow);
+  vi.stubGlobal("document", fakeDocument);
+  vi.stubGlobal("location", { search: "", href: "https://game.test/" });
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 617));
+  vi.stubGlobal("performance", { now: vi.fn(() => 1000) });
+
+  const app = new DesktopApp({});
+  app.ui = {
+    elements: {
+      sceneHost: {},
+      pairingStatus: createElement(),
+      startButton: createElement(),
+      fallbackButton: createElement(),
+      sceneRetryButton: createElement(),
+    },
+    showLoading: vi.fn(),
+    showPairing: vi.fn(),
+    showSceneError: vi.fn(),
+    setPrompt: vi.fn(),
+    setObjective: vi.fn(),
+    setSubtitle: vi.fn(),
+    setVoiceRecording: vi.fn(),
+  };
+  app.audio = {
+    start: vi.fn(),
+    cue: vi.fn(),
+    update: vi.fn(),
+    dispose: vi.fn(),
+  };
+  app.phone = { send: vi.fn(), destroy: vi.fn() };
+  return { app, fakeDocument, fakeWindow };
+}
+
+function createStartableScene() {
+  const body = { translation: vi.fn(() => ({ x: 0, y: 1.05, z: 0 })) };
+  const characterController = {
+    enableAutostep: vi.fn(),
+    enableSnapToGround: vi.fn(),
+    setApplyImpulsesToDynamicBodies: vi.fn(),
+  };
+  const world = {
+    createRigidBody: vi.fn(() => body),
+    createCollider: vi.fn(() => ({})),
+    createCharacterController: vi.fn(() => characterController),
+    removeCharacterController: vi.fn(),
+    removeCollider: vi.fn(),
+    removeRigidBody: vi.fn(),
+  };
+  const bodyDescription = { setTranslation: vi.fn(() => bodyDescription) };
+  const camera = {
+    add: vi.fn(),
+    remove: vi.fn(),
+    position: { x: 0, y: 1.6, z: 0 },
+  };
+  return {
+    RAPIER: {
+      RigidBodyDesc: { kinematicPositionBased: vi.fn(() => bodyDescription) },
+      ColliderDesc: { capsule: vi.fn(() => ({})) },
+    },
+    world,
+    camera,
+    renderer: { domElement: createElement() },
+    interactables: [],
+    staticOccluderRoots: [],
+    spawn: { position: [0, 1.05, 0], yaw: 0 },
+    objects: {
+      environment: { manifest: { lights: [] }, lights: { all: [], byRole: {}, byId: {} } },
+      foundPhone: { enabled: true, setHeld: vi.fn() },
+      heldFuse: null,
+      ceilingLights: [],
+      flashlight: { visible: true },
+      stormLight: { intensity: 0 },
+    },
+    dispose: vi.fn(),
+  };
 }
 
 function createTickHarness({ owner = null } = {}) {
@@ -1143,9 +1239,221 @@ describe("fallback Space hold", () => {
     expect(consoleError).toHaveBeenLastCalledWith(retryError);
     expect(app.started).toBe(false);
   });
+
+  it.each([
+    [
+      new EnvironmentLoadError("manifest-invalid", "private detail"),
+      { code: "manifest-invalid", message: "村庄配置有误。", retryable: true },
+    ],
+    [
+      new EnvironmentLoadError("chunk-load", "private detail", {
+        chunkId: "western-core",
+        status: 404,
+        phase: "response",
+        url: "https://game.test/assets/environment/elderboom-v1/chunks/western-core.glb",
+        cause: new Error("request failed with status 404 at D:\\private\\asset.glb"),
+      }),
+      { code: "chunk-load", message: "村庄资源尚未准备好。", retryable: true },
+    ],
+    [
+      new EnvironmentLoadError("chunk-invalid", "private detail"),
+      { code: "chunk-invalid", message: "村庄资源无法解析。", retryable: true },
+    ],
+  ])("classifies environment startup errors without exposing private details", async (error, expected) => {
+    const { app } = createSceneStartHarness();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    createSceneMock.mockRejectedValueOnce(error);
+
+    await app.startGame(false);
+
+    expect(createSceneMock).toHaveBeenCalledWith(
+      app.ui.elements.sceneHost,
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(app.ui.showSceneError).toHaveBeenLastCalledWith(expected);
+    expect(JSON.stringify(app.ui.showSceneError.mock.calls)).not.toContain("D:\\private");
+    expect(app.started).toBe(false);
+  });
+
+  it("retries a failed scene once, suppresses a double click, and starts the replacement", async () => {
+    const { app } = createSceneStartHarness();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(HandTrackingDirector.prototype, "load").mockResolvedValue(true);
+    const failure = new EnvironmentLoadError("manifest-fetch", "offline");
+    const replacement = deferred();
+    const scene = createStartableScene();
+    createSceneMock.mockRejectedValueOnce(failure).mockReturnValueOnce(replacement.promise);
+    const clearTransient = vi.spyOn(app, "clearTransientInteractionState");
+
+    await app.startGame(false);
+    const firstRetry = app.retrySceneStart();
+    const secondRetry = app.retrySceneStart();
+    replacement.resolve(scene);
+    await Promise.all([firstRetry, secondRetry]);
+
+    expect(createSceneMock).toHaveBeenCalledTimes(2);
+    expect(createSceneMock.mock.calls[0][1].signal).not.toBe(createSceneMock.mock.calls[1][1].signal);
+    expect(app.experience).toBe(scene);
+    expect(app.started).toBe(true);
+    expect(app.ui.showSceneError).toHaveBeenLastCalledWith(null);
+    expect(clearTransient).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+  });
+
+  it("aborts a superseded generation and self-disposes its late scene", async () => {
+    const { app } = createSceneStartHarness();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(HandTrackingDirector.prototype, "load").mockResolvedValue(true);
+    const first = deferred();
+    const second = deferred();
+    const staleScene = { dispose: vi.fn() };
+    const currentScene = createStartableScene();
+    createSceneMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const initialStart = app.startGame(false);
+    const firstSignal = createSceneMock.mock.calls[0][1].signal;
+    const retry = app.retrySceneStart();
+    const duplicateRetry = app.retrySceneStart();
+
+    expect(firstSignal.aborted).toBe(true);
+    expect(createSceneMock).toHaveBeenCalledTimes(2);
+    second.resolve(currentScene);
+    await Promise.all([retry, duplicateRetry]);
+    first.resolve(staleScene);
+    await initialStart;
+
+    expect(staleScene.dispose).toHaveBeenCalledOnce();
+    expect(currentScene.dispose).not.toHaveBeenCalled();
+    expect(app.experience).toBe(currentScene);
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+  });
+
+  it("aborts the owned generation before destroy cleanup and ignores a late rejection", async () => {
+    const { app } = createSceneStartHarness();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pending = deferred();
+    createSceneMock.mockReturnValueOnce(pending.promise);
+
+    const starting = app.startGame(false);
+    const signal = createSceneMock.mock.calls[0][1].signal;
+    app.destroy();
+
+    expect(signal.aborted).toBe(true);
+    pending.reject(new DOMException("stopped", "AbortError"));
+    await expect(starting).resolves.toBeUndefined();
+    expect(app.ui.showSceneError).toHaveBeenCalledExactlyOnceWith(null);
+    expect(app.experience).toBeNull();
+  });
+
+  it("does not dispose a scene twice when destroy interrupts hand setup", async () => {
+    const { app } = createSceneStartHarness();
+    const scene = createStartableScene();
+    const handLoad = deferred();
+    createSceneMock.mockResolvedValueOnce(scene);
+    vi.spyOn(HandTrackingDirector.prototype, "load").mockReturnValueOnce(handLoad.promise);
+
+    const starting = app.startGame(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(app.handTracking).not.toBeNull();
+
+    app.destroy();
+    expect(scene.dispose).toHaveBeenCalledOnce();
+    handLoad.resolve(true);
+    await starting;
+
+    expect(scene.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("desktop village startup", () => {
+  it("constructs the village director and leaves corridor defense inactive for ElderBoom", async () => {
+    const { app } = createSceneStartHarness();
+    const scene = createStartableScene();
+    scene.objects.environment.manifest.id = "elderboom-v1";
+    scene.objects.fuse = { enabled: true, root: { visible: true } };
+    scene.objects.washbasin = { label: "洗手池", toggle: vi.fn(() => true) };
+    createSceneMock.mockResolvedValueOnce(scene);
+    vi.spyOn(HandTrackingDirector.prototype, "load").mockResolvedValue(true);
+
+    await app.startGame(false);
+
+    expect(app.director).toBeInstanceOf(VillageDirector);
+    expect(app.doorDefense).toBeNull();
+    expect(app.shadowQuest).toBeNull();
+    expect(app.handleInteraction("fuse")).toBe(true);
+    expect(app.ui.setObjective).toHaveBeenLastCalledWith(expect.not.stringMatching(/panel|corridor|配电箱|走廊/i));
+  });
+});
+
+describe("scene startup error classification", () => {
+  it.each([
+    ["expected chunk 404", new EnvironmentLoadError("chunk-load", "missing", {
+      status: 404,
+      phase: "response",
+      url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
+      chunkId: "western-core",
+    }), "村庄资源尚未准备好。"],
+    ["chunk 503", new EnvironmentLoadError("chunk-load", "unavailable", {
+      status: 503,
+      phase: "response",
+      url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
+      chunkId: "western-core",
+    }), "村庄资源加载失败。"],
+    ["transport rejection", new EnvironmentLoadError("chunk-load", "offline", {
+      phase: "request",
+      url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
+      chunkId: "western-core",
+    }), "村庄资源加载失败。"],
+    ["invalid length", new EnvironmentLoadError("chunk-invalid", "bad length", {
+      phase: "validate",
+      chunkId: "western-core",
+    }), "村庄资源无法解析。"],
+    ["decode failure", new EnvironmentLoadError("chunk-invalid", "bad GLB", {
+      phase: "decode",
+      chunkId: "western-core",
+    }), "村庄资源无法解析。"],
+  ])("classifies %s without treating it as a missing local asset", (_label, error, message) => {
+    expect(classifySceneError(error)).toMatchObject({
+      code: error.code,
+      message,
+      retryable: true,
+    });
+  });
+
+  it("silences aborted startup work", () => {
+    expect(classifySceneError(new EnvironmentLoadError("chunk-load", "cancelled", {
+      phase: "abort",
+      chunkId: "western-core",
+    }))).toEqual({ code: "aborted", message: null, retryable: false });
+  });
 });
 
 describe("desktop door-defense UI", () => {
+  it("renders one Lucide retry command and presents concise scene errors", () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const retry = elements.get("#scene-retry-button");
+    const status = elements.get("#pairing-status");
+
+    expect(root.innerHTML.match(/id="scene-retry-button"/g)).toHaveLength(1);
+    expect(root.innerHTML).toContain('data-lucide="rotate-ccw"');
+    expect(ui.elements.sceneRetryButton).toBe(retry);
+
+    ui.showSceneError({
+      code: "chunk-load",
+      message: "村庄资源尚未准备好。",
+      retryable: true,
+    });
+    expect(status.dataset.state).toBe("error");
+    expect(status.textContent).toBe("村庄资源尚未准备好。");
+    expect(retry.hidden).toBe(false);
+
+    ui.showSceneError(null);
+    expect(status.dataset.state).toBe("idle");
+    expect(retry.hidden).toBe(true);
+  });
+
   it("renders acquired slots only and owns a bounded relative inventory cursor", () => {
     const { root, elements } = createRoot();
     const ui = createDesktopUI(root);

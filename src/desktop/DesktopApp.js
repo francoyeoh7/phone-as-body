@@ -1,6 +1,7 @@
 import { PhoneSession } from "./PhoneSession.js";
 import { PlayerController } from "./PlayerController.js";
 import { HorrorDirector } from "./HorrorDirector.js";
+import { VillageDirector } from "./VillageDirector.js";
 import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
@@ -8,8 +9,42 @@ import { HandTrackingDirector } from "./HandTrackingDirector.js";
 import { InventoryState } from "./InventoryState.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
+import { EnvironmentLoadError } from "./environment/EnvironmentLoader.js";
 import { createDesktopUI } from "./ui.js";
 import "./styles.css";
+
+function isLocalVillageChunk(error) {
+  if (typeof error?.url !== "string") return false;
+  try {
+    return new URL(error.url, globalThis.location?.href ?? "http://localhost/").pathname
+      .startsWith("/assets/environment/elderboom-v1/chunks/");
+  } catch {
+    return false;
+  }
+}
+
+export function classifySceneError(error) {
+  if (error?.name === "AbortError" || error?.phase === "abort" || error?.cause?.name === "AbortError") {
+    return { code: "aborted", message: null, retryable: false };
+  }
+  const environmentError = error instanceof EnvironmentLoadError;
+  const code = environmentError ? error.code : "scene-start";
+  const messages = {
+    "manifest-fetch": "村庄配置暂时无法载入。",
+    "manifest-invalid": "村庄配置有误。",
+    "chunk-load": error?.status === 404 && error?.phase === "response"
+      && isLocalVillageChunk(error)
+      ? "村庄资源尚未准备好。"
+      : "村庄资源加载失败。",
+    "chunk-invalid": "村庄资源无法解析。",
+    "scene-start": "3D 场景启动失败。",
+  };
+  return {
+    code,
+    message: messages[code] ?? messages["scene-start"],
+    retryable: environmentError ? error.retryable !== false : true,
+  };
+}
 
 export class DesktopApp {
   constructor(root) {
@@ -35,6 +70,10 @@ export class DesktopApp {
     this.fallbackHolding = false;
     this.fallbackKeyDown = false;
     this.destroyed = false;
+    this.sceneStartGeneration = 0;
+    this.sceneStartAttempt = null;
+    this.lastStartFallback = false;
+    this.disposedScenes = new WeakSet();
     this.debugFrames = 0;
     this.debugShadowAutoplay = import.meta.env.DEV && new URLSearchParams(location.search).has("playShadow");
     this.debugShadowTriggered = false;
@@ -43,6 +82,7 @@ export class DesktopApp {
     this.currentTargetEpoch = 0;
     this.handleStartClick = () => this.startGame(false);
     this.handleFallbackClick = () => this.startGame(true);
+    this.handleSceneRetryClick = () => this.retrySceneStart();
     this.handleVisibilityChange = () => {
       if (this.started && document.hidden) this.setPaused(true);
     };
@@ -67,6 +107,7 @@ export class DesktopApp {
 
     this.ui.elements.startButton.addEventListener("click", this.handleStartClick);
     this.ui.elements.fallbackButton.addEventListener("click", this.handleFallbackClick);
+    this.ui.elements.sceneRetryButton.addEventListener("click", this.handleSceneRetryClick);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     window.addEventListener("keydown", this.handleFallbackKeyDown);
     window.addEventListener("keyup", this.handleFallbackKeyUp);
@@ -74,29 +115,100 @@ export class DesktopApp {
     window.addEventListener("pagehide", this.handlePageHide, { once: true });
   }
 
-  async startGame(fallback) {
-    if (this.started || this.destroyed) return;
+  startGame(fallback) {
+    if (this.destroyed) return Promise.resolve();
+    if (this.started) return this.sceneStartAttempt?.promise ?? Promise.resolve();
+    this.lastStartFallback = fallback === true;
+    return this.beginSceneStart(this.lastStartFallback, "start");
+  }
+
+  beginSceneStart(fallback, origin) {
+    const attempt = {
+      generation: this.sceneStartGeneration + 1,
+      controller: new AbortController(),
+      origin,
+      promise: null,
+    };
+    this.sceneStartGeneration = attempt.generation;
+    this.sceneStartAttempt = attempt;
+    attempt.promise = this.runSceneStart(attempt, fallback);
+    return attempt.promise;
+  }
+
+  ownsSceneStart(attempt) {
+    return Boolean(
+      !this.destroyed
+      && this.sceneStartAttempt === attempt
+      && this.sceneStartGeneration === attempt.generation
+      && !attempt.controller.signal.aborted
+    );
+  }
+
+  disposeScene(experience) {
+    if (!experience || typeof experience.dispose !== "function") return;
+    this.disposedScenes ??= new WeakSet();
+    if (this.disposedScenes.has(experience)) return;
+    this.disposedScenes.add(experience);
+    experience.dispose();
+  }
+
+  abortSceneStart(reason = "superseded") {
+    const attempt = this.sceneStartAttempt;
+    if (!attempt) return false;
+    this.sceneStartAttempt = null;
+    this.sceneStartGeneration += 1;
+    attempt.controller.abort(new DOMException(`Scene start ${reason}`, "AbortError"));
+    return true;
+  }
+
+  retrySceneStart() {
+    if (this.destroyed) return Promise.resolve();
+    if (this.sceneStartAttempt?.origin === "retry") return this.sceneStartAttempt.promise;
+    if (this.sceneStartAttempt) {
+      this.abortSceneStart("superseded by retry");
+      try {
+        this.disposeRuntime();
+      } catch (cleanupError) {
+        console.error("Failed to clean up scene startup:", cleanupError);
+      }
+      this.started = false;
+    } else if (this.started) {
+      return Promise.resolve();
+    }
+    return this.beginSceneStart(this.lastStartFallback, "retry");
+  }
+
+  async runSceneStart(attempt, fallback) {
+    let experience = null;
     this.started = true;
     this.fallback = fallback;
     this.audio.start();
+    this.ui.showSceneError?.(null);
     this.ui.showLoading(true);
     this.ui.showPairing(false);
     try {
-      const experience = await createScene(this.ui.elements.sceneHost);
-      if (this.destroyed) {
-        experience.dispose();
+      experience = await createScene(this.ui.elements.sceneHost, {
+        signal: attempt.controller.signal,
+      });
+      if (!this.ownsSceneStart(attempt)) {
+        this.disposeScene(experience);
         return;
       }
       this.experience = experience;
-      this.handTracking = new HandTrackingDirector({
+      const handTracking = new HandTrackingDirector({
         camera: this.experience.camera,
         sendControllerEvent: (event) => this.phone?.send(event),
         onGesture: (event) => this.handleHandGesture(event),
         getEquippedId: () => this.inventory.snapshot().equippedId,
         canPresentEquipment: () => this.canPresentEquipment(),
       });
-      await this.handTracking.load();
-      this.handTracking.hand?.setHeldItem?.(this.experience.objects?.heldFuse ?? null);
+      this.handTracking = handTracking;
+      await handTracking.load({ signal: attempt.controller.signal });
+      if (!this.ownsSceneStart(attempt)) {
+        if (this.experience !== experience) this.disposeScene(experience);
+        return;
+      }
+      handTracking.hand?.setHeldItem?.(this.experience.objects?.heldFuse ?? null);
       this.player = new PlayerController({
         ...this.experience,
         onInteract: (id, details) => this.handleInteraction(id, details),
@@ -105,7 +217,13 @@ export class DesktopApp {
         onTarget: (target) => this.handleTargetFocus(target),
       });
       this.player.setFallback(fallback);
-      this.director = new HorrorDirector({
+      const isVillage = this.experience.objects?.environment?.manifest?.id === "elderboom-v1";
+      this.director = isVillage ? new VillageDirector({
+        experience: this.experience,
+        ui: this.ui,
+        audio: this.audio,
+        inventory: this.inventory,
+      }) : new HorrorDirector({
         experience: this.experience,
         ui: this.ui,
         audio: this.audio,
@@ -118,7 +236,7 @@ export class DesktopApp {
         sendControllerEvent: (event) => this.phone?.send(event),
         handTracking: this.handTracking,
       });
-      this.doorDefense = this.experience.objects?.exitDoor ? new DoorDefenseDirector({
+      this.doorDefense = !isVillage && this.experience.objects?.exitDoor ? new DoorDefenseDirector({
         experience: this.experience,
         player: this.player,
         story: this.director.story,
@@ -132,7 +250,7 @@ export class DesktopApp {
           || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
         ),
       }) : null;
-      this.shadowQuest = this.experience.objects?.shadowQuest ? new ShadowQuestDirector({
+      this.shadowQuest = !isVillage && this.experience.objects?.shadowQuest ? new ShadowQuestDirector({
         experience: this.experience,
         player: this.player,
         ui: this.ui,
@@ -142,9 +260,15 @@ export class DesktopApp {
       this.ui.showLoading(false);
       this.lastFrame = performance.now();
       this.frame = requestAnimationFrame((time) => this.tick(time));
+      if (this.sceneStartAttempt === attempt) this.sceneStartAttempt = null;
     } catch (error) {
-      if (this.destroyed) return;
-      console.error(error);
+      if (!this.ownsSceneStart(attempt)) {
+        if (experience && this.experience !== experience) this.disposeScene(experience);
+        return;
+      }
+      const presentation = classifySceneError(error);
+      if (presentation.code !== "aborted") console.error(error);
+      this.sceneStartAttempt = null;
       try {
         this.disposeRuntime();
       } catch (cleanupError) {
@@ -152,8 +276,8 @@ export class DesktopApp {
       } finally {
         this.started = false;
         this.ui.showLoading(false);
-        this.ui.showPairing(true);
-        this.ui.elements.pairingStatus.innerHTML = "<span></span>3D 场景启动失败，请刷新重试";
+        if (presentation.code !== "aborted") this.ui.showPairing(true);
+        if (presentation.code !== "aborted") this.ui.showSceneError?.(presentation);
       }
     }
   }
@@ -557,7 +681,7 @@ export class DesktopApp {
     runCleanup(() => this.handTracking?.destroy());
     runCleanup(() => this.shadowQuest?.destroy());
     runCleanup(() => this.player?.destroy());
-    runCleanup(() => this.experience?.dispose());
+    runCleanup(() => this.disposeScene(this.experience));
     this.foundPhone = null;
     this.doorDefense = null;
     this.handTracking = null;
@@ -571,6 +695,7 @@ export class DesktopApp {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.abortSceneStart("destroyed");
     const phone = this.phone;
     let cleanupError = null;
     const runCleanup = (cleanup) => {
@@ -583,6 +708,7 @@ export class DesktopApp {
     runCleanup(() => cancelAnimationFrame(this.frame));
     runCleanup(() => this.ui?.elements?.startButton?.removeEventListener("click", this.handleStartClick));
     runCleanup(() => this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick));
+    runCleanup(() => this.ui?.elements?.sceneRetryButton?.removeEventListener("click", this.handleSceneRetryClick));
     runCleanup(() => document.removeEventListener("visibilitychange", this.handleVisibilityChange));
     runCleanup(() => window.removeEventListener("keydown", this.handleFallbackKeyDown));
     runCleanup(() => window.removeEventListener("keyup", this.handleFallbackKeyUp));

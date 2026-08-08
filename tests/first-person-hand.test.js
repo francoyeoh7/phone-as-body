@@ -240,4 +240,27 @@ describe("FirstPersonHand", () => {
     expect(disposeGeometry).toHaveBeenCalledOnce();
     expect(disposeMaterial).toHaveBeenCalledOnce();
   });
+
+  it("disposes a late model when a startup signal is aborted", async () => {
+    let resolveLoad;
+    const source = fakeScene();
+    const mesh = source.root.children.find((child) => child.isMesh);
+    const geometryDispose = vi.spyOn(mesh.geometry, "dispose");
+    const materialDispose = vi.spyOn(mesh.material, "dispose");
+    const hand = new FirstPersonHand({
+      camera: new THREE.Group(),
+      loader: { loadAsync: vi.fn(() => new Promise((resolve) => { resolveLoad = resolve; })) },
+      cloneScene: (scene) => scene,
+    });
+    const controller = new AbortController();
+    const loading = hand.load({ signal: controller.signal });
+
+    controller.abort(new DOMException("destroy", "AbortError"));
+    resolveLoad({ scene: source.root });
+
+    await expect(loading).rejects.toMatchObject({ name: "AbortError" });
+    expect(geometryDispose).toHaveBeenCalledOnce();
+    expect(materialDispose).toHaveBeenCalledOnce();
+    expect(hand.root.parent).toBeNull();
+  });
 });

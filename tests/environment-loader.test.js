@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -30,9 +31,14 @@ const PBR_TEXTURE_SLOTS = [
   "envMap",
 ];
 
-async function manifestFixture(chunkBytes = 4) {
+function hashBytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex").toUpperCase();
+}
+
+async function manifestFixture(chunkBytes = 4, sha256 = "0".repeat(64)) {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   manifest.chunks[0].artifact.bytes = chunkBytes;
+  manifest.chunks[0].artifact.sha256 = sha256;
   return manifest;
 }
 
@@ -92,7 +98,7 @@ function makeFetch(manifest, chunkResponses) {
 describe("EnvironmentLoader", () => {
   it("validates, resolves, prepares, and atomically attaches the village environment", async () => {
     const bytes = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
-    const manifest = await manifestFixture(bytes.byteLength);
+    const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
     const { root: chunkRoot, selected, decorative } = renderRoot();
     const loader = { parseAsync: vi.fn(async () => ({ scene: chunkRoot })) };
     const { fetchImpl, calls } = makeFetch(manifest, [
@@ -149,7 +155,7 @@ describe("EnvironmentLoader", () => {
   });
 
   it("keeps manifest chunk order and reports aggregate progress", async () => {
-    const manifest = await manifestFixture(2);
+    const manifest = await manifestFixture(2, hashBytes(new Uint8Array([1, 1])));
     manifest.chunks.push({
       ...structuredClone(manifest.chunks[0]),
       id: "yard-detail",
@@ -157,6 +163,7 @@ describe("EnvironmentLoader", () => {
       artifact: {
         ...manifest.chunks[0].artifact,
         bytes: 3,
+        sha256: hashBytes(new Uint8Array([2, 2, 2])),
       },
     });
     const first = new Uint8Array([1, 1]);
@@ -232,7 +239,7 @@ describe("EnvironmentLoader", () => {
       "chunk-invalid",
       async () => {
         const bytes = new Uint8Array([1, 2, 3, 4]);
-        const manifest = await manifestFixture(bytes.byteLength);
+        const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
         return {
           ...makeFetch(manifest, [(url) => bufferResponse(bytes, url)]),
           loader: { parseAsync: vi.fn(async () => { throw new Error("bad GLB"); }) },
@@ -256,7 +263,7 @@ describe("EnvironmentLoader", () => {
   });
 
   it("cleans an earlier parsed chunk when a later chunk fails without attaching partial roots", async () => {
-    const manifest = await manifestFixture(2);
+    const manifest = await manifestFixture(2, hashBytes(new Uint8Array([1, 1])));
     manifest.chunks.push({
       ...structuredClone(manifest.chunks[0]),
       id: "broken-core",
@@ -298,7 +305,7 @@ describe("EnvironmentLoader", () => {
 
   it("aborts parse ownership and disposes a chunk that resolves after cancellation", async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
-    const manifest = await manifestFixture(bytes.byteLength);
+    const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
     const root = renderRoot("late-root").root;
     const disposers = [];
     root.traverse((object) => {
@@ -346,7 +353,7 @@ describe("EnvironmentLoader", () => {
 
   it("deduplicates geometry, materials, and every owned PBR texture during idempotent disposal", async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
-    const manifest = await manifestFixture(bytes.byteLength);
+    const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial();
     const geometryDispose = vi.spyOn(geometry, "dispose");
@@ -385,12 +392,39 @@ describe("EnvironmentLoader", () => {
   });
 
   it("exposes the documented error type", () => {
-    const error = new EnvironmentLoadError("chunk-load", "failed", { chunkId: "western-core" });
+    const error = new EnvironmentLoadError("chunk-load", "failed", {
+      chunkId: "western-core", status: 404, phase: "response", url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
+    });
     expect(error).toMatchObject({
       name: "EnvironmentLoadError",
       code: "chunk-load",
       retryable: true,
       chunkId: "western-core",
+      status: 404,
+      phase: "response",
+      url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
     });
+  });
+
+  it("reports an integrity phase when a chunk hash does not match its manifest", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const manifest = await manifestFixture(bytes.byteLength);
+    manifest.chunks[0].artifact.sha256 = "00".repeat(32);
+    const { fetchImpl } = makeFetch(manifest, [(url) => bufferResponse(bytes, url)]);
+    vi.stubGlobal("crypto", { subtle: { digest: vi.fn(async () => new Uint8Array(32).fill(1).buffer) } });
+
+    await expect(loadEnvironment({
+      scene: new THREE.Scene(),
+      manifestUrl: "https://game.test/manifest.json",
+      fetchImpl,
+      loader: { parseAsync: vi.fn() },
+    })).rejects.toMatchObject({
+      name: "EnvironmentLoadError",
+      code: "chunk-invalid",
+      phase: "integrity",
+      chunkId: "western-core",
+    });
+
+    vi.unstubAllGlobals();
   });
 });

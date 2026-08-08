@@ -165,7 +165,7 @@ function discoverBones(root) {
 
 function discoverArmBones(root) {
   const bones = {};
-  root.traverse?.((object) => {
+  root?.traverse?.((object) => {
     if (object.isBone || object.type === "Bone") bones[object.name] = object;
   });
   for (const suffix of ["L", "R"]) {
@@ -174,6 +174,49 @@ function discoverArmBones(root) {
     }
   }
   return bones;
+}
+
+function abortError(signal) {
+  return signal?.reason ?? new DOMException("The operation was aborted", "AbortError");
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+function loadWithSignal(loadOne, url, signal) {
+  if (!signal) return loadOne(url);
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve(loadOne(url)).then(
+      (gltf) => {
+        signal.removeEventListener("abort", onAbort);
+        if (settled || signal.aborted) {
+          disposeResources(gltf?.scene ?? gltf?.scenes?.[0]);
+          if (!settled) {
+            settled = true;
+            reject(abortError(signal));
+          }
+          return;
+        }
+        settled = true;
+        resolve(gltf);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        if (settled) return;
+        settled = true;
+        reject(error);
+      },
+    );
+  });
 }
 
 export function retainSkinnedSide(root, side = "left") {
@@ -252,11 +295,12 @@ export class FirstPersonHand {
     this.holding = false;
   }
 
-  async load() {
+  async load({ signal } = {}) {
     if (this.loaded) return true;
     try {
       const loadOne = (url) => this.loader.loadAsync ? this.loader.loadAsync(url) : new Promise((resolve, reject) => this.loader.load(url, resolve, undefined, reject));
-      const left = await loadOne("/assets/hands/left.glb");
+      const left = await loadWithSignal(loadOne, "/assets/hands/left.glb", signal);
+      throwIfAborted(signal);
       const leftScene = this.cloneScene(left.scene ?? left.scenes?.[0]);
       this.models.left = leftScene;
       this.boneSets.left = discoverBones(leftScene);
@@ -266,7 +310,8 @@ export class FirstPersonHand {
       leftScene.visible = false;
       this.root.add(leftScene);
       try {
-        const gltf = await loadOne("/assets/hands/psx-arms.glb");
+        const gltf = await loadWithSignal(loadOne, "/assets/hands/psx-arms.glb", signal);
+        throwIfAborted(signal);
         const scene = retainSkinnedSide(this.cloneScene(gltf.scene ?? gltf.scenes?.[0]), "left");
         const bones = discoverArmBones(scene);
         this.presentationModel = scene;
@@ -287,6 +332,10 @@ export class FirstPersonHand {
       this._activateModel();
       return true;
     } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") {
+        this.destroy();
+        throw error;
+      }
       this.fallback = true;
       this.loaded = false;
       this.root.visible = false;
