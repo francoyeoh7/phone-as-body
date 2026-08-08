@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Matrix4, Quaternion, Vector3 } from "three";
+import { validateEnvironmentManifest } from "../src/desktop/environment/manifest.js";
 import { ELDERBOOM_V1_CONFIG, assertExpectedSourceHash } from "./environment/elderboom-v1.config.mjs";
 import { collectDocumentReferences, nodeWorldBounds, walkNodeWorldTransforms } from "./environment/glb-graph.mjs";
 import { readGlbDocument } from "./environment/glb-io.mjs";
@@ -497,6 +498,18 @@ function assertPerformanceGates(metrics, artifact) {
   if (failures.length > 0) throw new Error(`Village subset performance gates failed: ${failures.join(", ")}`);
 }
 
+async function updateManifestArtifact(artifact) {
+  const manifestPath = path.resolve(ELDERBOOM_V1_CONFIG.outputs.manifest);
+  const source = JSON.parse(await readFile(manifestPath, "utf8"));
+  const chunk = source.chunks?.find((entry) => entry.id === "western-core");
+  if (!chunk) throw new Error("Village manifest is missing the western-core chunk");
+  chunk.artifact = { bytes: artifact.bytes, sha256: artifact.sha256 };
+  const manifest = validateEnvironmentManifest(source);
+  const temporaryPath = `${manifestPath}.tmp-${process.pid}`;
+  await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await rename(temporaryPath, manifestPath);
+}
+
 async function buildVillage({ sourcePath = ELDERBOOM_V1_CONFIG.source.defaultPath } = {}) {
   const inspection = await inspectVillageSource({ sourcePath });
   const document = await readGlbDocument(sourcePath);
@@ -508,6 +521,7 @@ async function buildVillage({ sourcePath = ELDERBOOM_V1_CONFIG.source.defaultPat
   const report = { version: 1, generatedAt: new Date().toISOString(), inspection, artifact, metrics: subset.metrics };
   await mkdir(path.dirname(ELDERBOOM_V1_CONFIG.outputs.report), { recursive: true });
   await writeFile(ELDERBOOM_V1_CONFIG.outputs.report, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await updateManifestArtifact(artifact);
   return report;
 }
 

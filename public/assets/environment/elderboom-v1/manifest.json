@@ -1,0 +1,735 @@
+{
+  "id": "elderboom-v1",
+  "version": 1,
+  "coordinateSpace": "game",
+  "chunks": [
+    {
+      "id": "western-core",
+      "url": "/assets/environment/elderboom-v1/chunks/western-core.glb",
+      "required": true,
+      "artifact": {
+        "bytes": 489871748,
+        "sha256": "5B6A985DBA7DCE78E51A30B59CD8CC21D677D1EFB0A68D38FBFF806982C886AC"
+      },
+      "bounds": {
+        "min": [
+          -17.5,
+          -3,
+          -18
+        ],
+        "max": [
+          17.5,
+          29,
+          18
+        ]
+      },
+      "castShadowNamePrefixes": [
+        "SM_Building",
+        "SM_House",
+        "SM_Roof",
+        "SM_Tree"
+      ]
+    }
+  ],
+  "rootTransform": {
+    "position": [
+      -7.5,
+      -1,
+      -30
+    ],
+    "rotation": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "scale": [
+      1,
+      1,
+      1
+    ]
+  },
+  "spawn": {
+    "position": [
+      6.5,
+      1.05,
+      -2
+    ],
+    "yaw": 3.141592653589793
+  },
+  "playableBounds": {
+    "min": [
+      -17.5,
+      -0.2,
+      -18
+    ],
+    "max": [
+      17.5,
+      8,
+      18
+    ]
+  },
+  "atmosphere": {
+    "background": "#05080c",
+    "fog": {
+      "color": "#090d11",
+      "near": 14,
+      "far": 72
+    }
+  },
+  "colliders": [
+    {
+      "id": "bound-west",
+      "shape": "box",
+      "position": [
+        -17.9,
+        2,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.4,
+        2.5,
+        18.4
+      ]
+    },
+    {
+      "id": "bound-east",
+      "shape": "box",
+      "position": [
+        17.9,
+        2,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.4,
+        2.5,
+        18.4
+      ]
+    },
+    {
+      "id": "bound-north",
+      "shape": "box",
+      "position": [
+        0,
+        2,
+        -18.4
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        18.4,
+        2.5,
+        0.4
+      ]
+    },
+    {
+      "id": "bound-south",
+      "shape": "box",
+      "position": [
+        0,
+        2,
+        18.4
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        18.4,
+        2.5,
+        0.4
+      ]
+    },
+    {
+      "id": "primary-back",
+      "shape": "box",
+      "position": [
+        10.3,
+        2,
+        -13.8
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        5.3,
+        2,
+        0.2
+      ]
+    },
+    {
+      "id": "primary-west",
+      "shape": "box",
+      "position": [
+        5.2,
+        2,
+        -11.85
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.2,
+        2,
+        2.15
+      ]
+    },
+    {
+      "id": "primary-east",
+      "shape": "box",
+      "position": [
+        15.4,
+        2,
+        -11.85
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.2,
+        2,
+        2.15
+      ]
+    },
+    {
+      "id": "primary-front-left",
+      "shape": "box",
+      "position": [
+        7.9,
+        2,
+        -9.9
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        2.9,
+        2,
+        0.2
+      ]
+    },
+    {
+      "id": "primary-front-right",
+      "shape": "box",
+      "position": [
+        13.9,
+        2,
+        -9.9
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        1.7,
+        2,
+        0.2
+      ]
+    },
+    {
+      "id": "secondary-north-left",
+      "shape": "box",
+      "position": [
+        0.2,
+        2,
+        4.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        1.4,
+        2,
+        0.2
+      ]
+    },
+    {
+      "id": "secondary-north-right",
+      "shape": "box",
+      "position": [
+        3.65,
+        2,
+        4.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.85,
+        2,
+        0.2
+      ]
+    },
+    {
+      "id": "secondary-west",
+      "shape": "box",
+      "position": [
+        -1,
+        2,
+        9.75
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.2,
+        2,
+        5.55
+      ]
+    },
+    {
+      "id": "secondary-east",
+      "shape": "box",
+      "position": [
+        4.3,
+        2,
+        10.4
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.2,
+        2,
+        5.1
+      ]
+    },
+    {
+      "id": "secondary-south-left",
+      "shape": "box",
+      "position": [
+        -1,
+        2,
+        15.3
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        0.2,
+        2,
+        0.2
+      ]
+    },
+    {
+      "id": "secondary-south-right",
+      "shape": "box",
+      "position": [
+        2.6,
+        2,
+        15.3
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "halfExtents": [
+        1.9,
+        2,
+        0.2
+      ]
+    }
+  ],
+  "occluders": [
+    {
+      "id": "occlude-primary-back",
+      "colliderId": "primary-back"
+    },
+    {
+      "id": "occlude-primary-west",
+      "colliderId": "primary-west"
+    },
+    {
+      "id": "occlude-primary-east",
+      "colliderId": "primary-east"
+    },
+    {
+      "id": "occlude-primary-front-left",
+      "colliderId": "primary-front-left"
+    },
+    {
+      "id": "occlude-primary-front-right",
+      "colliderId": "primary-front-right"
+    },
+    {
+      "id": "occlude-secondary-north-left",
+      "colliderId": "secondary-north-left"
+    },
+    {
+      "id": "occlude-secondary-north-right",
+      "colliderId": "secondary-north-right"
+    },
+    {
+      "id": "occlude-secondary-west",
+      "colliderId": "secondary-west"
+    },
+    {
+      "id": "occlude-secondary-east",
+      "colliderId": "secondary-east"
+    },
+    {
+      "id": "occlude-secondary-south-left",
+      "colliderId": "secondary-south-left"
+    },
+    {
+      "id": "occlude-secondary-south-right",
+      "colliderId": "secondary-south-right"
+    }
+  ],
+  "lights": [
+    {
+      "id": "night-hemi",
+      "role": "moon",
+      "type": "hemisphere",
+      "intensity": 0.32,
+      "skyColor": "#60788f",
+      "groundColor": "#101417"
+    },
+    {
+      "id": "moon-key",
+      "role": "moon",
+      "type": "directional",
+      "intensity": 0.5,
+      "color": "#9bb7d1",
+      "position": [
+        -10,
+        22,
+        8
+      ],
+      "target": [
+        3,
+        0,
+        0
+      ],
+      "castShadow": true
+    },
+    {
+      "id": "storm-flash",
+      "role": "storm",
+      "type": "directional",
+      "intensity": 0,
+      "color": "#b8d9e7",
+      "position": [
+        -8,
+        15,
+        -10
+      ],
+      "target": [
+        2,
+        0,
+        2
+      ],
+      "castShadow": false
+    },
+    {
+      "id": "power-yard",
+      "role": "power-sequence",
+      "type": "point",
+      "intensity": 0,
+      "color": "#c7d6bf",
+      "position": [
+        1.2,
+        3.2,
+        12.8
+      ],
+      "distance": 15,
+      "decay": 2,
+      "castShadow": false
+    },
+    {
+      "id": "power-crossing",
+      "role": "power-sequence",
+      "type": "point",
+      "intensity": 0,
+      "color": "#c7d6bf",
+      "position": [
+        2.7,
+        3.1,
+        3.2
+      ],
+      "distance": 14,
+      "decay": 2,
+      "castShadow": false
+    },
+    {
+      "id": "power-house",
+      "role": "power-sequence",
+      "type": "point",
+      "intensity": 0,
+      "color": "#d2d8bd",
+      "position": [
+        10.8,
+        3,
+        -8.6
+      ],
+      "distance": 14,
+      "decay": 2,
+      "castShadow": false
+    },
+    {
+      "id": "emergency-panel",
+      "role": "emergency",
+      "type": "point",
+      "intensity": 0.48,
+      "color": "#9f3029",
+      "position": [
+        -0.1,
+        1.7,
+        14.9
+      ],
+      "distance": 5.5,
+      "decay": 2,
+      "castShadow": false
+    },
+    {
+      "id": "emergency-exit",
+      "role": "emergency",
+      "type": "point",
+      "intensity": 0.48,
+      "color": "#a83c30",
+      "position": [
+        11.52,
+        2.4,
+        -8.8
+      ],
+      "distance": 6,
+      "decay": 2,
+      "castShadow": false
+    },
+    {
+      "id": "practical-porch",
+      "role": "practical",
+      "type": "point",
+      "intensity": 0.34,
+      "color": "#e0b478",
+      "position": [
+        8.2,
+        2.6,
+        -8.5
+      ],
+      "distance": 8,
+      "decay": 2,
+      "castShadow": false
+    },
+    {
+      "id": "practical-yard",
+      "role": "practical",
+      "type": "point",
+      "intensity": 0.28,
+      "color": "#c98a58",
+      "position": [
+        -4.2,
+        1.1,
+        1.5
+      ],
+      "distance": 7,
+      "decay": 2,
+      "castShadow": false
+    }
+  ],
+  "tasks": {
+    "exit-door": {
+      "position": [
+        11.52,
+        0,
+        -9.92
+      ],
+      "rotationY": 0,
+      "triggerPosition": [
+        11.52,
+        1.35,
+        -8.4
+      ],
+      "inwardNormal": [
+        0,
+        0,
+        1
+      ]
+    },
+    "found-phone": {
+      "position": [
+        7.7,
+        0.08,
+        -0.3
+      ],
+      "rotationY": -0.35,
+      "contactNormal": [
+        0,
+        1,
+        0
+      ],
+      "approachDirection": null,
+      "maxUseDistance": 2.35
+    },
+    "fuse": {
+      "position": [
+        2,
+        0.18,
+        2
+      ],
+      "rotationY": -0.22,
+      "contactNormal": [
+        0,
+        1,
+        0
+      ],
+      "approachDirection": null,
+      "maxUseDistance": 2.35
+    },
+    "panel": {
+      "position": [
+        -0.1,
+        1.1,
+        15.4
+      ],
+      "rotationY": 1.5707963267948966,
+      "contactNormal": [
+        1,
+        0,
+        0
+      ],
+      "approachDirection": [
+        -1,
+        0,
+        0
+      ],
+      "maxUseDistance": 2.35
+    },
+    "shadow-window": {
+      "position": [
+        4.4,
+        1.25,
+        4
+      ],
+      "rotationY": 0,
+      "contactNormal": [
+        0,
+        0,
+        -1
+      ],
+      "approachDirection": [
+        0,
+        0,
+        1
+      ],
+      "maxUseDistance": 2.35
+    },
+    "washbasin": {
+      "position": [
+        5.7,
+        0.08,
+        -8.8
+      ],
+      "rotationY": 0,
+      "contactNormal": [
+        0,
+        0,
+        1
+      ],
+      "approachDirection": [
+        0,
+        0,
+        -1
+      ],
+      "maxUseDistance": 2.35
+    }
+  },
+  "story": {
+    "firstReveal": [
+      8.2,
+      0,
+      5.4
+    ],
+    "pursuitSpawn": [
+      -6.8,
+      0,
+      9.2
+    ],
+    "pursuitTargetOffset": [
+      1.8,
+      0,
+      -0.9
+    ]
+  },
+  "shadow": {
+    "peekPosition": [
+      3.1,
+      1.72,
+      2.7
+    ],
+    "peekTarget": [
+      4.8,
+      1.35,
+      6.2
+    ],
+    "figureStart": [
+      7.2,
+      0,
+      7.4
+    ],
+    "figureTravel": [
+      -3.15,
+      0,
+      1.88
+    ],
+    "doorStart": [
+      4.18,
+      0,
+      8.1
+    ],
+    "doorTravel": [
+      -0.58,
+      0,
+      0.64
+    ]
+  }
+}

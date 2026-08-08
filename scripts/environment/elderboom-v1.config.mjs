@@ -29,6 +29,7 @@ export const ELDERBOOM_V1_CONFIG = deepFreeze({
   outputs: {
     directory: "public/assets/environment/elderboom-v1/chunks",
     report: "public/assets/environment/elderboom-v1/build-report.json",
+    manifest: "public/assets/environment/elderboom-v1/manifest.json",
   },
 });
 
