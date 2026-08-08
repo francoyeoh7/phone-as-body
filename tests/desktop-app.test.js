@@ -556,6 +556,22 @@ describe("desktop director routing", () => {
     expect(doorDefense.acquire).toHaveBeenCalledOnce();
   });
 
+  it("forwards a normalized crouch input to the player", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 14));
+    const { app } = createTickHarness();
+    app.phone.currentInput.mockReturnValue({
+      seq: 1,
+      move: { x: 0, y: 0 },
+      viewDelta: { yaw: 0, pitch: 0 },
+      clutch: false,
+      crouch: undefined,
+    });
+
+    app.tick(16);
+
+    expect(app.player.setControllerInput).toHaveBeenCalledWith(expect.objectContaining({ crouch: false }), true);
+  });
+
   it("aborts both new scenes and the shadow quest on peer disconnect", () => {
     const app = Object.assign(Object.create(DesktopApp.prototype), {
       started: true,

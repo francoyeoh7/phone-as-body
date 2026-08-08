@@ -15,6 +15,49 @@ function createPlayer() {
   });
 }
 
+function createCrouchPlayer({ phoneConnected = true, fallback = false } = {}) {
+  const translation = { x: 0, y: 1.05, z: 1.2 };
+  return Object.assign(Object.create(PlayerController.prototype), {
+    paused: false,
+    cinematic: false,
+    fallback,
+    phoneConnected,
+    crouching: false,
+    crouchAmount: 0,
+    movementSpeed: 3.25,
+    phoneInput: {
+      seq: -1,
+      viewDelta: { yaw: 0, pitch: 0 },
+      move: { x: 0, y: 0 },
+      clutch: false,
+      crouch: false,
+    },
+    keys: new Set(),
+    velocity: { x: 0, z: 0 },
+    cameraYaw: 0,
+    cameraPitch: 0,
+    cameraRenderYaw: 0,
+    cameraRenderPitch: 0,
+    lastViewSequence: -1,
+    settings: { sensitivity: 1, smoothing: 0.18, invertY: false },
+    pitchOverflow: 0,
+    aimAssist: null,
+    camera: { position: new THREE.Vector3(), rotation: {} },
+    body: {
+      translation: () => ({ ...translation }),
+      setTranslation: vi.fn((next) => Object.assign(translation, next)),
+      setNextKinematicTranslation: vi.fn((next) => Object.assign(translation, next)),
+    },
+    collider: {},
+    characterController: {
+      computeColliderMovement: vi.fn(),
+      computedMovement: () => ({ x: 0, y: 0, z: 0 }),
+    },
+    updateCameraPresentation: vi.fn(),
+    updateInteraction: vi.fn(),
+  });
+}
+
 describe("player phone view deltas", () => {
   it("preserves the interaction source for scene-specific input rules", () => {
     const onInteract = vi.fn();
@@ -294,5 +337,91 @@ describe("player phone view deltas", () => {
 
     expect(fast.cameraRenderYaw).toBeCloseTo(slow.cameraRenderYaw, 8);
     expect(fast.cameraRenderPitch).toBeCloseTo(slow.cameraRenderPitch, 8);
+  });
+});
+
+describe("player crouch presentation", () => {
+  it.each([30, 60, 120])("approaches the crouched pose monotonically at %ifps", (fps) => {
+    const player = createCrouchPlayer();
+    player.setCrouching(true);
+    let previous = player.crouchAmount;
+
+    for (let index = 0; index < fps; index += 1) {
+      player.update(1 / fps);
+      expect(player.crouchAmount).toBeGreaterThanOrEqual(previous);
+      previous = player.crouchAmount;
+    }
+    player.syncAfterPhysics();
+
+    expect(player.crouchAmount).toBeGreaterThan(0.98);
+    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(0.20, 2);
+  });
+
+  it("interpolates eye height and speed, then recovers after release", () => {
+    const player = createCrouchPlayer();
+    player.setCrouching(true);
+    for (let index = 0; index < 60; index += 1) player.update(1 / 60);
+    player.syncAfterPhysics();
+
+    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(0.20, 2);
+    expect(Math.hypot(player.velocity.x, player.velocity.z)).toBeCloseTo(0, 6);
+    expect(player.movementSpeed).toBeCloseTo(2.0, 2);
+
+    player.setCrouching(false);
+    for (let index = 0; index < 60; index += 1) player.update(1 / 60);
+    player.syncAfterPhysics();
+
+    expect(player.crouchAmount).toBeLessThan(0.02);
+    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(0.55, 2);
+    expect(player.movementSpeed).toBeCloseTo(3.25, 2);
+  });
+
+  it("uses fresh phone crouch input and Control/C fallback keys", () => {
+    const phonePlayer = createCrouchPlayer();
+    phonePlayer.setControllerInput({
+      seq: 1,
+      viewDelta: { yaw: 0, pitch: 0 },
+      move: { x: 0, y: 0 },
+      clutch: false,
+      crouch: true,
+    }, true);
+    phonePlayer.update(1 / 60);
+    expect(phonePlayer.crouchAmount).toBeGreaterThan(0);
+
+    const fallbackPlayer = createCrouchPlayer({ phoneConnected: false, fallback: true });
+    fallbackPlayer.keys.add("ControlLeft");
+    fallbackPlayer.update(1 / 60);
+    expect(fallbackPlayer.crouchAmount).toBeGreaterThan(0);
+    fallbackPlayer.keys.delete("ControlLeft");
+    fallbackPlayer.keys.add("KeyC");
+    fallbackPlayer.update(1 / 60);
+    expect(fallbackPlayer.crouchAmount).toBeGreaterThan(0);
+  });
+
+  it("resets crouch when paused, disconnected, or entering a cinematic", () => {
+    const player = createCrouchPlayer();
+    player.setCrouching(true);
+    player.setPaused(true);
+    expect(player.crouchAmount).toBe(0);
+
+    player.setCrouching(true);
+    player.setControllerInput(null, false);
+    expect(player.crouchAmount).toBe(0);
+
+    player.setCrouching(true);
+    player.beginCinematic();
+    expect(player.crouchAmount).toBe(0);
+  });
+
+  it("snapshots and restores crouch presentation", () => {
+    const player = createCrouchPlayer();
+    player.setCrouching(true);
+    for (let index = 0; index < 60; index += 1) player.update(1 / 60);
+    const pose = player.snapshotPose();
+    player.setCrouching(false);
+    player.restorePose(pose);
+
+    expect(pose.crouchAmount).toBeGreaterThan(0.98);
+    expect(player.crouchAmount).toBeCloseTo(pose.crouchAmount, 8);
   });
 });

@@ -47,6 +47,9 @@ export class PlayerController {
       clutch: false,
     };
     this.phoneConnected = false;
+    this.crouching = false;
+    this.crouchAmount = 0;
+    this.movementSpeed = 3.25;
     this.velocity = { x: 0, z: 0 };
     this.cameraYaw = 0;
     this.cameraPitch = 0;
@@ -95,6 +98,16 @@ export class PlayerController {
     if (active) this.recenter();
   }
 
+  setCrouching(active) {
+    this.crouching = active === true;
+  }
+
+  resetCrouch() {
+    this.crouching = false;
+    this.crouchAmount = 0;
+    this.movementSpeed = 3.25;
+  }
+
   setControllerInput(input, connected) {
     this.phoneInput = input ?? {
       seq: -1,
@@ -103,7 +116,12 @@ export class PlayerController {
       clutch: false,
     };
     this.phoneConnected = connected;
-    if (!connected) this.recenter();
+    if (!connected) {
+      this.recenter();
+      this.resetCrouch();
+    } else if (!this.fallback) {
+      this.setCrouching(this.phoneInput.crouch === true);
+    }
   }
 
   setSettings(settings = {}) {
@@ -169,6 +187,13 @@ export class PlayerController {
     this.applyAimAssist(delta);
   }
 
+  updateCrouchPresentation(delta) {
+    const alpha = 1 - Math.exp(-delta / 0.12);
+    const target = this.crouching ? 1 : 0;
+    this.crouchAmount += (target - this.crouchAmount) * alpha;
+    this.movementSpeed = 3.25 + (2.0 - 3.25) * this.crouchAmount;
+  }
+
   setAimAssist(target, strength = 0.22) {
     if (!target?.isVector3) return;
     this.aimAssist = {
@@ -210,11 +235,15 @@ export class PlayerController {
     }
 
     if (this.phoneConnected && !this.fallback) this.applyPhoneViewDelta();
+    if (!this.phoneConnected || this.fallback) {
+      this.setCrouching(this.keys.has("ControlLeft") || this.keys.has("ControlRight") || this.keys.has("KeyC"));
+    }
+    this.updateCrouchPresentation(delta);
     this.updateCameraPresentation(delta);
 
     const move = this.phoneConnected && !this.fallback ? this.phoneInput.move : this.keyboardVector();
     const target = cameraRelativeMovement(move, this.cameraRenderYaw);
-    this.velocity = dampVector(this.velocity, { x: target.x * 3.25, z: target.z * 3.25 }, 18, delta);
+    this.velocity = dampVector(this.velocity, { x: target.x * this.movementSpeed, z: target.z * this.movementSpeed }, 18, delta);
     this.characterController.computeColliderMovement(this.collider, {
       x: this.velocity.x * delta,
       y: 0,
@@ -235,7 +264,7 @@ export class PlayerController {
   syncAfterPhysics() {
     if (this.cinematic) return;
     const translation = this.body.translation();
-    this.camera.position.set(translation.x, translation.y + 0.55, translation.z);
+    this.camera.position.set(translation.x, translation.y + 0.55 - 0.35 * this.crouchAmount, translation.z);
   }
 
   snapshotPose() {
@@ -247,11 +276,14 @@ export class PlayerController {
       cameraPitch: this.cameraPitch,
       cameraRenderYaw: this.cameraRenderYaw,
       cameraRenderPitch: this.cameraRenderPitch,
+      crouching: this.crouching,
+      crouchAmount: this.crouchAmount,
     };
   }
 
   beginCinematic() {
     this.cinematic = true;
+    this.resetCrouch();
     this.velocity = { x: 0, z: 0 };
     this.clearAimAssist();
     const hadTarget = Boolean(this.selected);
@@ -287,6 +319,9 @@ export class PlayerController {
     this.cameraPitch = pose.cameraPitch;
     this.cameraRenderYaw = pose.cameraRenderYaw;
     this.cameraRenderPitch = pose.cameraRenderPitch;
+    this.crouching = pose.crouching === true;
+    this.crouchAmount = Math.max(0, Math.min(1, Number(pose.crouchAmount) || 0));
+    this.movementSpeed = 3.25 + (2.0 - 3.25) * this.crouchAmount;
     this.camera.rotation.order = "YXZ";
     this.camera.rotation.y = this.cameraRenderYaw;
     this.camera.rotation.x = this.cameraRenderPitch;
@@ -429,11 +464,14 @@ export class PlayerController {
 
   setPaused(paused) {
     this.paused = paused;
-    if (paused) this.recenter();
+    if (paused) {
+      this.recenter();
+      this.resetCrouch();
+    }
   }
 
   handleKeyDown(event) {
-    if (["KeyW", "KeyA", "KeyS", "KeyD"].includes(event.code)) this.keys.add(event.code);
+    if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyC", "ControlLeft", "ControlRight"].includes(event.code)) this.keys.add(event.code);
     if (event.repeat) return;
     if (event.code === "KeyE") this.interact("keyboard");
     if (event.code === "KeyF") this.onAction?.("flashlight");

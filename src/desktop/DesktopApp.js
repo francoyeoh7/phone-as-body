@@ -393,7 +393,7 @@ export class DesktopApp {
         viewDelta: { yaw: 0, pitch: 0 },
         clutch: false,
         crouch: false,
-      } : phoneInput;
+      } : { ...phoneInput, crouch: phoneInput.crouch === true };
       this.player.setControllerInput(gameplayInput, this.phone.connected);
       this.player.update(delta);
       this.handTracking?.update(delta);
