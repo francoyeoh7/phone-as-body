@@ -29,8 +29,8 @@ const DEFAULT_GATES = Object.freeze({
   minArtifactBytes: 1,
   maxArtifactBytes: 128 * 1024 * 1024,
   maxTextureTexels: 120_000_000,
-  maxColorDimension: 1024,
-  maxDataDimension: 512,
+  maxColorDimension: 512,
+  maxDataDimension: 256,
 });
 
 function invariant(condition, message) {

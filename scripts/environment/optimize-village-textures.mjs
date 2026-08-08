@@ -138,7 +138,7 @@ export async function inspectRuntimeTextures(document) {
   return { images: document.json.images?.length ?? 0, texels, colorTexels, dataTexels, maxColorDimension, maxDataDimension, mimeTypes: [...mimeTypes].sort() };
 }
 
-export async function optimizeVillageTextures({ inputPath, outputPath, colorMax = 1024, dataMax = 512, quality = 82 } = {}) {
+export async function optimizeVillageTextures({ inputPath, outputPath, colorMax = 512, dataMax = 256, quality = 82 } = {}) {
   const document = await readGlbDocument(inputPath);
   document.path = inputPath;
   const input = await open(inputPath, "r");

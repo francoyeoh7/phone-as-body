@@ -496,8 +496,8 @@ function assertPerformanceGates(metrics, artifact, textureMetrics = {}) {
   const maxBytes = 128 * 1024 * 1024;
   if (artifact.bytes > maxBytes) failures.push(`artifact bytes ${artifact.bytes} > ${maxBytes}`);
   if ((textureMetrics.texels ?? 0) > 120_000_000) failures.push(`texture texels ${textureMetrics.texels} > 120000000`);
-  if ((textureMetrics.maxColorDimension ?? 0) > 1024) failures.push(`color texture dimension ${textureMetrics.maxColorDimension} > 1024`);
-  if ((textureMetrics.maxDataDimension ?? 0) > 512) failures.push(`data texture dimension ${textureMetrics.maxDataDimension} > 512`);
+  if ((textureMetrics.maxColorDimension ?? 0) > 512) failures.push(`color texture dimension ${textureMetrics.maxColorDimension} > 512`);
+  if ((textureMetrics.maxDataDimension ?? 0) > 256) failures.push(`data texture dimension ${textureMetrics.maxDataDimension} > 256`);
   if (failures.length > 0) throw new Error(`Village subset performance gates failed: ${failures.join(", ")}`);
 }
 
