@@ -568,60 +568,80 @@ export class DesktopApp {
     const delta = Math.min(0.05, Math.max(0.001, (time - this.lastFrame) / 1000));
     this.debugFrames += 1;
     this.lastFrame = time;
-    if (!this.paused) {
-      this.elapsed += delta;
-      const phoneInput = this.phone.currentInput();
-      const gameplayInput = this.inventoryOpen ? {
-        ...phoneInput,
-        move: { x: 0, y: 0 },
-        viewDelta: { yaw: 0, pitch: 0 },
-        clutch: false,
-        crouch: false,
-      } : { ...phoneInput, crouch: phoneInput.crouch === true };
-      this.player.setControllerInput(gameplayInput, this.phone.connected);
-      this.player.update(delta);
-      this.handTracking?.update(delta);
-      this.sendControlFeedback(phoneInput);
-      this.experience.world.timestep = delta;
-      this.experience.world.step();
-      this.player.syncAfterPhysics();
-      this.experience.update(delta, this.elapsed);
-      this.foundPhone?.update(delta);
-      const doorWasCinematic = this.doorDefense?.isCinematic?.() === true;
-      if (!this.inventoryOpen) this.doorDefense?.update(delta);
-      if (!doorWasCinematic && this.doorDefense?.isCinematic?.()) {
-        this.clearTransientInteractionState("cinematic:door-defense");
+    try {
+      if (!this.paused) {
+        this.elapsed += delta;
+        const phoneInput = this.phone.currentInput();
+        const gameplayInput = this.inventoryOpen ? {
+          ...phoneInput,
+          move: { x: 0, y: 0 },
+          viewDelta: { yaw: 0, pitch: 0 },
+          clutch: false,
+          crouch: false,
+        } : { ...phoneInput, crouch: phoneInput.crouch === true };
+        this.player.setControllerInput(gameplayInput, this.phone.connected);
+        this.player.update(delta);
+        this.handTracking?.update(delta);
+        this.sendControlFeedback(phoneInput);
+        this.experience.world.timestep = delta;
+        this.experience.world.step();
+        this.player.syncAfterPhysics();
+        this.experience.update(delta, this.elapsed);
+        this.foundPhone?.update(delta);
+        const doorWasCinematic = this.doorDefense?.isCinematic?.() === true;
+        if (!this.inventoryOpen) this.doorDefense?.update(delta);
+        if (!doorWasCinematic && this.doorDefense?.isCinematic?.()) {
+          this.clearTransientInteractionState("cinematic:door-defense");
+        }
+        this.shadowQuest?.update(delta, this.elapsed);
+        if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
+          this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");
+        }
+        const cinematicOwned = this.doorDefense?.isCinematic()
+          || this.foundPhone?.isInspecting()
+          || this.shadowQuest?.isCinematic();
+        if (!cinematicOwned) this.director?.update(delta, this.elapsed);
+        this.audio.update(delta, Math.hypot(this.player.velocity.x, this.player.velocity.z));
+        if (import.meta.env.DEV) {
+          const position = this.player.body.translation();
+          this.experience.renderer.domElement.dataset.debugState = JSON.stringify({
+            x: Number(position.x.toFixed(2)),
+            y: Number(position.y.toFixed(2)),
+            z: Number(position.z.toFixed(2)),
+            yaw: Number((this.player.cameraYaw / (Math.PI / 180)).toFixed(1)),
+            pitch: Number((this.player.cameraPitch / (Math.PI / 180)).toFixed(1)),
+            selected: this.player.selected?.id ?? null,
+            objective: this.director?.story?.current?.() ?? null,
+            shadowQuest: this.shadowQuest?.complete ? "complete" : this.shadowQuest?.isCinematic() ? "cinematic" : this.shadowQuest?.isAvailable() ? "available" : "hidden",
+            delta: Number(delta.toFixed(4)),
+            vx: Number(this.player.velocity.x.toFixed(2)),
+            vz: Number(this.player.velocity.z.toFixed(2)),
+            frames: this.debugFrames,
+          });
+        }
       }
-      this.shadowQuest?.update(delta, this.elapsed);
-      if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
-        this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");
-      }
-      const cinematicOwned = this.doorDefense?.isCinematic()
-        || this.foundPhone?.isInspecting()
-        || this.shadowQuest?.isCinematic();
-      if (!cinematicOwned) this.director?.update(delta, this.elapsed);
-      this.audio.update(delta, Math.hypot(this.player.velocity.x, this.player.velocity.z));
-      if (import.meta.env.DEV) {
-        const position = this.player.body.translation();
-        this.experience.renderer.domElement.dataset.debugState = JSON.stringify({
-          x: Number(position.x.toFixed(2)),
-          y: Number(position.y.toFixed(2)),
-          z: Number(position.z.toFixed(2)),
-          yaw: Number((this.player.cameraYaw / (Math.PI / 180)).toFixed(1)),
-          pitch: Number((this.player.cameraPitch / (Math.PI / 180)).toFixed(1)),
-          selected: this.player.selected?.id ?? null,
-          objective: this.director?.story.current() ?? null,
-          shadowQuest: this.shadowQuest?.complete ? "complete" : this.shadowQuest?.isCinematic() ? "cinematic" : this.shadowQuest?.isAvailable() ? "available" : "hidden",
-          delta: Number(delta.toFixed(4)),
-          vx: Number(this.player.velocity.x.toFixed(2)),
-          vz: Number(this.player.velocity.z.toFixed(2)),
-          frames: this.debugFrames,
-        });
-      }
+    } catch (error) {
+      this.reportRuntimeFailure(error);
     }
-    this.experience.renderer.render(this.experience.scene, this.experience.camera);
-    this.sampleDebugPixels();
+    try {
+      this.experience.renderer.render(this.experience.scene, this.experience.camera);
+      this.sampleDebugPixels();
+    } catch (error) {
+      this.reportRuntimeFailure(error);
+    }
     this.frame = requestAnimationFrame((nextTime) => this.tick(nextTime));
+  }
+
+  reportRuntimeFailure(error) {
+    const message = String(error?.message ?? error ?? "Unknown runtime error");
+    if (this.lastRuntimeFailure === message) return;
+    this.lastRuntimeFailure = message;
+    console.error("Desktop runtime failure:", error);
+    fetch("/api/runtime-diagnostic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, stack: error?.stack ?? null }),
+    }).catch(() => {});
   }
 
   sampleDebugPixels() {

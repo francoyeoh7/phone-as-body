@@ -18,6 +18,7 @@ const port = Number(process.env.PORT) || 4174;
 const publicControllerOrigin = process.env.PUBLIC_CONTROLLER_ORIGIN || null;
 const publicControllerHost = publicControllerOrigin ? new URL(publicControllerOrigin).hostname : null;
 const ueBridge = createUeBridge();
+let latestRuntimeDiagnostic = null;
 
 app.use(express.json({ limit: "64kb" }));
 
@@ -35,6 +36,17 @@ app.post("/api/ue-bridge/input", (request, response) => {
 
 app.post("/api/ue-bridge/action", (request, response) => {
   response.json({ ok: ueBridge.sendAction(request.body) });
+});
+
+app.get("/api/runtime-diagnostic", (_request, response) => {
+  response.json(latestRuntimeDiagnostic ?? { ok: true, diagnostic: null });
+});
+
+app.post("/api/runtime-diagnostic", (request, response) => {
+  const message = typeof request.body?.message === "string" ? request.body.message.slice(0, 500) : "Unknown runtime error";
+  const stack = typeof request.body?.stack === "string" ? request.body.stack.slice(0, 4_000) : null;
+  latestRuntimeDiagnostic = { ok: false, message, stack, at: Date.now() };
+  response.status(204).end();
 });
 
 io.on("connection", (socket) => {
