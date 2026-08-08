@@ -91,7 +91,7 @@ export async function withSyntheticGlb(run, options = {}) {
   const file = path.join(directory, "fixture.glb");
   try {
     await writeFile(file, createGlb(options.json, options.bin));
-    return await run({ file, json: options.json ?? syntheticDocument() });
+    return await run({ directory, file, json: options.json ?? syntheticDocument() });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -93,6 +93,9 @@ export function collectDocumentReferences(json, nodeIndices = new Set()) {
     if (firstVisit) {
       addIndex(references.meshes, node.mesh);
       addIndex(references.lights, node.extensions?.KHR_lights_punctual?.light);
+      for (const accessor of Object.values(node.extensions?.EXT_mesh_gpu_instancing?.attributes ?? {})) {
+        addIndex(references.accessors, accessor);
+      }
     }
     if (!includeDescendants || descended.has(index)) return;
     descended.add(index);
@@ -150,6 +153,9 @@ export function assertClosedDocument(json) {
     for (const child of node.children ?? []) assertIndex(`node ${index} child`, child, json.nodes, false);
     const light = node.extensions?.KHR_lights_punctual?.light;
     assertIndex(`node ${index} light`, light, json.extensions?.KHR_lights_punctual?.lights);
+    for (const accessor of Object.values(node.extensions?.EXT_mesh_gpu_instancing?.attributes ?? {})) {
+      assertIndex(`node ${index} instance attribute`, accessor, json.accessors, false);
+    }
   }
   for (const [meshIndex, mesh] of (json.meshes ?? []).entries()) {
     for (const primitive of mesh.primitives ?? []) {

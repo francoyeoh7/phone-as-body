@@ -21,12 +21,10 @@ export const ELDERBOOM_V1_CONFIG = deepFreeze({
   foliage: {
     seed: "elderboom-v1",
     denseNamePatterns: [
-      /^FoliageInstancedStaticMeshComponent_5:/,
-      /^FoliageInstancedStaticMeshComponent_6:/,
-      /^FoliageInstancedStaticMeshComponent_7:/,
+      /^FoliageInstancedStaticMeshComponent_\d+:/,
     ],
     cellSize: 4,
-    maxInstancesPerMeshPerCell: 18,
+    maxInstancesPerMeshPerCell: 8,
   },
   outputs: {
     directory: "public/assets/environment/elderboom-v1/chunks",

@@ -5,3 +5,5 @@ dist/
 .DS_Store
 .env
 *.log
+public/assets/environment/elderboom-v1/chunks/*.glb
+public/assets/environment/elderboom-v1/build-report.json
