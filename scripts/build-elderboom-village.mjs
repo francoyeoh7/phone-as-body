@@ -8,6 +8,7 @@ import { validateEnvironmentManifest } from "../src/desktop/environment/manifest
 import { ELDERBOOM_V1_CONFIG, assertExpectedSourceHash } from "./environment/elderboom-v1.config.mjs";
 import { collectDocumentReferences, nodeWorldBounds, walkNodeWorldTransforms } from "./environment/glb-graph.mjs";
 import { readGlbDocument } from "./environment/glb-io.mjs";
+import { optimizeVillageTextures } from "./environment/optimize-village-textures.mjs";
 
 const JSON_CHUNK = 0x4e4f534a;
 const BIN_CHUNK = 0x004e4942;
@@ -486,15 +487,17 @@ export async function inspectVillageSource({ sourcePath = ELDERBOOM_V1_CONFIG.so
   };
 }
 
-function assertPerformanceGates(metrics, artifact) {
+function assertPerformanceGates(metrics, artifact, textureMetrics = {}) {
   const failures = [];
   if (metrics.renderNodes >= 900) failures.push(`render nodes ${metrics.renderNodes} >= 900`);
   if (metrics.drawCalls >= 450) failures.push(`draw calls ${metrics.drawCalls} >= 450`);
   if (metrics.expandedTriangles >= 9_000_000) failures.push(`expanded triangles ${metrics.expandedTriangles} >= 9000000`);
   if (metrics.images > 260) failures.push(`images ${metrics.images} > 260`);
-  const minBytes = 250 * 1024 * 1024;
-  const maxBytes = 550 * 1024 * 1024;
-  if (artifact.bytes < minBytes || artifact.bytes > maxBytes) failures.push(`artifact bytes ${artifact.bytes} outside ${minBytes}..${maxBytes}`);
+  const maxBytes = 128 * 1024 * 1024;
+  if (artifact.bytes > maxBytes) failures.push(`artifact bytes ${artifact.bytes} > ${maxBytes}`);
+  if ((textureMetrics.texels ?? 0) > 120_000_000) failures.push(`texture texels ${textureMetrics.texels} > 120000000`);
+  if ((textureMetrics.maxColorDimension ?? 0) > 1024) failures.push(`color texture dimension ${textureMetrics.maxColorDimension} > 1024`);
+  if ((textureMetrics.maxDataDimension ?? 0) > 512) failures.push(`data texture dimension ${textureMetrics.maxDataDimension} > 512`);
   if (failures.length > 0) throw new Error(`Village subset performance gates failed: ${failures.join(", ")}`);
 }
 
@@ -516,9 +519,17 @@ async function buildVillage({ sourcePath = ELDERBOOM_V1_CONFIG.source.defaultPat
   const selection = selectSpatialNodes(document.json, ELDERBOOM_V1_CONFIG);
   const subset = buildSubsetDocument(document, selection);
   const outputPath = path.resolve(ELDERBOOM_V1_CONFIG.outputs.directory, "western-core.glb");
-  const artifact = await writeGlbStream(sourcePath, outputPath, subset);
-  assertPerformanceGates(subset.metrics, artifact);
-  const report = { version: 1, generatedAt: new Date().toISOString(), inspection, artifact, metrics: subset.metrics };
+  const rawPath = `${outputPath}.raw-${process.pid}.glb`;
+  await writeGlbStream(sourcePath, rawPath, subset);
+  const textureMetrics = await optimizeVillageTextures({ inputPath: rawPath, outputPath });
+  await rm(rawPath, { force: true });
+  const artifact = {
+    path: outputPath,
+    bytes: textureMetrics.bytes,
+    sha256: await sha256File(outputPath),
+  };
+  assertPerformanceGates(subset.metrics, artifact, textureMetrics);
+  const report = { version: 1, generatedAt: new Date().toISOString(), inspection, artifact, metrics: { ...subset.metrics, ...textureMetrics } };
   await mkdir(path.dirname(ELDERBOOM_V1_CONFIG.outputs.report), { recursive: true });
   await writeFile(ELDERBOOM_V1_CONFIG.outputs.report, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await updateManifestArtifact(artifact);
