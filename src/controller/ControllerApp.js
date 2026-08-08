@@ -323,8 +323,7 @@ export class ControllerApp {
       this.foundPhoneUI?.setActive(false);
     }
     if (state !== "joined") {
-      this.inventoryOrb?.cancel();
-      this.voiceHold?.cancel({ discard: true });
+      this.cancelTransientControls(`connection:${state}`);
       this.cameraMotion?.setMode({ mode: "pulse", context: null, baseline: "fresh" });
       this.cameraMotion?.setFocused(false);
     }
@@ -452,15 +451,7 @@ export class ControllerApp {
       return;
     }
     if (state === "reorienting") {
-      this.cancelPointerOwnership();
-      this.clearCrouch();
-      this.viewEngaged = false;
-      this.viewDelta = zeroViewDelta();
-      this.socket?.clearPendingViewDelta?.();
-      this.joystick?.reset();
-      this.sendInput({ includeViewDelta: true, immediate: true });
-      this.diagnostics?.updateEngagement(false);
-      if (this.playSurface) this.playSurface.dataset.clutch = "off";
+      this.cancelTransientControls("motion:reorienting");
     }
     if (!messages[state]) return;
     this.permissionPanel.hidden = false;
@@ -469,6 +460,7 @@ export class ControllerApp {
   }
 
   handleCameraState(state) {
+    if (state === "capture-error") this.cancelTransientControls("camera:capture-error");
     if (state === "denied" && this.motionEnabled && !this.requiresContinue) {
       this.permissionCopy.textContent = "后置摄像头不可用，仍可使用短触操作继续探索。";
     }
@@ -499,14 +491,7 @@ export class ControllerApp {
     this.lifecycleGeneration += 1;
     this.foreground = false;
     this.hapticsActive = false;
-    this.cancelPointerOwnership();
-    this.move = { x: 0, y: 0 };
-    this.clearCrouch();
-    this.viewDelta = zeroViewDelta();
-    this.viewEngaged = false;
-    this.socket?.clearPendingViewDelta?.();
-    this.joystick?.reset();
-    this.sendInput({ includeViewDelta: true, immediate: true });
+    this.cancelTransientControls("background");
     this.motion?.suspend();
     this.cameraMotion?.suspend();
     this.handTracker?.suspend?.();
@@ -595,6 +580,26 @@ export class ControllerApp {
     this.pointerOwners?.cancelAll?.();
   }
 
+  cancelTransientControls(reason = "unspecified") {
+    this.lastTransientCancelReason = reason;
+    this.cancelPointerOwnership();
+    this.move = { x: 0, y: 0 };
+    this.clearCrouch();
+    this.viewDelta = zeroViewDelta();
+    this.viewEngaged = false;
+    this.socket?.clearPendingViewDelta?.();
+    this.motion?.disengage?.();
+    this.joystick?.reset?.();
+    this.diagnostics?.updateEngagement?.(false);
+    if (this.playSurface) this.playSurface.dataset.clutch = "off";
+    window.clearTimeout(this.calibrationTimer);
+    window.clearTimeout(this.braceFallbackTimer);
+    this.calibrationTimer = null;
+    this.braceFallbackTimer = null;
+    this.playSurface?.classList?.remove?.("brace-impact");
+    this.sendInput({ includeViewDelta: true, immediate: true });
+  }
+
   canOpenInventory() {
     return Boolean(
       (this.motionEnabled || this.preview)
@@ -676,7 +681,7 @@ export class ControllerApp {
       crouch: Boolean(this.crouching) && !this.usesDoorFallbackHold(),
     };
     if (includeViewDelta) input.viewDelta = this.viewDelta;
-    this.socket?.setInput(input, { immediate });
+    this.socket?.setInput?.(input, { immediate });
   }
 
   isLifecycleCurrent(generation) {
@@ -691,14 +696,7 @@ export class ControllerApp {
     if (paused) {
       this.lifecycleGeneration += 1;
       this.hapticsActive = false;
-      this.cancelPointerOwnership();
-      this.move = { x: 0, y: 0 };
-      this.clearCrouch();
-      this.viewDelta = zeroViewDelta();
-      this.viewEngaged = false;
-      this.socket?.clearPendingViewDelta?.();
-      this.joystick?.reset();
-      this.sendInput();
+      this.cancelTransientControls("pause");
       this.motion?.suspend();
       this.cameraMotion?.suspend();
       this.handTracker?.suspend?.();
@@ -815,16 +813,13 @@ export class ControllerApp {
   }
 
   destroy() {
+    if (this.destroyed) return;
     this.lifecycleGeneration += 1;
     this.destroyed = true;
     this.hapticsActive = false;
-    this.cancelPointerOwnership();
-    this.clearCrouch({ immediate: true });
+    this.cancelTransientControls("destroy");
     this.haptics?.stop();
     this.foundPhoneUI?.setActive(false);
-    window.clearTimeout(this.calibrationTimer);
-    window.clearTimeout(this.braceFallbackTimer);
-    this.playSurface?.classList?.remove("brace-impact");
     for (const [type, handler] of Object.entries(this.voicePointerHandlers ?? {})) {
       this.voiceRegion?.removeEventListener?.(type, handler);
     }

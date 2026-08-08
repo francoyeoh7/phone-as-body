@@ -251,6 +251,27 @@ export class DesktopApp {
     return true;
   }
 
+  clearTransientInteractionState(reason = "unspecified") {
+    this.lastTransientClearReason = reason;
+    let cleanupError = null;
+    const runCleanup = (cleanup) => {
+      try {
+        cleanup();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+    runCleanup(() => this.ui?.setVoiceRecording?.(false));
+    runCleanup(() => {
+      if (!this.closeInventory()) this.inventory?.setHovered?.(null);
+    });
+    runCleanup(() => this.player?.resetCrouch?.());
+    runCleanup(() => this.handTracking?.suppressEquipment?.());
+    runCleanup(() => this.releaseFallbackHold());
+    if (cleanupError) throw cleanupError;
+    return true;
+  }
+
   applyDebugStart() {
     if (!import.meta.env.DEV || !new URLSearchParams(location.search).has("shadow")) return;
     const translation = { x: 0, y: 1.05, z: -14.4 };
@@ -271,8 +292,14 @@ export class DesktopApp {
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
-    if (this.foundPhone?.handleInteraction(id, details)) return true;
-    if (this.shadowQuest?.handleInteraction(id)) return true;
+    if (this.foundPhone?.handleInteraction(id, details)) {
+      if (this.foundPhone.isInspecting?.()) this.clearTransientInteractionState("cinematic:found-phone");
+      return true;
+    }
+    if (this.shadowQuest?.handleInteraction(id)) {
+      if (this.shadowQuest.isCinematic?.()) this.clearTransientInteractionState("cinematic:shadow-quest");
+      return true;
+    }
     return this.director?.handleInteraction(id, details) ?? false;
   }
 
@@ -353,10 +380,8 @@ export class DesktopApp {
       }
     };
     runDisconnectStep(() => this.ui.setConnected(false));
-    runDisconnectStep(() => this.ui.setVoiceRecording?.(false));
-    runDisconnectStep(() => this.closeInventory());
+    runDisconnectStep(() => this.clearTransientInteractionState("peer-disconnect"));
     if (this.started) {
-      runDisconnectStep(() => this.releaseFallbackHold());
       runDisconnectStep(() => this.foundPhone?.release?.());
       runDisconnectStep(() => this.doorDefense?.abort?.());
       runDisconnectStep(() => this.shadowQuest?.abort?.());
@@ -381,10 +406,8 @@ export class DesktopApp {
       }
     };
     if (paused) {
-      runPauseStep(() => this.ui.setVoiceRecording?.(false));
-      runPauseStep(() => this.closeInventory());
+      runPauseStep(() => this.clearTransientInteractionState("pause"));
       runPauseStep(() => this.handTracking?.setPaused(true));
-      runPauseStep(() => this.releaseFallbackHold());
       runPauseStep(() => this.foundPhone?.release?.());
       runPauseStep(() => this.doorDefense?.abort?.());
       runPauseStep(() => this.shadowQuest?.abort?.());
@@ -420,7 +443,11 @@ export class DesktopApp {
       this.player.syncAfterPhysics();
       this.experience.update(delta, this.elapsed);
       this.foundPhone?.update(delta);
+      const doorWasCinematic = this.doorDefense?.isCinematic?.() === true;
       if (!this.inventoryOpen) this.doorDefense?.update(delta);
+      if (!doorWasCinematic && this.doorDefense?.isCinematic?.()) {
+        this.clearTransientInteractionState("cinematic:door-defense");
+      }
       this.shadowQuest?.update(delta, this.elapsed);
       if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
         this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");
@@ -524,6 +551,7 @@ export class DesktopApp {
         cleanupError ??= error;
       }
     };
+    runCleanup(() => this.clearTransientInteractionState("runtime-dispose"));
     runCleanup(() => this.foundPhone?.destroy());
     runCleanup(() => this.doorDefense?.destroy());
     runCleanup(() => this.handTracking?.destroy());
@@ -553,8 +581,6 @@ export class DesktopApp {
       }
     };
     runCleanup(() => cancelAnimationFrame(this.frame));
-    runCleanup(() => this.releaseFallbackHold());
-    runCleanup(() => this.closeInventory());
     runCleanup(() => this.ui?.elements?.startButton?.removeEventListener("click", this.handleStartClick));
     runCleanup(() => this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick));
     runCleanup(() => document.removeEventListener("visibilitychange", this.handleVisibilityChange));

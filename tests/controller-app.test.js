@@ -89,6 +89,62 @@ describe("controller app lifecycle", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("cancels every transient control and pending timer through one path", () => {
+    vi.useFakeTimers();
+    const { app } = createApp();
+    const delayedCalibration = vi.fn();
+    const delayedBrace = vi.fn();
+    app.crouching = true;
+    app.viewEngaged = true;
+    app.gameplayClaimGeneration = 4;
+    app.calibrationTimer = window.setTimeout(delayedCalibration, 50);
+    app.braceFallbackTimer = window.setTimeout(delayedBrace, 50);
+    app.playSurface.classList = { remove: vi.fn() };
+
+    app.cancelTransientControls("test");
+    vi.advanceTimersByTime(100);
+
+    expect(app.inventoryOrb.cancel).toHaveBeenCalledOnce();
+    expect(app.voiceHold.cancel).toHaveBeenCalledExactlyOnceWith({ discard: true });
+    expect(app.pointerOwners.cancelAll).toHaveBeenCalledOnce();
+    expect(app.move).toEqual({ x: 0, y: 0 });
+    expect(app.crouching).toBe(false);
+    expect(app.viewEngaged).toBe(false);
+    expect(app.viewDelta).toEqual({ yaw: 0, pitch: 0 });
+    expect(app.gameplayClaimGeneration).toBeNull();
+    expect(app.joystick.reset).toHaveBeenCalledOnce();
+    expect(app.motion.disengage).toHaveBeenCalledOnce();
+    expect(app.socket.clearPendingViewDelta).toHaveBeenCalledOnce();
+    expect(app.sendInput).toHaveBeenCalledWith({ includeViewDelta: true, immediate: true });
+    expect(delayedCalibration).not.toHaveBeenCalled();
+    expect(delayedBrace).not.toHaveBeenCalled();
+    expect(app.calibrationTimer).toBeNull();
+    expect(app.braceFallbackTimer).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it.each(["disconnected", "replaced", "session-ended"])("routes %s through transient cleanup", (state) => {
+    const { app } = createApp();
+    app.cancelTransientControls = vi.fn();
+
+    app.updateConnection(state);
+
+    expect(app.cancelTransientControls).toHaveBeenCalledExactlyOnceWith(`connection:${state}`);
+  });
+
+  it("routes reorientation and camera capture loss through transient cleanup", () => {
+    const { app } = createApp();
+    app.cancelTransientControls = vi.fn();
+
+    app.handleMotionState("reorienting");
+    app.handleCameraState("capture-error");
+
+    expect(app.cancelTransientControls.mock.calls).toEqual([
+      ["motion:reorienting"],
+      ["camera:capture-error"],
+    ]);
+  });
+
   it("suspends motion on manual pause and recalibrates sensors on resume", async () => {
     const { app, motion, cameraMotion, actions } = createApp();
 

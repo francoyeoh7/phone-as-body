@@ -317,6 +317,34 @@ describe("desktop inventory routing", () => {
     expect(ui.closeInventory).toHaveBeenCalledTimes(2);
   });
 
+  it("clears transient presentation without dropping acquired or equipped ownership", () => {
+    const { app, inventory, ui } = createInventoryApp();
+    inventory.equip("spare-fuse");
+    inventory.setHovered("spare-fuse");
+    app.inventoryOpen = true;
+    app.fallbackHolding = true;
+    app.fallbackKeyDown = true;
+    app.player = { resetCrouch: vi.fn() };
+    app.handTracking = { suppressEquipment: vi.fn() };
+    app.releaseFallbackHold = vi.fn(() => {
+      app.fallbackHolding = false;
+      app.fallbackKeyDown = false;
+    });
+
+    app.clearTransientInteractionState("test");
+
+    expect(ui.setVoiceRecording).toHaveBeenCalledExactlyOnceWith(false);
+    expect(ui.closeInventory).toHaveBeenCalledOnce();
+    expect(app.player.resetCrouch).toHaveBeenCalledOnce();
+    expect(app.handTracking.suppressEquipment).toHaveBeenCalledOnce();
+    expect(app.releaseFallbackHold).toHaveBeenCalledOnce();
+    expect(inventory.snapshot()).toMatchObject({
+      items: [{ id: "spare-fuse", enabled: true }],
+      equippedId: "spare-fuse",
+      hoveredId: null,
+    });
+  });
+
   it("neutralizes stale RTC gameplay input while the ordered inventory modal is open", () => {
     vi.stubGlobal("requestAnimationFrame", vi.fn(() => 12));
     const { app } = createTickHarness();
@@ -575,6 +603,19 @@ describe("desktop director routing", () => {
 
     expect(doorDefense.update).toHaveBeenCalledExactlyOnceWith(0.016);
     expect(doorDefense.acquire).toHaveBeenCalledOnce();
+  });
+
+  it("clears transient presentation when proximity starts the door cinematic", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 14));
+    const { app, doorDefense } = createTickHarness();
+    let cinematic = false;
+    doorDefense.isCinematic.mockImplementation(() => cinematic);
+    doorDefense.update.mockImplementation(() => { cinematic = true; });
+    app.clearTransientInteractionState = vi.fn();
+
+    app.tick(16);
+
+    expect(app.clearTransientInteractionState).toHaveBeenCalledExactlyOnceWith("cinematic:door-defense");
   });
 
   it("forwards a normalized crouch input to the player", () => {
