@@ -2,10 +2,11 @@ import * as THREE from "three";
 import { createObjectiveState } from "../shared/objectives.js";
 
 export class HorrorDirector {
-  constructor({ experience, ui, audio }) {
+  constructor({ experience, ui, audio, inventory = null }) {
     this.experience = experience;
     this.ui = ui;
     this.audio = audio;
+    this.inventory = inventory;
     this.story = createObjectiveState();
     this.elapsed = 0;
     this.silhouetteArmed = false;
@@ -32,10 +33,10 @@ export class HorrorDirector {
     if (!this.settings.subtitles) this.ui.setSubtitle(null, false);
   }
 
-  handleInteraction(id) {
+  handleInteraction(id, details = {}) {
     if (id === "washbasin") return this.toggleWashbasin();
     if (id === "fuse") return this.collectFuse();
-    if (id === "panel") return this.restorePower();
+    if (id === "panel") return this.restorePower(details);
     return false;
   }
 
@@ -60,6 +61,7 @@ export class HorrorDirector {
     this.ui.setObjective(this.story.label());
     this.showSubtitle("保险丝还是温的。", 2.2);
     this.audio.cue("pickup");
+    this.inventory?.acquire?.("spare-fuse");
     this.silhouetteArmed = true;
     silhouette.position.set(
       this.experience.camera.position.x + 0.4,
@@ -69,13 +71,22 @@ export class HorrorDirector {
     return true;
   }
 
-  restorePower() {
+  restorePower(details = {}) {
+    const inventorySnapshot = this.inventory?.snapshot?.();
+    const hasFuse = inventorySnapshot?.items?.some((item) => item.id === "spare-fuse") === true;
+    const handAuthorized = details?.source !== "hand" || inventorySnapshot?.equippedId === "spare-fuse";
+    if (this.inventory && (!hasFuse || !handAuthorized)) {
+      this.audio.cue("locked");
+      this.showSubtitle(hasFuse ? "先从背包装备保险丝。" : "配电箱里少了一个保险丝。", 2.1);
+      return false;
+    }
     const transition = this.story.dispatch("panel-used");
     if (!transition.accepted) {
       this.audio.cue("locked");
       this.showSubtitle(this.story.current() === "find-fuse" ? "配电箱里少了一个保险丝。" : "电源已经恢复。", 2.1);
       return false;
     }
+    this.inventory?.consume?.("spare-fuse");
     const { panel, ceilingLights } = this.experience.objects;
     panel.lamp.material.color.setHex(0x7da468);
     panel.lamp.material.emissive.setHex(0x577e46);

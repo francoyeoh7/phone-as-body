@@ -220,6 +220,12 @@ export class FirstPersonHand {
     this.root = new THREE.Group();
     this.root.name = "first-person-hand";
     this.root.visible = false;
+    this.heldGrip = new THREE.Group();
+    this.heldGrip.name = "left-palm-grip";
+    this.heldGrip.position.set(0.025, -0.035, -0.12);
+    this.heldGrip.rotation.set(Math.PI / 2, 0, -0.18);
+    this.palmGrip = this.heldGrip;
+    this.root.add(this.heldGrip);
     if (typeof this.camera?.add === "function") this.camera.add(this.root);
     this.models = {};
     this.boneSets = {};
@@ -242,6 +248,8 @@ export class FirstPersonHand {
     this.fallbackPose = "open";
     this.targetContact = null;
     this.poseInitialized = false;
+    this.heldItem = null;
+    this.holding = false;
   }
 
   async load() {
@@ -297,6 +305,8 @@ export class FirstPersonHand {
     this.handedness = "left";
     this.bones = this.boneSets.left;
     this.adapter = this.adapters.left ?? null;
+    const palm = this.presentationBones?.handL ?? this.bones.wrist;
+    palm?.add?.(this.heldGrip);
     this._setOpacity(this.opacity);
   }
 
@@ -304,6 +314,35 @@ export class FirstPersonHand {
     this.opacity = clamp(value, 0, 1);
     for (const model of Object.values(this.materialRoots)) setMaterialOpacity(model, this.opacity);
     this.root.visible = this.active && this.loaded && this.opacity > 0.001;
+  }
+
+  setHeldItem(object3D = null) {
+    if (object3D === this.heldItem) return this;
+    if (this.heldItem) {
+      this.heldGrip.remove(this.heldItem);
+      disposeResources(this.heldItem);
+    }
+    this.heldItem = object3D?.isObject3D ? object3D : null;
+    if (this.heldItem) {
+      this.heldItem.traverse?.((object) => {
+        if (!object.userData) return;
+        delete object.userData.interactableId;
+        delete object.userData.interaction;
+      });
+      this.heldItem.visible = this.holding;
+      this.heldGrip.add(this.heldItem);
+      this.materialRoots.held = this.heldItem;
+      setMaterialOpacity(this.heldItem, this.opacity);
+    } else {
+      delete this.materialRoots.held;
+    }
+    return this;
+  }
+
+  setHolding(active) {
+    this.holding = active === true;
+    if (this.heldItem) this.heldItem.visible = this.holding;
+    return this;
   }
 
   setContext(context) { this.context = context; return this; }
@@ -404,6 +443,7 @@ export class FirstPersonHand {
 
   destroy() {
     if (typeof this.camera?.remove === "function") this.camera.remove(this.root);
+    this.setHeldItem(null);
     for (const model of Object.values(this.models)) disposeResources(model);
     if (this.presentationModel) disposeResources(this.presentationModel);
     this.root.clear();
@@ -414,6 +454,8 @@ export class FirstPersonHand {
     this.presentationBones = null;
     this.presentationAdapters = {};
     this.materialRoots = {};
+    this.heldGrip = null;
+    this.palmGrip = null;
     this.bones = {};
     this.adapter = null;
     this.targetContact = null;

@@ -1,6 +1,7 @@
 import { FirstPersonHand } from "./FirstPersonHand.js";
 import { HandPoseStream } from "./HandPoseStream.js";
 import { HandGestureGate } from "./HandGestureGate.js";
+import { HeldEquipmentGate } from "./HeldEquipmentGate.js";
 import { HandTaskStateMachine } from "../shared/hand-task-state.js";
 
 const finitePoint = (value) => {
@@ -18,6 +19,9 @@ export class HandTrackingDirector {
     this.stream = options.stream ?? new HandPoseStream();
     this.machine = options.machine ?? new HandTaskStateMachine();
     this.gestureGate = options.gestureGate ?? new HandGestureGate();
+    this.equipmentGate = options.equipmentGate ?? new HeldEquipmentGate();
+    this.getEquippedId = typeof options.getEquippedId === "function" ? options.getEquippedId : () => null;
+    this.canPresentEquipment = typeof options.canPresentEquipment === "function" ? options.canPresentEquipment : () => true;
     this.onGesture = typeof options.onGesture === "function" ? options.onGesture : () => {};
     this.owner = null;
     this.lastAcceptedAt = null;
@@ -52,6 +56,7 @@ export class HandTrackingDirector {
     this.target = next;
     this.publishTargetContact(false);
     if (changed) this.gestureGate.reset({ requireRelease: hadTarget });
+    if (next) this.suppressEquipment();
     return this.target;
   }
 
@@ -71,6 +76,7 @@ export class HandTrackingDirector {
     this.fallback = Boolean(this.hand?.fallback || this.lastSample?.state === "unavailable");
     this.machine.begin({ context, requiredAction, preCalibrated, skipCalibration, now: this.now() });
     this.gestureGate.reset({ requireRelease: true });
+    this.suppressEquipment();
     this.hand?.setContext?.(context);
     this.hand?.setVisible?.(!this.fallback);
     this.sendControllerEvent({ type: "hand-task", active: true, context });
@@ -83,6 +89,7 @@ export class HandTrackingDirector {
     this.owner = null;
     this.machine.reset();
     this.gestureGate.reset({ requireRelease: true });
+    this.suppressEquipment();
     this.publishTargetContact(false);
     this.hand?.setVisible?.(!this.hand?.fallback);
     this.hand?.setContext?.(null);
@@ -122,7 +129,15 @@ export class HandTrackingDirector {
     }
     if (!this.owner) {
       if (!this.target?.id) {
-        return sample ? { sample, fallback: this.fallback } : null;
+        const equippedId = this.getEquippedId();
+        if (!equippedId || !this.canPresentEquipment()) {
+          this.suppressEquipment();
+          return sample ? { sample, fallback: this.fallback } : null;
+        }
+        const equipmentAction = this.equipmentGate.update(sample, now);
+        if (equipmentAction === "grab") this.hand?.setHolding?.(true);
+        if (equipmentAction === "release") this.hand?.setHolding?.(false);
+        return sample ? { sample, fallback: this.fallback, equipmentAction, equippedId } : null;
       }
       const triggered = this.gestureGate.update(sample, now, this.target);
       this.publishTargetContact(this.gestureGate.isContactCandidate?.(this.target.epoch) === true);
@@ -162,7 +177,13 @@ export class HandTrackingDirector {
 
   setPaused(paused) {
     this.paused = Boolean(paused);
+    if (this.paused) this.suppressEquipment();
     return this;
+  }
+
+  suppressEquipment() {
+    this.equipmentGate?.suppressUntilRelease?.();
+    this.hand?.setHolding?.(false);
   }
 
   async load() {
@@ -181,6 +202,7 @@ export class HandTrackingDirector {
     if (this.destroyed) return;
     if (this.owner) this.endTask(this.owner);
     this.destroyed = true;
+    this.suppressEquipment();
     this.hand?.destroy?.();
     this.owner = null;
   }

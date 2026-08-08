@@ -134,9 +134,12 @@ function addInteractable(scene, id, label, position, geometry, surface) {
   const root = new THREE.Group();
   root.position.set(...position);
   root.userData.interactableId = id;
-  const mesh = new THREE.Mesh(geometry, surface);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  const mesh = geometry?.isObject3D ? geometry : new THREE.Mesh(geometry, surface);
+  mesh.traverse?.((object) => {
+    if (!object.isMesh) return;
+    object.castShadow = true;
+    object.receiveShadow = true;
+  });
   root.add(mesh);
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(0.14, 0.2, 24),
@@ -148,6 +151,34 @@ function addInteractable(scene, id, label, position, geometry, surface) {
   root.add(halo);
   scene.add(root);
   return { id, label, root, mesh, halo, enabled: true };
+}
+
+export function createRenderOnlyFuseModel() {
+  const root = new THREE.Group();
+  root.name = "spare-fuse-model";
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.34, 0.16),
+    new THREE.MeshStandardMaterial({
+      color: 0xe7d5a3,
+      emissive: 0xa9813d,
+      emissiveIntensity: 0.55,
+      roughness: 0.44,
+    }),
+  );
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.045, 0.18),
+    new THREE.MeshStandardMaterial({ color: 0x77766e, metalness: 0.72, roughness: 0.34 }),
+  );
+  const bottom = new THREE.Mesh(top.geometry.clone(), top.material.clone());
+  top.position.y = 0.19;
+  bottom.position.y = -0.19;
+  root.add(body, top, bottom);
+  root.traverse((object) => {
+    if (!object.isMesh) return;
+    object.castShadow = true;
+    object.receiveShadow = true;
+  });
+  return root;
 }
 
 export function createWashbasin(scene, position, darkMetalMaterial) {
@@ -706,9 +737,12 @@ export async function createScene(host) {
   scene.add(camera);
   scene.add(flashlightGroup);
 
-  const fuse = addInteractable(scene, "fuse", "拾取备用保险丝", [-1.78, 1.25, -8.6], new THREE.BoxGeometry(0.16, 0.42, 0.16), new THREE.MeshStandardMaterial({ color: 0xe7d5a3, emissive: 0xa9813d, emissiveIntensity: 0.55, roughness: 0.44 }));
+  const fuse = addInteractable(scene, "fuse", "拾取备用保险丝", [-1.78, 1.25, -8.6], createRenderOnlyFuseModel());
   fuse.root.rotation.z = -0.22;
   fuse.root.position.fromArray(corridor.anchors.fuse.position);
+  const heldFuse = createRenderOnlyFuseModel();
+  heldFuse.visible = false;
+  scene.add(heldFuse);
   box(scene, new THREE.BoxGeometry(0.52, 0.32, 0.14), paperMaterial, [corridor.anchors.fuse.position[0] - 0.07, 1.07, corridor.anchors.fuse.position[2]], [0, 0.2, 0]);
 
   const panelRoot = new THREE.Group();
@@ -773,6 +807,7 @@ export async function createScene(host) {
     root !== camera
     && root !== flashlightGroup
     && root !== silhouette
+    && root !== heldFuse
     && root !== exitDoor.root
     && !interactables.some((entry) => entry.root === root)
   ));
@@ -817,6 +852,7 @@ export async function createScene(host) {
       foundPhone,
       panel,
       fuse,
+      heldFuse,
       washbasin,
       shadowQuest,
       corridor: {

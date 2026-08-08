@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { HorrorDirector } from "../src/desktop/HorrorDirector.js";
+import { InventoryState } from "../src/desktop/InventoryState.js";
 
-function createHarness({ washbasin } = {}) {
+function createHarness({ washbasin, inventory } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, -8);
   const ui = {
@@ -27,7 +28,7 @@ function createHarness({ washbasin } = {}) {
       washbasin,
     },
   };
-  const director = new HorrorDirector({ experience, ui, audio });
+  const director = new HorrorDirector({ experience, ui, audio, inventory });
   return { director, experience, ui, audio };
 }
 
@@ -86,5 +87,27 @@ describe("horror director", () => {
     expect(audio.cue).toHaveBeenNthCalledWith(1, "water-on");
     expect(audio.cue).toHaveBeenNthCalledWith(2, "water-off");
     expect(ui.setPrompt).toHaveBeenLastCalledWith("打开水龙头");
+  });
+
+  it("acquires the fuse and requires it to be equipped for tracked-hand panel use", () => {
+    const inventory = new InventoryState([{ id: "spare-fuse", enabled: true }]);
+    const { director } = createHarness({ inventory });
+
+    expect(director.handleInteraction("fuse", { source: "hand" })).toBe(true);
+    expect(inventory.snapshot().items).toHaveLength(1);
+    expect(director.handleInteraction("panel", { source: "hand" })).toBe(false);
+    expect(inventory.equip("spare-fuse")).toBe(true);
+    expect(director.handleInteraction("panel", { source: "hand" })).toBe(true);
+    expect(inventory.snapshot()).toMatchObject({ items: [], equippedId: null });
+    expect(director.story.serialize().hasFuse).toBe(true);
+  });
+
+  it("lets touch fallback consume an acquired but unequipped fuse", () => {
+    const inventory = new InventoryState([{ id: "spare-fuse", enabled: true }]);
+    const { director } = createHarness({ inventory });
+    director.handleInteraction("fuse", { source: "touch" });
+
+    expect(director.handleInteraction("panel", { source: "touch" })).toBe(true);
+    expect(inventory.snapshot().items).toHaveLength(0);
   });
 });

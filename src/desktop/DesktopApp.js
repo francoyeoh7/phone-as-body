@@ -92,8 +92,11 @@ export class DesktopApp {
         camera: this.experience.camera,
         sendControllerEvent: (event) => this.phone?.send(event),
         onGesture: (event) => this.handleHandGesture(event),
+        getEquippedId: () => this.inventory.snapshot().equippedId,
+        canPresentEquipment: () => this.canPresentEquipment(),
       });
       await this.handTracking.load();
+      this.handTracking.hand?.setHeldItem?.(this.experience.objects?.heldFuse ?? null);
       this.player = new PlayerController({
         ...this.experience,
         onInteract: (id, details) => this.handleInteraction(id, details),
@@ -106,6 +109,7 @@ export class DesktopApp {
         experience: this.experience,
         ui: this.ui,
         audio: this.audio,
+        inventory: this.inventory,
       });
       this.foundPhone = new FoundPhoneDirector({
         experience: this.experience,
@@ -198,6 +202,19 @@ export class DesktopApp {
     );
   }
 
+  canPresentEquipment() {
+    return Boolean(
+      this.started
+      && !this.fallback
+      && !this.paused
+      && !this.destroyed
+      && !this.inventoryOpen
+      && !this.doorDefense?.isCinematic?.()
+      && !this.foundPhone?.isInspecting?.()
+      && !this.shadowQuest?.isCinematic?.()
+    );
+  }
+
   handleInventoryPointer({ phase, dx, dy } = {}) {
     if (phase === "open") {
       if (!this.canOpenInventory()) return false;
@@ -256,7 +273,7 @@ export class DesktopApp {
     ) return false;
     if (this.foundPhone?.handleInteraction(id, details)) return true;
     if (this.shadowQuest?.handleInteraction(id)) return true;
-    return this.director?.handleInteraction(id) ?? false;
+    return this.director?.handleInteraction(id, details) ?? false;
   }
 
   handleHandGesture(event) {

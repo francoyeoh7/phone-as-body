@@ -20,6 +20,76 @@ function frame(overrides = {}) {
 }
 
 describe("HandTrackingDirector", () => {
+  it("routes semantic task, focused target, then untargeted equipment in priority order", () => {
+    const tracked = {
+      state: "tracked", fresh: true, trackingConfidence: 0.95, modeEpoch: 1, seq: 1,
+      pose: frame(), gesturePose: frame(),
+    };
+    const stream = { sample: vi.fn(() => tracked), accept: vi.fn(() => true) };
+    const equipmentGate = {
+      update: vi.fn(() => "grab"),
+      suppressUntilRelease: vi.fn(),
+      reset: vi.fn(),
+    };
+    const gestureGate = { update: vi.fn(() => false), reset: vi.fn(), isContactCandidate: vi.fn(() => false) };
+    const hand = {
+      fallback: false, setContext: vi.fn(), setVisible: vi.fn(), setTargetContact: vi.fn(),
+      setHolding: vi.fn(), applyPose: vi.fn(), destroy: vi.fn(),
+    };
+    let equippedId = "spare-fuse";
+    const director = new HandTrackingDirector({
+      hand, stream, equipmentGate, gestureGate,
+      getEquippedId: () => equippedId,
+      canPresentEquipment: () => true,
+      now: () => 200,
+      sendControllerEvent: vi.fn(),
+    });
+
+    director.update(0.016);
+    expect(equipmentGate.update).toHaveBeenCalledWith(tracked, 200);
+    expect(hand.setHolding).toHaveBeenLastCalledWith(true);
+
+    director.setTarget({ id: "panel", epoch: 1, focusedAt: 0 });
+    equipmentGate.update.mockClear();
+    director.update(0.016);
+    expect(gestureGate.update).toHaveBeenCalled();
+    expect(equipmentGate.update).not.toHaveBeenCalled();
+    expect(equipmentGate.suppressUntilRelease).toHaveBeenCalled();
+    expect(hand.setHolding).toHaveBeenLastCalledWith(false);
+
+    director.setTarget(null);
+    director.beginTask({ context: "door-defense", requiredAction: "brace" });
+    equipmentGate.update.mockClear();
+    director.update(0.016);
+    expect(equipmentGate.update).not.toHaveBeenCalled();
+    expect(equipmentGate.suppressUntilRelease).toHaveBeenCalledTimes(2);
+
+    director.endTask("door-defense");
+    equippedId = null;
+    director.update(0.016);
+    expect(hand.setHolding).toHaveBeenLastCalledWith(false);
+  });
+
+  it("suppresses equipped presentation while cinematic permission is denied", () => {
+    const sample = { state: "tracked", fresh: true, trackingConfidence: 0.95, pose: frame(), gesturePose: frame() };
+    const equipmentGate = { update: vi.fn(() => "grab"), suppressUntilRelease: vi.fn(), reset: vi.fn() };
+    const hand = { fallback: false, setHolding: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
+    const director = new HandTrackingDirector({
+      hand,
+      stream: { sample: () => sample },
+      equipmentGate,
+      getEquippedId: () => "spare-fuse",
+      canPresentEquipment: () => false,
+      now: () => 1,
+      sendControllerEvent: vi.fn(),
+    });
+
+    director.update(0.016);
+    expect(equipmentGate.update).not.toHaveBeenCalled();
+    expect(equipmentGate.suppressUntilRelease).toHaveBeenCalledOnce();
+    expect(hand.setHolding).toHaveBeenCalledWith(false);
+  });
+
   it("accepts and renders tracked poses during ordinary exploration", () => {
     let now = 10;
     const hand = {

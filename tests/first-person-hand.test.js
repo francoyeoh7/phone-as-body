@@ -212,4 +212,32 @@ describe("FirstPersonHand", () => {
     expect(disposers.length).toBeGreaterThan(0);
     expect(disposers.every((spy) => spy.mock.calls.length === 1)).toBe(true);
   });
+
+  it("attaches a detached item to a palm grip and shares hand visibility and opacity", async () => {
+    const left = fakeScene();
+    const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: loaderFor({ "/assets/hands/left.glb": left.root }), cloneScene: (scene) => scene.clone(true) });
+    await hand.load();
+    const material = new THREE.MeshBasicMaterial();
+    const geometry = new THREE.BoxGeometry(0.1, 0.2, 0.1);
+    const held = new THREE.Mesh(geometry, material);
+    held.userData.interactableId = "fuse";
+
+    hand.setHeldItem(held).setHolding(true);
+    hand.applyPose({ ...openHand(), handedness: "left", trackingConfidence: 0.7 }, 0.016);
+
+    expect(held.parent?.name).toBe("left-palm-grip");
+    expect(hand.heldGrip.parent).toBe(hand.bones.wrist);
+    expect(held.userData.interactableId).toBeUndefined();
+    expect(held.visible).toBe(true);
+    expect(material.opacity).toBeCloseTo(0.7, 6);
+    hand.setVisible(false);
+    expect(hand.root.visible).toBe(false);
+
+    const disposeGeometry = vi.spyOn(geometry, "dispose");
+    const disposeMaterial = vi.spyOn(material, "dispose");
+    hand.destroy();
+    hand.destroy();
+    expect(disposeGeometry).toHaveBeenCalledOnce();
+    expect(disposeMaterial).toHaveBeenCalledOnce();
+  });
 });

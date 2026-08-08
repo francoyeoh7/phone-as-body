@@ -497,13 +497,34 @@ describe("desktop director routing", () => {
       director: { handleInteraction: vi.fn(() => { order.push("horror"); return true; }) },
     });
 
-    expect(app.handleInteraction("washbasin")).toBe(true);
+    const interactionDetails = { source: "touch" };
+    expect(app.handleInteraction("washbasin", interactionDetails)).toBe(true);
     expect(order).toEqual(["phone", "shadow", "horror"]);
+    expect(app.director.handleInteraction).toHaveBeenCalledWith("washbasin", interactionDetails);
 
     order.length = 0;
     app.foundPhone.handleInteraction.mockImplementationOnce(() => { order.push("phone"); return true; });
     expect(app.handleInteraction("found-phone")).toBe(true);
     expect(order).toEqual(["phone"]);
+  });
+
+  it("permits equipment only during unobstructed tracked-hand gameplay", () => {
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      started: true,
+      fallback: false,
+      paused: false,
+      destroyed: false,
+      inventoryOpen: false,
+      doorDefense: { isCinematic: () => false },
+      foundPhone: { isInspecting: () => false },
+      shadowQuest: { isCinematic: () => false },
+    });
+    expect(app.canPresentEquipment()).toBe(true);
+    app.inventoryOpen = true;
+    expect(app.canPresentEquipment()).toBe(false);
+    app.inventoryOpen = false;
+    app.doorDefense.isCinematic = () => true;
+    expect(app.canPresentEquipment()).toBe(false);
   });
 
   it.each(["door", "phone", "shadow"])("suppresses normal horror ticks while %s owns the cinematic", (owner) => {
