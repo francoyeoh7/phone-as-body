@@ -100,6 +100,23 @@ export function selectSpatialNodes(json, config = ELDERBOOM_V1_CONFIG) {
     entries.sort((a, b) => a.rank - b.rank || a.index - b.index);
     for (const entry of entries.slice(0, config.foliage.maxInstancesPerMeshPerCell)) selectedNodes.add(entry.index);
   }
+  const meshCaps = new Map();
+  for (const index of selectedNodes) {
+    const node = json.nodes[index];
+    if (!(config.foliage?.denseNamePatterns ?? []).some((pattern) => pattern.test(node.name ?? ""))) continue;
+    const entries = meshCaps.get(node.mesh) ?? [];
+    entries.push({ index, rank: keepDenseFoliage({ ...node, index }, { x: 0, z: 0 }, config) });
+    meshCaps.set(node.mesh, entries);
+  }
+  for (const [mesh, entries] of meshCaps) {
+    const triangles = primitiveTriangles(json, mesh);
+    const cap = triangles >= (config.foliage.highPolyTriangleThreshold ?? Infinity)
+      ? config.foliage.maxHighPolyInstancesPerMesh
+      : config.foliage.maxInstancesPerMesh;
+    if (!Number.isInteger(cap) || cap < 0 || entries.length <= cap) continue;
+    entries.sort((a, b) => a.rank - b.rank || a.index - b.index);
+    for (const entry of entries.slice(cap)) selectedNodes.delete(entry.index);
+  }
   const denseFoliageRetained = [...selectedNodes].filter((index) => (
     (config.foliage?.denseNamePatterns ?? []).some((pattern) => pattern.test(json.nodes[index]?.name ?? ""))
   )).length;

@@ -14,8 +14,8 @@ describe("ElderBoom environment manifest", () => {
 
     expect(manifest.id).toBe("elderboom-v1");
     expect(manifest.chunks[0].artifact).toEqual({
-      bytes: 50_536_592,
-      sha256: "1EC669B24DAF685F9AB38930B142D142C8CDE94ACF615FD0DC0AC609EBAFE18D",
+      bytes: 50_434_620,
+      sha256: "7670DE780AB0BBE9701B58DB9040835247CFE698C6021F2CCFFCD1FD6C302C09",
     });
     expect(Object.keys(manifest.tasks).sort()).toEqual([
       "exit-door", "found-phone", "fuse", "panel", "shadow-window", "washbasin",

@@ -1064,6 +1064,7 @@ export async function createScene(host, {
       washbasin: washbasin.root,
     };
 
+    await renderer.compileAsync?.(scene, camera);
     window.addEventListener("resize", resize);
     resizeAttached = true;
 
