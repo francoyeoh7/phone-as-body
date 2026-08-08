@@ -4,6 +4,9 @@ import { createExitDoor } from "./ExitDoor.js";
 import { createFoundPhoneProp } from "./FoundPhoneProp.js";
 import { createWashbasinState } from "./Washbasin.js";
 import { createCorridorLayout } from "./CorridorLayout.js";
+import { loadEnvironment as loadVillageEnvironment } from "./environment/EnvironmentLoader.js";
+import { createEnvironmentColliders as createVillageColliders } from "./environment/colliders.js";
+import { disposeEnvironmentResources } from "./environment/resources.js";
 
 function seededRandom(seed) {
   let value = seed;
@@ -614,7 +617,7 @@ export function disposePhysicsWorld(world) {
   world?.free?.();
 }
 
-export async function createScene(host) {
+async function createLegacyCorridorScene(host) {
   await RAPIER.init();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x07090a);
@@ -890,4 +893,216 @@ export async function createScene(host) {
       }
     },
   };
+}
+
+const VILLAGE_MANIFEST_URL = "/assets/environment/elderboom-v1/manifest.json";
+
+function authoredInteraction(entry, definition) {
+  entry.interaction = {
+    anchor: entry.root,
+    contactRadius: 0.22,
+    maxUseDistance: definition.maxUseDistance,
+    approachDirection: definition.approachDirection
+      ? new THREE.Vector3(...definition.approachDirection)
+      : null,
+    contactNormal: new THREE.Vector3(...definition.contactNormal),
+  };
+  return entry;
+}
+
+function villageLightCompatibility(environment) {
+  const byRole = environment.lights?.byRole ?? {};
+  const byId = environment.lights?.byId ?? {};
+  return {
+    ceilingLights: byRole["power-sequence"] ?? [],
+    emergencyLights: byRole.emergency ?? [],
+    stormLight: byRole.storm?.[0] ?? null,
+    hemi: byId["night-hemi"] ?? byRole.moon?.find((light) => light.isHemisphereLight) ?? null,
+  };
+}
+
+export async function createScene(host, {
+  RAPIER: rapier = RAPIER,
+  rendererFactory = null,
+  loadEnvironment = loadVillageEnvironment,
+  createEnvironmentColliders = createVillageColliders,
+  manifestUrl = VILLAGE_MANIFEST_URL,
+  signal,
+  onEnvironmentProgress,
+} = {}) {
+  await rapier.init();
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05080c);
+
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 140);
+  camera.rotation.order = "YXZ";
+
+  const renderer = rendererFactory
+    ? rendererFactory({ antialias: true, powerPreference: "high-performance" })
+    : new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.02;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  host.replaceChildren(renderer.domElement);
+
+  const world = new rapier.World({ x: 0, y: -9.81, z: 0 });
+  const gameplayRoot = new THREE.Group();
+  gameplayRoot.name = "village-gameplay-props";
+  scene.add(gameplayRoot, camera);
+
+  let environment = null;
+  let environmentColliders = null;
+  let flashlightRig = null;
+  let disposed = false;
+  let resizeAttached = false;
+
+  const resize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  };
+
+  const dispose = ({ clearHost = true } = {}) => {
+    if (disposed) return;
+    disposed = true;
+    if (resizeAttached) window.removeEventListener("resize", resize);
+    environment?.dispose?.();
+    environmentColliders?.dispose?.();
+    disposeEnvironmentResources([gameplayRoot, camera], {
+      environmentTextures: [flashlightRig?.core?.map],
+    });
+    flashlightRig?.core?.shadow?.map?.dispose?.();
+    flashlightRig?.core?.shadow?.mapPass?.dispose?.();
+    flashlightRig?.spill?.shadow?.map?.dispose?.();
+    flashlightRig?.spill?.shadow?.mapPass?.dispose?.();
+    gameplayRoot.removeFromParent();
+    camera.removeFromParent();
+    renderer.dispose();
+    disposePhysicsWorld(world);
+    if (clearHost) host.replaceChildren();
+  };
+
+  try {
+    environment = await loadEnvironment({
+      scene,
+      manifestUrl,
+      signal,
+      onProgress: onEnvironmentProgress,
+    });
+    const { manifest } = environment;
+    scene.background = new THREE.Color(manifest.atmosphere.background);
+    scene.fog = new THREE.Fog(
+      manifest.atmosphere.fog.color,
+      manifest.atmosphere.fog.near,
+      manifest.atmosphere.fog.far,
+    );
+
+    environmentColliders = createEnvironmentColliders({
+      RAPIER: rapier,
+      world,
+      manifest,
+    });
+    scene.add(...environmentColliders.occluderRoots);
+
+    camera.position.set(
+      manifest.spawn.position[0],
+      manifest.spawn.position[1] + 0.55,
+      manifest.spawn.position[2],
+    );
+    camera.rotation.y = manifest.spawn.yaw;
+
+    flashlightRig = createFlashlightRig(camera, new THREE.Vector3(0, -0.05, -9));
+    const flashlightGroup = flashlightRig.group;
+    gameplayRoot.add(flashlightGroup);
+
+    const fuseDefinition = manifest.tasks.fuse;
+    const fuse = authoredInteraction(
+      addInteractable(
+        gameplayRoot,
+        "fuse",
+        "拾取备用保险丝",
+        fuseDefinition.position,
+        createRenderOnlyFuseModel(),
+      ),
+      fuseDefinition,
+    );
+    fuse.root.rotation.y = fuseDefinition.rotationY;
+
+    const heldFuse = createRenderOnlyFuseModel();
+    heldFuse.visible = false;
+    gameplayRoot.add(heldFuse);
+
+    const phoneDefinition = manifest.tasks["found-phone"];
+    const foundPhone = authoredInteraction(createFoundPhoneProp({
+      scene: gameplayRoot,
+      camera,
+      position: phoneDefinition.position,
+      rotationY: phoneDefinition.rotationY,
+    }), phoneDefinition);
+
+    const washbasinDefinition = manifest.tasks.washbasin;
+    const washbasin = authoredInteraction(createWashbasin(
+      gameplayRoot,
+      washbasinDefinition.position,
+      new THREE.MeshStandardMaterial({ color: 0x242827, roughness: 0.38, metalness: 0.85 }),
+    ), washbasinDefinition);
+    washbasin.root.rotation.y = washbasinDefinition.rotationY;
+
+    const interactables = [fuse, foundPhone, washbasin];
+    const staticOccluderRoots = environmentColliders.occluderRoots;
+    const compatibleLights = villageLightCompatibility(environment);
+    const worldAnchors = {
+      fuse: fuse.root,
+      foundPhone: foundPhone.root,
+      washbasin: washbasin.root,
+    };
+
+    window.addEventListener("resize", resize);
+    resizeAttached = true;
+
+    return {
+      RAPIER: rapier,
+      scene,
+      camera,
+      renderer,
+      world,
+      spawn: manifest.spawn,
+      interactables,
+      staticOccluderRoots,
+      objects: {
+        environment,
+        flashlight: flashlightGroup,
+        flashlightCore: flashlightRig.core,
+        flashlightSpill: flashlightRig.spill,
+        flashlightBeam: flashlightRig.outerBeam,
+        ...compatibleLights,
+        fuse,
+        heldFuse,
+        foundPhone,
+        washbasin,
+        corridor: {
+          layout: null,
+          anchors: environment.anchors,
+          worldAnchors,
+          anchorObjects: worldAnchors,
+        },
+      },
+      update(delta, elapsed) {
+        const pulse = 0.46 + Math.sin(elapsed * 7.4) * 0.04;
+        for (const light of compatibleLights.emergencyLights) light.intensity = pulse;
+        updateFlashlightRig(flashlightRig, camera, delta);
+        washbasin.update(delta, elapsed);
+        foundPhone.update(delta);
+      },
+      dispose,
+    };
+  } catch (error) {
+    dispose();
+    throw error;
+  }
 }

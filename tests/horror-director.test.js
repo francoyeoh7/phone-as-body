@@ -172,4 +172,15 @@ describe("horror director", () => {
     const movement = experience.objects.silhouette.position.clone().sub(before).normalize();
     expect(movement.angleTo(expectedDirection)).toBeLessThan(1e-8);
   });
+
+  it("allows the pickup-only village scene to omit legacy threat and panel props", () => {
+    const { director, experience } = createHarness();
+    delete experience.objects.silhouette;
+    delete experience.objects.panel;
+
+    expect(() => director.collectFuse()).not.toThrow();
+    expect(director.silhouetteArmed).toBe(false);
+    expect(() => director.update(1 / 60, 1)).not.toThrow();
+    expect(director.restorePower()).toBe(false);
+  });
 });

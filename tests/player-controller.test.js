@@ -184,6 +184,46 @@ describe("player phone view deltas", () => {
     expect(focused[0].focusedAt).toEqual(expect.any(Number));
   });
 
+  it("reports an authored contact normal for an assisted manifest target", () => {
+    const focused = [];
+    const root = {
+      visible: true,
+      getWorldPosition: (target) => target.set(0, 0, -1),
+    };
+    const player = Object.assign(Object.create(PlayerController.prototype), {
+      camera: {
+        position: new THREE.Vector3(0, 0, 0),
+        getWorldDirection: (target) => target.set(0, 0, -1),
+      },
+      raycaster: { setFromCamera: vi.fn(), intersectObjects: vi.fn(() => []) },
+      interactables: [{
+        id: "panel",
+        label: "panel",
+        enabled: true,
+        root,
+        halo: { visible: false },
+        interaction: {
+          anchor: root,
+          contactRadius: 0.22,
+          maxUseDistance: 2.35,
+          approachDirection: null,
+          contactNormal: new THREE.Vector3(1, 0, 0),
+        },
+      }],
+      staticOccluderRoots: [],
+      targetPosition: new THREE.Vector3(),
+      forward: new THREE.Vector3(),
+      selected: null,
+      aimAssist: null,
+      onPrompt: vi.fn(),
+      onTarget: (event) => focused.push(event),
+    });
+
+    player.updateInteraction();
+
+    expect(focused[0].contactNormal).toEqual({ x: 1, y: 0, z: 0 });
+  });
+
   it("reports the actual raycast hit point and world-space surface normal", () => {
     const focused = [];
     const targetObject = {

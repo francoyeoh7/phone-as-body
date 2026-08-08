@@ -125,12 +125,18 @@ describe("found phone prop", () => {
     expect(foundPhone.heldRig.visible).toBe(false);
   });
 
-  it("accepts a layout-provided floor anchor without moving camera-local rigs", () => {
+  it("accepts an authored floor position and yaw without moving camera-local rigs", () => {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera();
-    const foundPhone = createFoundPhoneProp({ scene, camera, position: [-1.2, 0.07, -11.4] });
+    const foundPhone = createFoundPhoneProp({
+      scene,
+      camera,
+      position: [7.7, 0.08, -0.3],
+      rotationY: -0.35,
+    });
 
-    expect(foundPhone.root.position.toArray()).toEqual([-1.2, 0.07, -11.4]);
+    expect(foundPhone.root.position.toArray()).toEqual([7.7, 0.08, -0.3]);
+    expect(foundPhone.root.rotation.y).toBeCloseTo(-0.35, 8);
     expect(foundPhone.root.parent).toBe(scene);
     expect(foundPhone.heldRig.parent).toBe(camera);
   });

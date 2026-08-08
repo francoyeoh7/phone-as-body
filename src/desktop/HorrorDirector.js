@@ -125,9 +125,9 @@ export class HorrorDirector {
     this.showSubtitle("保险丝还是温的。", 2.2);
     this.audio.cue("pickup");
     this.inventory?.acquire?.("spare-fuse");
-    this.silhouetteArmed = true;
-    if (this.storyAnchors?.firstReveal) silhouette.position.copy(this.storyAnchors.firstReveal);
-    else {
+    this.silhouetteArmed = Boolean(silhouette);
+    if (silhouette && this.storyAnchors?.firstReveal) silhouette.position.copy(this.storyAnchors.firstReveal);
+    else if (silhouette) {
       silhouette.position.set(
         this.experience.camera.position.x + 0.4,
         0,
@@ -138,6 +138,8 @@ export class HorrorDirector {
   }
 
   restorePower(details = {}) {
+    const panel = this.experience.objects.panel;
+    if (!panel?.lamp) return false;
     const inventorySnapshot = this.inventory?.snapshot?.();
     const hasFuse = inventorySnapshot?.items?.some((item) => item.id === "spare-fuse") === true;
     const handAuthorized = details?.source !== "hand" || inventorySnapshot?.equippedId === "spare-fuse";
@@ -153,7 +155,6 @@ export class HorrorDirector {
       return false;
     }
     this.inventory?.consume?.("spare-fuse");
-    const { panel } = this.experience.objects;
     panel.lamp.material.color.setHex(0x7da468);
     panel.lamp.material.emissive.setHex(0x577e46);
     for (const light of this.powerLights) light.intensity = 0;
@@ -168,7 +169,7 @@ export class HorrorDirector {
   stopPursuit() {
     this.pursuitAt = Infinity;
     this.pursuitActive = false;
-    this.experience.objects.silhouette.visible = false;
+    if (this.experience.objects.silhouette) this.experience.objects.silhouette.visible = false;
   }
 
   showSubtitle(text, seconds) {
@@ -189,6 +190,7 @@ export class HorrorDirector {
   updateSilhouette() {
     if (!this.silhouetteArmed || this.silhouetteVanished) return;
     const { camera, objects } = this.experience;
+    if (!objects.silhouette) return;
     camera.getWorldDirection(this.direction);
     this.toSilhouette.copy(objects.silhouette.position).sub(camera.position).normalize();
     const alignment = this.direction.dot(this.toSilhouette);
@@ -225,6 +227,7 @@ export class HorrorDirector {
 
   updatePursuit(delta) {
     const { silhouette } = this.experience.objects;
+    if (!silhouette) return;
     const camera = this.experience.camera;
     if (!this.pursuitActive && this.elapsed >= this.pursuitAt) {
       this.pursuitActive = true;

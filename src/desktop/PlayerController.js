@@ -422,7 +422,8 @@ export class PlayerController {
       if (selected) {
         const anchor = selected.interaction?.anchor ?? selected.interactionAnchor ?? selected.root;
         contactPoint = resolveWorldPosition(anchor, this.targetPosition.clone());
-        contactNormal = this.forward.clone().multiplyScalar(-1).normalize();
+        contactNormal = cloneVector(selected.interaction?.contactNormal)
+          ?? this.forward.clone().multiplyScalar(-1).normalize();
       }
     }
     if (selected) {

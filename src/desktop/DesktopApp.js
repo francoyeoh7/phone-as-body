@@ -118,7 +118,7 @@ export class DesktopApp {
         sendControllerEvent: (event) => this.phone?.send(event),
         handTracking: this.handTracking,
       });
-      this.doorDefense = new DoorDefenseDirector({
+      this.doorDefense = this.experience.objects?.exitDoor ? new DoorDefenseDirector({
         experience: this.experience,
         player: this.player,
         story: this.director.story,
@@ -131,13 +131,13 @@ export class DesktopApp {
           this.director?.settings?.reducedMotion
           || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
         ),
-      });
-      this.shadowQuest = new ShadowQuestDirector({
+      }) : null;
+      this.shadowQuest = this.experience.objects?.shadowQuest ? new ShadowQuestDirector({
         experience: this.experience,
         player: this.player,
         ui: this.ui,
         audio: this.audio,
-      });
+      }) : null;
       this.applyDebugStart();
       this.ui.showLoading(false);
       this.lastFrame = performance.now();

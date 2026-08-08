@@ -1101,7 +1101,7 @@ describe("fallback Space hold", () => {
       camera: {},
       renderer: { domElement: createElement() },
       interactables: [],
-      objects: {},
+      objects: { shadowQuest: {} },
       dispose: vi.fn(),
     };
     const retryError = new Error("retry startup failed");
