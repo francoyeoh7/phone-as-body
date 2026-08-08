@@ -1003,6 +1003,7 @@ export async function createScene(host, {
       manifest.atmosphere.fog.near,
       manifest.atmosphere.fog.far,
     );
+    scene.add(new THREE.HemisphereLight(0xe4f5ff, 0x657451, 1.15));
 
     environmentColliders = createEnvironmentColliders({
       RAPIER: rapier,

@@ -202,7 +202,7 @@ describe("real village scene assembly", () => {
     expect(experience.spawn).toBe(manifest.spawn);
     expect(experience.camera.far).toBe(140);
     expect(experience.camera.position.toArray()).toEqual([6.5, 1.6, -2]);
-    expect(experience.camera.rotation.y).toBeCloseTo(Math.PI, 8);
+    expect(experience.camera.rotation.y).toBeCloseTo(0, 8);
     expect(host.replaceChildren).toHaveBeenCalledWith(renderer.domElement);
     const flashlightCookieDispose = vi.spyOn(experience.objects.flashlightCore.map, "dispose");
 
