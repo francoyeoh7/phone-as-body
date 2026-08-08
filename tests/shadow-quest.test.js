@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { ShadowQuestDirector } from "../src/desktop/ShadowQuestDirector.js";
 
-function createHarness({ flashlightVisible = true, lookAtWindow = true, corridor = null } = {}) {
+function createHarness({ flashlightVisible = true, lookAtWindow = true, corridor = null, manifest = null } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, -14.4);
   camera.lookAt(lookAtWindow ? new THREE.Vector3(-2.5, 1.95, -13.92) : new THREE.Vector3(0, 1.6, -20));
@@ -45,10 +45,11 @@ function createHarness({ flashlightVisible = true, lookAtWindow = true, corridor
         operatingDoor,
       },
       ...(corridor ? { corridor } : {}),
+      ...(manifest ? { environment: { manifest } } : {}),
     },
   };
   const director = new ShadowQuestDirector({ experience, player, ui, audio });
-  return { director, player, ui, audio, taskPoint, shadowFigure, windowTarget, savedPose };
+  return { director, player, ui, audio, taskPoint, shadowFigure, operatingDoor, windowTarget, savedPose };
 }
 
 describe("shadow side quest", () => {
@@ -121,5 +122,37 @@ describe("shadow side quest", () => {
     expect(harness.player.restorePose).toHaveBeenCalledWith(harness.savedPose);
     expect(harness.player.endCinematic).toHaveBeenCalledOnce();
     expect(harness.director.complete).toBe(false);
+  });
+
+  it("uses manifest-local peek, figure travel, and operating-door travel vectors", () => {
+    const shadow = {
+      peekPosition: [3.1, 1.72, 2.7],
+      peekTarget: [4.8, 1.35, 6.2],
+      figureStart: [7.2, 0, 7.4],
+      figureTravel: [-3.15, 0, 1.88],
+      doorStart: [4.18, 0, 8.1],
+      doorTravel: [-0.58, 0, 0.64],
+    };
+    const harness = createHarness({ manifest: { shadow } });
+
+    harness.director.startCinematic();
+    expect(harness.director.peekPosition.toArray()).toEqual(shadow.peekPosition);
+    expect(harness.director.peekTarget.toArray()).toEqual(shadow.peekTarget);
+    expect(harness.operatingDoor.position.toArray()).toEqual(shadow.doorStart);
+
+    harness.director.updateCinematic(1.15);
+    expect(harness.player.setCinematicCamera).toHaveBeenLastCalledWith(
+      expect.objectContaining({ x: shadow.peekPosition[0], y: shadow.peekPosition[1], z: shadow.peekPosition[2] }),
+      expect.objectContaining({ x: shadow.peekTarget[0], y: shadow.peekTarget[1], z: shadow.peekTarget[2] }),
+    );
+
+    harness.director.updateFigure(3.9);
+    expect(harness.shadowFigure.position.toArray()).toEqual(
+      new THREE.Vector3(...shadow.figureStart).add(new THREE.Vector3(...shadow.figureTravel)).toArray(),
+    );
+    harness.director.updateFigure(3.45);
+    expect(harness.operatingDoor.position.toArray()).toEqual(
+      new THREE.Vector3(...shadow.doorStart).add(new THREE.Vector3(...shadow.doorTravel)).toArray(),
+    );
   });
 });

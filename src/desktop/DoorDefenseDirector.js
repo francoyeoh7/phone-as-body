@@ -101,6 +101,7 @@ export class DoorDefenseDirector {
     this.cameraDirection = new THREE.Vector3();
     this.toTrigger = new THREE.Vector3();
     this.doorWorldPosition = new THREE.Vector3();
+    this.triggerPosition = null;
     this.inwardNormal = new THREE.Vector3(0, 0, 1);
     this.fallbackPresenceEvent = { context: DOOR_CONTEXT, ready: true, active: false };
 
@@ -177,8 +178,8 @@ export class DoorDefenseDirector {
   }
 
   isWithinTriggerRange() {
-    if (!this.exitDoor?.triggerPosition || !this.experience?.camera) return false;
-    this.toTrigger.copy(this.exitDoor.triggerPosition).sub(this.experience.camera.position);
+    if (!this.triggerPosition || !this.experience?.camera) return false;
+    this.toTrigger.copy(this.triggerPosition).sub(this.experience.camera.position);
     return this.toTrigger.lengthSq() <= ACQUIRE_DISTANCE * ACQUIRE_DISTANCE + DISTANCE_EPSILON;
   }
 
@@ -189,17 +190,23 @@ export class DoorDefenseDirector {
   }
 
   syncDoorAnchors() {
+    const manifestAnchor = this.experience?.objects?.environment?.manifest?.tasks?.["exit-door"];
     const layoutAnchor = this.experience?.objects?.corridor?.anchors?.exitDoor;
-    if (this.exitDoor && layoutAnchor?.triggerPosition && !this.exitDoor.triggerPosition) {
-      this.exitDoor.triggerPosition = new THREE.Vector3(...layoutAnchor.triggerPosition);
+    const triggerSource = manifestAnchor?.triggerPosition
+      ?? this.exitDoor?.triggerPosition
+      ?? layoutAnchor?.triggerPosition;
+    if (triggerSource?.isVector3) this.triggerPosition = triggerSource.clone();
+    else if (Array.isArray(triggerSource) && triggerSource.length >= 3) {
+      this.triggerPosition = new THREE.Vector3(...triggerSource.slice(0, 3));
     }
-    const source = this.exitDoor?.inwardNormal ?? layoutAnchor?.inwardNormal;
+    const source = manifestAnchor?.inwardNormal
+      ?? this.exitDoor?.inwardNormal
+      ?? layoutAnchor?.inwardNormal;
     if (source?.isVector3) this.inwardNormal.copy(source).normalize();
     else if (Array.isArray(source) && source.length >= 3) this.inwardNormal.fromArray(source).normalize();
   }
 
   acquire() {
-    this.syncDoorAnchors();
     this.savedPose = this.player.snapshotPose();
     this.originalPosition.set(
       this.savedPose.camera.x,
@@ -209,7 +216,7 @@ export class DoorDefenseDirector {
     this.experience.camera.getWorldDirection(this.cameraDirection);
     this.originalTarget.copy(this.originalPosition).addScaledVector(this.cameraDirection, 5);
 
-    this.bracePosition.copy(this.exitDoor.triggerPosition);
+    this.bracePosition.copy(this.triggerPosition);
     this.bracePosition.y += 0.55;
     this.bracePosition.addScaledVector(this.inwardNormal, -BRACE_DISTANCE);
     this.exitDoor.root.getWorldPosition(this.doorWorldPosition);

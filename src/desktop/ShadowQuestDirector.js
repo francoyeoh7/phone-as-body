@@ -30,18 +30,24 @@ export class ShadowQuestDirector {
     this.direction = new THREE.Vector3();
     this.toTarget = new THREE.Vector3();
     this.taskWorld = new THREE.Vector3();
+    const manifestShadow = experience?.objects?.environment?.manifest?.shadow ?? null;
     const shadowAnchor = experience?.objects?.corridor?.anchors?.shadowWindow
       ?? this.objects?.anchors
       ?? null;
     this.peekPosition = new THREE.Vector3(...(
-      shadowAnchor?.peekPosition ?? [-2.08, 1.92, -14.18]
+      manifestShadow?.peekPosition ?? shadowAnchor?.peekPosition ?? [-2.08, 1.92, -14.18]
     ));
     this.peekTarget = new THREE.Vector3(...(
-      shadowAnchor?.peekTarget ?? [-6.6, 1.42, -13.45]
+      manifestShadow?.peekTarget ?? shadowAnchor?.peekTarget ?? [-6.6, 1.42, -13.45]
     ));
     this.figureStartPosition = new THREE.Vector3(...(
-      shadowAnchor?.figure ?? [-6.62, 1.22, -16.4]
+      manifestShadow?.figureStart ?? shadowAnchor?.figure ?? [-6.62, 1.22, -16.4]
     ));
+    this.figureTravel = new THREE.Vector3(...(manifestShadow?.figureTravel ?? [0, 0, 3.68]));
+    this.doorStartPosition = manifestShadow?.doorStart
+      ? new THREE.Vector3(...manifestShadow.doorStart)
+      : this.objects.operatingDoor.position.clone();
+    this.doorTravel = new THREE.Vector3(...(manifestShadow?.doorTravel ?? [0, 0, 0.86]));
     this.originalPosition = new THREE.Vector3();
     this.originalTarget = new THREE.Vector3();
     this.cameraPosition = new THREE.Vector3();
@@ -114,7 +120,7 @@ export class ShadowQuestDirector {
     this.objects.shadowFigure.position.copy(this.figureStartPosition);
     this.objects.shadowFigure.material.opacity = 0.9;
     this.objects.shadowFigure.visible = false;
-    this.objects.operatingDoor.position.z = 0;
+    this.objects.operatingDoor.position.copy(this.doorStartPosition);
     this.player.beginCinematic();
     this.player.clearAimAssist();
     this.ui.setPrompt(null);
@@ -148,11 +154,13 @@ export class ShadowQuestDirector {
     figure.visible = true;
     const progress = smoothstep((time - FIGURE_START) / (FIGURE_END - FIGURE_START));
     figure.position.copy(this.figureStartPosition);
-    figure.position.z += progress * 3.68;
+    figure.position.addScaledVector(this.figureTravel, progress);
     if (time >= 2.55 && time < 3.45) {
-      this.objects.operatingDoor.position.z = smoothstep((time - 2.55) / 0.9) * 0.86;
+      this.objects.operatingDoor.position.copy(this.doorStartPosition)
+        .addScaledVector(this.doorTravel, smoothstep((time - 2.55) / 0.9));
     } else if (time >= 3.45) {
-      this.objects.operatingDoor.position.z = (1 - smoothstep((time - 3.45) / 0.85)) * 0.86;
+      this.objects.operatingDoor.position.copy(this.doorStartPosition)
+        .addScaledVector(this.doorTravel, 1 - smoothstep((time - 3.45) / 0.85));
     }
     if (time >= FIGURE_END) {
       figure.material.opacity = 1 - smoothstep((time - FIGURE_END) / 0.38);
@@ -162,7 +170,7 @@ export class ShadowQuestDirector {
   finish() {
     const pose = this.savedPose;
     this.objects.shadowFigure.visible = false;
-    this.objects.operatingDoor.position.z = 0;
+    this.objects.operatingDoor.position.copy(this.doorStartPosition);
     this.objects.taskPoint.visible = false;
     this.objects.window.enabled = false;
     this.player.restorePose(pose);
@@ -179,7 +187,7 @@ export class ShadowQuestDirector {
     if (!this.cinematic) return;
     const pose = this.savedPose;
     this.objects.shadowFigure.visible = false;
-    this.objects.operatingDoor.position.z = 0;
+    this.objects.operatingDoor.position.copy(this.doorStartPosition);
     this.objects.taskPoint.visible = false;
     this.objects.window.enabled = false;
     this.player.restorePose(pose);

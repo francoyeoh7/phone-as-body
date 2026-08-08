@@ -1,6 +1,40 @@
 import * as THREE from "three";
 import { createObjectiveState } from "../shared/objectives.js";
 
+const vectorFrom = (value, fallback = null) => {
+  if (value?.isVector3) return value.clone();
+  if (Array.isArray(value) && value.length >= 3 && value.slice(0, 3).every(Number.isFinite)) {
+    return new THREE.Vector3(...value.slice(0, 3));
+  }
+  return fallback?.clone?.() ?? null;
+};
+
+function collectRuntimeLights(...sources) {
+  const lights = new Set();
+  const visited = new Set();
+  const visit = (value) => {
+    if (!value || visited.has(value)) return;
+    if (typeof value === "object") visited.add(value);
+    if (value.isLight || (typeof value.name === "string" && Number.isFinite(value.intensity))) {
+      lights.add(value);
+      return;
+    }
+    if (value instanceof Map) {
+      for (const child of value.values()) visit(child);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const child of Object.values(value)) visit(child);
+    }
+  };
+  for (const source of sources) visit(source);
+  return [...lights];
+}
+
 export class HorrorDirector {
   constructor({ experience, ui, audio, inventory = null }) {
     this.experience = experience;
@@ -21,6 +55,31 @@ export class HorrorDirector {
     this.settings = { subtitles: true, reducedMotion: false };
     this.direction = new THREE.Vector3();
     this.toSilhouette = new THREE.Vector3();
+    this.pursuitTarget = new THREE.Vector3();
+    const environment = experience?.objects?.environment ?? null;
+    const manifest = environment?.manifest ?? null;
+    this.storyAnchors = manifest?.story ? {
+      firstReveal: vectorFrom(manifest.story.firstReveal),
+      pursuitSpawn: vectorFrom(manifest.story.pursuitSpawn),
+      pursuitTargetOffset: vectorFrom(manifest.story.pursuitTargetOffset),
+    } : null;
+    const powerLightIds = new Set((manifest?.lights ?? [])
+      .filter((entry) => entry?.role === "power-sequence")
+      .map((entry) => entry.id));
+    const runtimeLights = collectRuntimeLights(
+      experience?.objects?.ceilingLights,
+      environment?.lights,
+    );
+    const rolePowerLights = environment?.lights?.byRole?.["power-sequence"] ?? [];
+    const semanticPowerLights = rolePowerLights.length > 0
+      ? [...rolePowerLights]
+      : runtimeLights.filter((light) => powerLightIds.has(
+        light.userData?.environmentLightId || light.name,
+      ));
+    this.powerLights = semanticPowerLights.length > 0
+      ? semanticPowerLights
+      : [...(experience?.objects?.ceilingLights ?? [])];
+    this.usesSemanticPowerLights = semanticPowerLights.length > 0;
     this.ui.setObjective(this.story.label());
   }
 
@@ -56,18 +115,25 @@ export class HorrorDirector {
     const { fuse, ceilingLights, silhouette } = this.experience.objects;
     fuse.enabled = false;
     fuse.root.visible = false;
-    ceilingLights[2].intensity = 0;
+    if (this.usesSemanticPowerLights) {
+      for (const light of this.powerLights) light.intensity = 0;
+    } else if (ceilingLights?.[2]) {
+      ceilingLights[2].intensity = 0;
+    }
     this.ui.setPrompt(null);
     this.ui.setObjective(this.story.label());
     this.showSubtitle("保险丝还是温的。", 2.2);
     this.audio.cue("pickup");
     this.inventory?.acquire?.("spare-fuse");
     this.silhouetteArmed = true;
-    silhouette.position.set(
-      this.experience.camera.position.x + 0.4,
-      0,
-      Math.min(1.8, this.experience.camera.position.z + 6.2),
-    );
+    if (this.storyAnchors?.firstReveal) silhouette.position.copy(this.storyAnchors.firstReveal);
+    else {
+      silhouette.position.set(
+        this.experience.camera.position.x + 0.4,
+        0,
+        Math.min(1.8, this.experience.camera.position.z + 6.2),
+      );
+    }
     return true;
   }
 
@@ -87,10 +153,10 @@ export class HorrorDirector {
       return false;
     }
     this.inventory?.consume?.("spare-fuse");
-    const { panel, ceilingLights } = this.experience.objects;
+    const { panel } = this.experience.objects;
     panel.lamp.material.color.setHex(0x7da468);
     panel.lamp.material.emissive.setHex(0x577e46);
-    for (const light of ceilingLights) light.intensity = 0;
+    for (const light of this.powerLights) light.intensity = 0;
     this.powerSequenceAt = this.elapsed + 0.2;
     this.pursuitAt = this.elapsed + 4.2;
     this.ui.setObjective(this.story.label());
@@ -146,7 +212,7 @@ export class HorrorDirector {
 
   updatePowerSequence() {
     if (this.elapsed < this.powerSequenceAt) return;
-    const lights = this.experience.objects.ceilingLights;
+    const lights = this.powerLights;
     if (this.poweredLightCount < lights.length) {
       const index = lights.length - 1 - this.poweredLightCount;
       lights[index].intensity = 1.05;
@@ -163,13 +229,19 @@ export class HorrorDirector {
     if (!this.pursuitActive && this.elapsed >= this.pursuitAt) {
       this.pursuitActive = true;
       this.pursuitAt = Infinity;
-      silhouette.position.set(camera.position.x, 0, Math.min(2.1, camera.position.z + 8));
+      if (this.storyAnchors?.pursuitSpawn) silhouette.position.copy(this.storyAnchors.pursuitSpawn);
+      else silhouette.position.set(camera.position.x, 0, Math.min(2.1, camera.position.z + 8));
       silhouette.visible = true;
       this.audio.cue("stinger");
     }
     if (!this.pursuitActive) return;
-    const target = new THREE.Vector3(camera.position.x, 0, camera.position.z + 1.8);
-    const direction = target.sub(silhouette.position);
+    if (this.storyAnchors?.pursuitTargetOffset) {
+      this.pursuitTarget.set(camera.position.x, 0, camera.position.z)
+        .add(this.storyAnchors.pursuitTargetOffset);
+    } else {
+      this.pursuitTarget.set(camera.position.x, 0, camera.position.z + 1.8);
+    }
+    const direction = this.pursuitTarget.sub(silhouette.position);
     const distance = direction.length();
     if (distance > 1.9) silhouette.position.addScaledVector(direction.normalize(), delta * 0.72);
   }

@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { HorrorDirector } from "../src/desktop/HorrorDirector.js";
 import { InventoryState } from "../src/desktop/InventoryState.js";
 
-function createHarness({ washbasin, inventory } = {}) {
+function createHarness({
+  washbasin,
+  inventory,
+  manifest = null,
+  ceilingLights = null,
+  environmentLights = null,
+} = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, -8);
   const ui = {
@@ -23,9 +29,12 @@ function createHarness({ washbasin, inventory } = {}) {
       },
       silhouette: new THREE.Group(),
       flashlight: { visible: true },
-      ceilingLights: Array.from({ length: 6 }, () => new THREE.PointLight()),
+      ceilingLights: ceilingLights ?? Array.from({ length: 6 }, () => new THREE.PointLight()),
       stormLight: new THREE.DirectionalLight(),
       washbasin,
+      ...((manifest || environmentLights) ? {
+        environment: { manifest, lights: environmentLights },
+      } : {}),
     },
   };
   const director = new HorrorDirector({ experience, ui, audio, inventory });
@@ -109,5 +118,58 @@ describe("horror director", () => {
 
     expect(director.handleInteraction("panel", { source: "touch" })).toBe(true);
     expect(inventory.snapshot().items).toHaveLength(0);
+  });
+
+  it("uses manifest story anchors and semantic power lights in an arbitrary world basis", () => {
+    const manifest = {
+      story: {
+        firstReveal: [8.2, 0, 5.4],
+        pursuitSpawn: [-6.8, 0, 9.2],
+        pursuitTargetOffset: [1.8, 0, -0.9],
+      },
+      lights: [
+        { id: "power-yard", role: "power-sequence" },
+        { id: "power-house", role: "power-sequence" },
+        { id: "decorative-third", role: "practical" },
+      ],
+    };
+    const powerYard = new THREE.PointLight();
+    powerYard.intensity = 0.8;
+    const powerHouse = new THREE.PointLight();
+    powerHouse.intensity = 0.9;
+    const decorativeThird = new THREE.PointLight();
+    decorativeThird.name = "decorative-third";
+    decorativeThird.intensity = 0.7;
+    const { director, experience } = createHarness({
+      manifest,
+      ceilingLights: [decorativeThird],
+      environmentLights: {
+        byRole: { "power-sequence": [powerYard, powerHouse] },
+      },
+    });
+
+    expect(director.collectFuse()).toBe(true);
+    expect(experience.objects.silhouette.position.toArray()).toEqual(manifest.story.firstReveal);
+    expect(powerYard.intensity).toBe(0);
+    expect(powerHouse.intensity).toBe(0);
+    expect(decorativeThird.intensity).toBe(0.7);
+
+    expect(director.restorePower()).toBe(true);
+    director.update(0, 4.2);
+    expect(experience.objects.silhouette.position.toArray()).toEqual(manifest.story.pursuitSpawn);
+
+    experience.camera.position.set(3, 1.6, 4);
+    const before = experience.objects.silhouette.position.clone();
+    const expectedDirection = new THREE.Vector3(
+      experience.camera.position.x,
+      0,
+      experience.camera.position.z,
+    )
+      .add(new THREE.Vector3(...manifest.story.pursuitTargetOffset))
+      .sub(before)
+      .normalize();
+    director.updatePursuit(1);
+    const movement = experience.objects.silhouette.position.clone().sub(before).normalize();
+    expect(movement.angleTo(expectedDirection)).toBeLessThan(1e-8);
   });
 });

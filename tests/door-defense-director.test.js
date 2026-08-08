@@ -13,9 +13,12 @@ function createHarness({
   doorPosition = [0, 0, -28.88],
   triggerPosition = [0, 1.05, -26.7],
   inwardNormal = [0, 0, 1],
+  manifestExitDoor = null,
 } = {}) {
+  const activeTrigger = manifestExitDoor?.triggerPosition ?? triggerPosition;
+  const activeNormal = manifestExitDoor?.inwardNormal ?? inwardNormal;
   const camera = new THREE.PerspectiveCamera();
-  camera.position.copy(new THREE.Vector3(...triggerPosition)).add(new THREE.Vector3(...inwardNormal).multiplyScalar(distance));
+  camera.position.copy(new THREE.Vector3(...activeTrigger)).add(new THREE.Vector3(...activeNormal).multiplyScalar(distance));
   camera.lookAt(...doorPosition.map((value, index) => index === 1 ? value + 1.45 : value));
   camera.updateMatrixWorld(true);
 
@@ -62,7 +65,15 @@ function createHarness({
   const audio = { cue: vi.fn() };
   const sendControllerEvent = vi.fn();
   const onThreatStart = vi.fn();
-  const experience = { camera, objects: { exitDoor } };
+  const experience = {
+    camera,
+    objects: {
+      exitDoor,
+      ...(manifestExitDoor ? {
+        environment: { manifest: { tasks: { "exit-door": manifestExitDoor } } },
+      } : {}),
+    },
+  };
   const director = new DoorDefenseDirector({
     experience,
     player,
@@ -111,6 +122,28 @@ describe("door defense director", () => {
     expect(harness.director.bracePosition.z).toBeCloseTo(-29.6, 8);
     expect(harness.director.braceTarget.x).toBeCloseTo(22.9, 8);
     expect(harness.director.braceTarget.z).toBeCloseTo(-29.6, 8);
+  });
+
+  it("prefers the manifest trigger and inward normal over stale prop anchors", () => {
+    const harness = createHarness({
+      doorPosition: [23, 0, -29.6],
+      triggerPosition: [0, 1.05, -26.7],
+      inwardNormal: [0, 0, 1],
+      manifestExitDoor: {
+        position: [23, 0, -29.6],
+        rotationY: -Math.PI / 2,
+        triggerPosition: [20.82, 1.05, -29.6],
+        inwardNormal: [-1, 0, 0],
+      },
+    });
+
+    harness.director.update(0.016);
+
+    expect(harness.director.triggerPosition.toArray()).toEqual([20.82, 1.05, -29.6]);
+    expect(harness.director.inwardNormal.toArray()).toEqual([-1, 0, 0]);
+    expect(harness.director.bracePosition.x).toBeCloseTo(21.24, 8);
+    expect(harness.director.bracePosition.y).toBeCloseTo(1.6, 8);
+    expect(harness.director.bracePosition.z).toBeCloseTo(-29.6, 8);
   });
 
   it("acquires only for reach-door at the inclusive proximity boundary", () => {
