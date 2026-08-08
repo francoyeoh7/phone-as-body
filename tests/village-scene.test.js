@@ -57,6 +57,17 @@ function rendererHarness() {
   return { renderer, rendererFactory: vi.fn(() => renderer) };
 }
 
+function ownedHost() {
+  return {
+    current: null,
+    replaceChildren: vi.fn(function replaceChildren(...children) {
+      if (this.current) this.current.parentNode = null;
+      this.current = children[0] ?? null;
+      if (this.current) this.current.parentNode = this;
+    }),
+  };
+}
+
 function physicsHarness() {
   const worlds = [];
   class World {
@@ -221,5 +232,36 @@ describe("real village scene assembly", () => {
     expect(renderer.dispose).toHaveBeenCalledOnce();
     expect(physics.worlds[0].free).toHaveBeenCalledOnce();
     expect(host.replaceChildren).toHaveBeenLastCalledWith();
+  });
+
+  it("does not clear a newer renderer when a stale scene disposes", async () => {
+    installBrowserHarness();
+    const manifest = await trackedManifest();
+    const firstRenderer = rendererHarness();
+    const secondRenderer = rendererHarness();
+    const firstEnvironment = environmentHarness(manifest);
+    const secondEnvironment = environmentHarness(manifest);
+    const firstPhysics = physicsHarness();
+    const secondPhysics = physicsHarness();
+    const host = ownedHost();
+
+    const first = await createScene(host, {
+      RAPIER: firstPhysics.RAPIER,
+      rendererFactory: firstRenderer.rendererFactory,
+      loadEnvironment: firstEnvironment.loadEnvironment,
+      createEnvironmentColliders: vi.fn(() => ({ colliders: [], rigidBodies: [], occluderRoots: [], dispose: vi.fn() })),
+    });
+    const second = await createScene(host, {
+      RAPIER: secondPhysics.RAPIER,
+      rendererFactory: secondRenderer.rendererFactory,
+      loadEnvironment: secondEnvironment.loadEnvironment,
+      createEnvironmentColliders: vi.fn(() => ({ colliders: [], rigidBodies: [], occluderRoots: [], dispose: vi.fn() })),
+    });
+
+    first.dispose();
+    expect(host.current).toBe(secondRenderer.renderer.domElement);
+
+    second.dispose();
+    expect(host.current).toBeNull();
   });
 });

@@ -984,7 +984,9 @@ export async function createScene(host, {
     camera.removeFromParent();
     renderer.dispose();
     disposePhysicsWorld(world);
-    if (clearHost) host.replaceChildren();
+    const ownsHost = renderer.domElement?.parentNode === host
+      || renderer.domElement?.parentNode === undefined;
+    if (clearHost && ownsHost) host.replaceChildren();
   };
 
   try {

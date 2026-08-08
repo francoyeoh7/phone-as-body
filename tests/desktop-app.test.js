@@ -1045,10 +1045,12 @@ describe("fallback Space hold", () => {
     app.foundPhone = { destroy: vi.fn(() => { throw new Error("runtime teardown failed"); }) };
     const doorDefense = { destroy: vi.fn() };
     const shadowQuest = { destroy: vi.fn() };
+    const director = { destroy: vi.fn() };
     const player = { destroy: vi.fn() };
     const experience = { dispose: vi.fn() };
     app.doorDefense = doorDefense;
     app.shadowQuest = shadowQuest;
+    app.director = director;
     app.player = player;
     app.experience = experience;
     app.audio = { dispose: vi.fn() };
@@ -1062,6 +1064,7 @@ describe("fallback Space hold", () => {
     expect(app.experience).toBeNull();
     expect(doorDefense.destroy).toHaveBeenCalledOnce();
     expect(shadowQuest.destroy).toHaveBeenCalledOnce();
+    expect(director.destroy).toHaveBeenCalledOnce();
     expect(player.destroy).toHaveBeenCalledOnce();
     expect(experience.dispose).toHaveBeenCalledOnce();
     expect(app.audio.dispose).toHaveBeenCalledOnce();
@@ -1399,16 +1402,16 @@ describe("scene startup error classification", () => {
       phase: "response",
       url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
       chunkId: "western-core",
-    }), "村庄资源加载失败。"],
+    }), "村庄资源服务暂时不可用。"],
     ["transport rejection", new EnvironmentLoadError("chunk-load", "offline", {
       phase: "request",
       url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
       chunkId: "western-core",
-    }), "村庄资源加载失败。"],
+    }), "村庄资源网络连接失败。"],
     ["invalid length", new EnvironmentLoadError("chunk-invalid", "bad length", {
       phase: "validate",
       chunkId: "western-core",
-    }), "村庄资源无法解析。"],
+    }), "村庄资源校验失败。"],
     ["decode failure", new EnvironmentLoadError("chunk-invalid", "bad GLB", {
       phase: "decode",
       chunkId: "western-core",

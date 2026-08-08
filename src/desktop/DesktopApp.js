@@ -23,6 +23,29 @@ function isLocalVillageChunk(error) {
   }
 }
 
+function chunkLoadMessage(error) {
+  if (error?.status === 404 && error?.phase === "response" && isLocalVillageChunk(error)) {
+    return "村庄资源尚未准备好。";
+  }
+  if (error?.phase === "response" && Number(error?.status) >= 500) {
+    return "村庄资源服务暂时不可用。";
+  }
+  if (error?.phase === "request") {
+    return "村庄资源网络连接失败。";
+  }
+  return "村庄资源加载失败。";
+}
+
+function chunkInvalidMessage(error) {
+  if (error?.phase === "integrity" || error?.phase === "validate") {
+    return "村庄资源校验失败。";
+  }
+  if (error?.phase === "decode") {
+    return "村庄资源无法解析。";
+  }
+  return error?.phase ? "村庄资源加载失败。" : "村庄资源无法解析。";
+}
+
 export function classifySceneError(error) {
   if (error?.name === "AbortError" || error?.phase === "abort" || error?.cause?.name === "AbortError") {
     return { code: "aborted", message: null, retryable: false };
@@ -32,11 +55,8 @@ export function classifySceneError(error) {
   const messages = {
     "manifest-fetch": "村庄配置暂时无法载入。",
     "manifest-invalid": "村庄配置有误。",
-    "chunk-load": error?.status === 404 && error?.phase === "response"
-      && isLocalVillageChunk(error)
-      ? "村庄资源尚未准备好。"
-      : "村庄资源加载失败。",
-    "chunk-invalid": "村庄资源无法解析。",
+    "chunk-load": chunkLoadMessage(error),
+    "chunk-invalid": chunkInvalidMessage(error),
     "scene-start": "3D 场景启动失败。",
   };
   return {
@@ -149,7 +169,7 @@ export class DesktopApp {
     this.disposedScenes ??= new WeakSet();
     if (this.disposedScenes.has(experience)) return;
     this.disposedScenes.add(experience);
-    experience.dispose();
+    experience.dispose({ clearHost: this.experience === experience });
   }
 
   abortSceneStart(reason = "superseded") {
@@ -678,6 +698,7 @@ export class DesktopApp {
     runCleanup(() => this.clearTransientInteractionState("runtime-dispose"));
     runCleanup(() => this.foundPhone?.destroy());
     runCleanup(() => this.doorDefense?.destroy());
+    runCleanup(() => this.director?.destroy?.());
     runCleanup(() => this.handTracking?.destroy());
     runCleanup(() => this.shadowQuest?.destroy());
     runCleanup(() => this.player?.destroy());

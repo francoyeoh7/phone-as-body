@@ -349,5 +349,6 @@ describe("HandTrackingDirector", () => {
     await expect(loading).rejects.toMatchObject({ name: "AbortError" });
     expect(hand.load).toHaveBeenCalledWith({ signal: controller.signal });
     expect(hand.setVisible).not.toHaveBeenCalled();
+    expect(hand.destroy).toHaveBeenCalledOnce();
   });
 });

@@ -263,4 +263,35 @@ describe("FirstPersonHand", () => {
     expect(materialDispose).toHaveBeenCalledOnce();
     expect(hand.root.parent).toBeNull();
   });
+
+  it("disposes both hands when cancellation happens during the optional arm load", async () => {
+    let resolvePresentation;
+    const left = fakeScene();
+    const presentation = fakeScene();
+    const leftMesh = left.root.children.find((child) => child.isMesh);
+    const presentationMesh = presentation.root.children.find((child) => child.isMesh);
+    const leftDispose = vi.spyOn(leftMesh.geometry, "dispose");
+    const presentationDispose = vi.spyOn(presentationMesh.geometry, "dispose");
+    const loader = {
+      loadAsync: vi.fn()
+        .mockResolvedValueOnce({ scene: left.root })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolvePresentation = resolve; })),
+    };
+    const hand = new FirstPersonHand({
+      camera: new THREE.Group(),
+      loader,
+      cloneScene: (scene) => scene,
+    });
+    const controller = new AbortController();
+    const loading = hand.load({ signal: controller.signal });
+    await vi.waitFor(() => expect(loader.loadAsync).toHaveBeenCalledTimes(2));
+
+    controller.abort(new DOMException("retry", "AbortError"));
+    resolvePresentation({ scene: presentation.root });
+
+    await expect(loading).rejects.toMatchObject({ name: "AbortError" });
+    expect(leftDispose).toHaveBeenCalledOnce();
+    expect(presentationDispose).toHaveBeenCalledOnce();
+    expect(hand.root.parent).toBeNull();
+  });
 });

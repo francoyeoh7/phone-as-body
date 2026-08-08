@@ -322,6 +322,7 @@ export class FirstPersonHand {
         scene.visible = false;
         this.root.add(scene);
       } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
         this.presentationModel = null;
         this.presentationBones = null;
         this.presentationAdapters = {};

@@ -199,7 +199,10 @@ export class HandTrackingDirector {
       else this.hand?.setVisible?.(true);
       return loaded !== false;
     } catch (error) {
-      if (signal?.aborted || error?.name === "AbortError") throw error;
+      if (signal?.aborted || error?.name === "AbortError") {
+        this.hand?.destroy?.();
+        throw error;
+      }
       this.fallback = true;
       return false;
     }
