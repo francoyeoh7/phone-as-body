@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import express from "express";
@@ -138,11 +139,37 @@ if (process.env.NODE_ENV === "production") {
   });
 } else {
   const { createServer: createViteServer } = await import("vite");
+  const mediaPipeWasmRoot = path.join(root, "public", "assets", "mediapipe", "wasm");
+  const serveMediaPipeRuntime = {
+    name: "serve-mediapipe-runtime",
+    configureServer(viteServer) {
+      viteServer.middlewares.use((request, response, next) => {
+        const pathname = new URL(request.url || "/", "http://localhost").pathname;
+        const match = pathname.match(/^\/assets\/mediapipe\/wasm\/([A-Za-z0-9._-]+\.js)$/);
+        if (!match) {
+          next();
+          return;
+        }
+
+        const filePath = path.join(mediaPipeWasmRoot, match[1]);
+        if (!filePath.startsWith(`${mediaPipeWasmRoot}${path.sep}`)) {
+          next();
+          return;
+        }
+
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "application/javascript; charset=utf-8");
+        createReadStream(filePath).on("error", next).pipe(response);
+      });
+    },
+  };
   const vite = await createViteServer({
     root,
+    plugins: [serveMediaPipeRuntime],
     server: {
       middlewareMode: true,
       allowedHosts: publicControllerHost ? [publicControllerHost] : [],
+      hmr: { overlay: false },
     },
   });
   app.use(vite.middlewares);
