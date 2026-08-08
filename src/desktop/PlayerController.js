@@ -28,7 +28,7 @@ const readClock = () => (typeof performance !== "undefined" && typeof performanc
   : Date.now());
 
 export class PlayerController {
-  constructor({ RAPIER, world, camera, renderer, interactables, staticOccluderRoots, onInteract, onAction, onPrompt, onTarget, now }) {
+  constructor({ RAPIER, world, camera, renderer, interactables, staticOccluderRoots, spawn, onInteract, onAction, onPrompt, onTarget, now }) {
     this.world = world;
     this.camera = camera;
     this.renderer = renderer;
@@ -51,9 +51,15 @@ export class PlayerController {
     this.crouchAmount = 0;
     this.movementSpeed = 3.25;
     this.velocity = { x: 0, z: 0 };
-    this.cameraYaw = 0;
+    const spawnPosition = Array.isArray(spawn?.position)
+      && spawn.position.length >= 3
+      && spawn.position.slice(0, 3).every(Number.isFinite)
+      ? spawn.position.slice(0, 3)
+      : [0, 1.05, 1.2];
+    const spawnYaw = Number.isFinite(spawn?.yaw) ? spawn.yaw : 0;
+    this.cameraYaw = spawnYaw;
     this.cameraPitch = 0;
-    this.cameraRenderYaw = 0;
+    this.cameraRenderYaw = spawnYaw;
     this.cameraRenderPitch = 0;
     this.pitchOverflow = 0;
     this.lastViewSequence = -1;
@@ -73,7 +79,7 @@ export class PlayerController {
     this.forward = new THREE.Vector3();
     this.targetPosition = new THREE.Vector3();
 
-    const bodyDescription = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 1.05, 1.2);
+    const bodyDescription = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(...spawnPosition);
     this.body = world.createRigidBody(bodyDescription);
     this.collider = world.createCollider(RAPIER.ColliderDesc.capsule(0.52, 0.32), this.body);
     this.characterController = world.createCharacterController(0.01);

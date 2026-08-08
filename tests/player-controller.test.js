@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { PlayerController } from "../src/desktop/PlayerController.js";
 
@@ -57,6 +57,74 @@ function createCrouchPlayer({ phoneConnected = true, fallback = false } = {}) {
     updateInteraction: vi.fn(),
   });
 }
+
+function createConstructorHarness(spawn) {
+  const bodyDescriptor = {
+    translation: null,
+    setTranslation(x, y, z) {
+      this.translation = [x, y, z];
+      return this;
+    },
+  };
+  const characterController = {
+    enableAutostep: vi.fn(),
+    enableSnapToGround: vi.fn(),
+    setApplyImpulsesToDynamicBodies: vi.fn(),
+  };
+  const body = {};
+  const collider = {};
+  const world = {
+    createRigidBody: vi.fn(() => body),
+    createCollider: vi.fn(() => collider),
+    createCharacterController: vi.fn(() => characterController),
+  };
+  const RAPIER = {
+    RigidBodyDesc: { kinematicPositionBased: vi.fn(() => bodyDescriptor) },
+    ColliderDesc: { capsule: vi.fn(() => ({})) },
+  };
+  const eventTarget = { addEventListener: vi.fn(), removeEventListener: vi.fn(), pointerLockElement: null };
+  const domElement = { addEventListener: vi.fn(), removeEventListener: vi.fn(), requestPointerLock: vi.fn() };
+  vi.stubGlobal("window", eventTarget);
+  vi.stubGlobal("document", eventTarget);
+  const camera = new THREE.PerspectiveCamera();
+  const player = new PlayerController({
+    RAPIER,
+    world,
+    camera,
+    renderer: { domElement },
+    interactables: [],
+    staticOccluderRoots: [],
+    spawn,
+  });
+  return { bodyDescriptor, camera, player };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("player village spawn", () => {
+  it("uses an authored body translation and initial logical/render yaw", () => {
+    const { bodyDescriptor, player } = createConstructorHarness({
+      position: [6.5, 1.05, -2],
+      yaw: Math.PI,
+    });
+
+    expect(bodyDescriptor.translation).toEqual([6.5, 1.05, -2]);
+    expect(player.cameraYaw).toBe(Math.PI);
+    expect(player.cameraRenderYaw).toBe(Math.PI);
+    expect(player.cameraPitch).toBe(0);
+    expect(player.cameraRenderPitch).toBe(0);
+  });
+
+  it("preserves the legacy isolated-test spawn when no manifest spawn is supplied", () => {
+    const { bodyDescriptor, player } = createConstructorHarness(undefined);
+
+    expect(bodyDescriptor.translation).toEqual([0, 1.05, 1.2]);
+    expect(player.cameraYaw).toBe(0);
+    expect(player.cameraRenderYaw).toBe(0);
+  });
+});
 
 describe("player phone view deltas", () => {
   it("preserves the interaction source for scene-specific input rules", () => {
