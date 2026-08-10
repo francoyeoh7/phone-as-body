@@ -202,7 +202,7 @@ export function isControllerAction(value) {
     "task-hold": ["action", "sentAt", "context", "active"],
     "gesture-presence": ["action", "sentAt", "ready", "active", "context"],
     "voice-recording": ["action", "sentAt", "active"],
-    "inventory-pointer": ["action", "sentAt", "phase", "dx", "dy"],
+    "inventory-pointer": ["action", "sentAt", "phase", "dx", "dy", "entryY"],
   };
   if (Object.keys(value).some((key) => !allowedKeys[value.action].includes(key))) return false;
 
@@ -218,7 +218,14 @@ export function isControllerAction(value) {
   if (value.action === "settings") return isControllerSettings(value.settings);
   if (value.action === "inventory-pointer") {
     if (!["open", "move", "commit", "cancel"].includes(value.phase)) return false;
-    if (value.phase !== "move") return value.dx === undefined && value.dy === undefined;
+    if (value.phase === "open") {
+      return value.dx === undefined && value.dy === undefined
+        && (value.entryY === undefined || (isFiniteNumber(value.entryY) && value.entryY >= 0 && value.entryY <= 1));
+    }
+    if (value.phase !== "move") {
+      return value.dx === undefined && value.dy === undefined && value.entryY === undefined;
+    }
+    if (value.entryY !== undefined) return false;
     return isFiniteNumber(value.dx) && Math.abs(value.dx) <= INVENTORY_DELTA_LIMIT
       && isFiniteNumber(value.dy) && Math.abs(value.dy) <= INVENTORY_DELTA_LIMIT;
   }

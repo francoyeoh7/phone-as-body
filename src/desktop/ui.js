@@ -179,7 +179,7 @@ export function createDesktopUI(root) {
     setVoiceRecording(active) {
       elements.voiceRecording.hidden = !active;
     },
-    setInventory(snapshot = {}) {
+    setInventory(snapshot = {}, { entryEdge = "right", entryY = 0.5 } = {}) {
       elements.inventoryBar.hidden = false;
       const bounds = elements.inventoryBar.getBoundingClientRect?.();
       inventoryBounds.width = Number.isFinite(bounds?.width) && bounds.width > INVENTORY_CURSOR_RADIUS * 2
@@ -198,12 +198,13 @@ export function createDesktopUI(root) {
         const left = firstLeft + index * (INVENTORY_SLOT_SIZE + INVENTORY_SLOT_GAP);
         return { id: item.id, left, right: left + INVENTORY_SLOT_SIZE, top, bottom: top + INVENTORY_SLOT_SIZE };
       });
-      const initialId = inventoryItems.some((item) => item.id === snapshot.equippedId)
-        ? snapshot.equippedId
-        : inventoryItems[0]?.id ?? null;
-      const initialRect = inventoryRects.find((rect) => rect.id === initialId);
-      inventoryCursor.x = initialRect ? (initialRect.left + initialRect.right) / 2 : inventoryBounds.width / 2;
-      inventoryCursor.y = initialRect ? (initialRect.top + initialRect.bottom) / 2 : inventoryBounds.height / 2;
+      const normalizedEntryY = Math.min(1, Math.max(0, Number.isFinite(entryY) ? entryY : 0.5));
+      inventoryCursor.x = entryEdge === "right"
+        ? inventoryBounds.width - INVENTORY_CURSOR_RADIUS
+        : INVENTORY_CURSOR_RADIUS;
+      inventoryCursor.y = INVENTORY_CURSOR_RADIUS
+        + normalizedEntryY * (inventoryBounds.height - INVENTORY_CURSOR_RADIUS * 2);
+      const initialId = itemAtInventoryCursor();
       renderInventoryItems(snapshot.equippedId, initialId);
       positionInventoryCursor();
       return initialId;

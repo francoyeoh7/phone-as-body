@@ -1,5 +1,18 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { ControllerApp } from "../src/controller/ControllerApp.js";
+import { ControllerApp, controllerShellMarkup } from "../src/controller/ControllerApp.js";
+
+describe("controller gameplay chrome", () => {
+  it("keeps only settings visible at the top and replaces the inventory orb with an edge surface", () => {
+    const markup = controllerShellMarkup("617042");
+
+    expect(markup).toContain('id="settings"');
+    expect(markup).toContain('id="inventory-edge"');
+    expect(markup).not.toContain('class="controller-header"');
+    expect(markup).not.toContain('id="inventory-orb"');
+    expect(markup).not.toContain('id="connection-label"');
+    expect(markup).not.toContain('class="room-code"');
+  });
+});
 
 function createApp({ motionEnabled = true } = {}) {
   const actions = vi.fn();

@@ -386,11 +386,14 @@ describe("desktop inventory routing", () => {
   it("opens, moves the desktop cursor, equips the hovered enabled item, and closes", () => {
     const { app, inventory, ui } = createInventoryApp();
 
-    expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "open" })).toBe(true);
+    expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "open", entryY: 0.25 })).toBe(true);
     expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "move", dx: 12, dy: -4 })).toBe(true);
     expect(app.handlePhoneAction({ action: "inventory-pointer", phase: "commit" })).toBe(true);
 
-    expect(ui.setInventory).toHaveBeenCalledWith(expect.objectContaining({ items: [{ id: "spare-fuse", enabled: true }] }));
+    expect(ui.setInventory).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [{ id: "spare-fuse", enabled: true }] }),
+      { entryEdge: "right", entryY: 0.25 }
+    );
     expect(ui.moveInventoryCursor).toHaveBeenCalledWith(12, -4);
     expect(inventory.snapshot().equippedId).toBe("spare-fuse");
     expect(inventory.snapshot().hoveredId).toBeNull();
@@ -1474,9 +1477,12 @@ describe("desktop door-defense UI", () => {
       items: [{ id: "spare-fuse", enabled: true }],
       equippedId: "spare-fuse",
       hoveredId: null,
-    });
+    }, { entryEdge: "right", entryY: 0.5 });
     expect(items.innerHTML).toContain('data-inventory-id="spare-fuse"');
-    expect(ui.inventoryItemAtCursor()).toBe("spare-fuse");
+    expect(ui.inventoryItemAtCursor()).toBeNull();
+    expect(cursor.style.transform).toBe("translate3d(275px, 36px, 0)");
+
+    expect(ui.moveInventoryCursor(-135, 0)).toBe("spare-fuse");
 
     expect(ui.moveInventoryCursor(999, 999)).toBeNull();
     expect(cursor.style.transform).toBe("translate3d(275px, 67px, 0)");

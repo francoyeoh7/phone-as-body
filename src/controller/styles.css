@@ -48,57 +48,6 @@ button {
   user-select: none;
 }
 
-.controller-header {
-  position: absolute;
-  z-index: 2;
-  top: max(14px, env(safe-area-inset-top));
-  right: 78px;
-  left: 78px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 42px;
-  color: #a8aaa3;
-  font-size: 12px;
-  text-transform: uppercase;
-  pointer-events: none;
-}
-
-.connection-state {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.connection-state svg {
-  width: 15px;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #ce9c4c;
-  box-shadow: 0 0 0 4px rgba(206, 156, 76, 0.1);
-}
-
-.connection-state[data-status="joined"] .status-dot {
-  background: #89b174;
-  box-shadow: 0 0 0 4px rgba(137, 177, 116, 0.12);
-}
-
-.connection-state[data-status="replaced"] .status-dot,
-.connection-state[data-status="session-ended"] .status-dot,
-.connection-state[data-status="connect-error"] .status-dot {
-  background: #c25e54;
-}
-
-.room-code {
-  color: #e8e6dc;
-  font: 600 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 2px;
-}
-
 .play-surface {
   position: relative;
   min-height: 0;
@@ -106,31 +55,13 @@ button {
   touch-action: none;
 }
 
-.play-surface::before {
-  position: absolute;
-  z-index: 3;
-  top: 18px;
-  left: 68px;
-  width: 8px;
-  height: 8px;
-  border: 1px solid rgba(168, 170, 163, 0.55);
-  border-radius: 50%;
-  background: rgba(18, 21, 19, 0.75);
-  content: "";
-}
-
-.play-surface[data-hand="starting"]::before,
-.play-surface[data-hand="calibrating"]::before { border-color: #ce9c4c; }
-.play-surface[data-hand="tracked"]::before { border-color: #89b174; background: #89b174; }
-.play-surface[data-hand="lost"]::before,
-.play-surface[data-hand="fallback"]::before { border-color: #c25e54; }
-
 .play-surface > * {
   pointer-events: none;
 }
 
 .play-surface .utility-controls,
-.play-surface .utility-controls button {
+.play-surface .utility-controls button,
+.play-surface .inventory-edge {
   pointer-events: auto;
 }
 
@@ -154,6 +85,7 @@ button {
   color: #d6d8d0;
   background: rgba(15, 18, 17, 0.9);
   touch-action: none;
+  transition: color 100ms ease, border-color 100ms ease, background 100ms ease, transform 100ms ease, box-shadow 100ms ease;
 }
 
 .voice-hold svg {
@@ -161,14 +93,23 @@ button {
   height: 27px;
 }
 
-.voice-hold[data-active="true"] {
+.voice-hold[data-state="pressed"],
+.voice-hold[data-state="recording"] {
   color: #f0d99c;
   border-color: rgba(210, 173, 99, 0.78);
   background: rgba(54, 42, 23, 0.94);
+  transform: scale(0.985);
+  box-shadow: inset 0 0 0 2px rgba(210, 173, 99, 0.12);
 }
 
-.voice-hold:active {
-  transform: none;
+.voice-hold[data-state="recording"] svg {
+  animation: voice-recording-pulse 900ms ease-in-out infinite alternate;
+}
+
+.voice-hold[data-state="error"] {
+  color: #f1c0bb;
+  border-color: rgba(194, 94, 84, 0.82);
+  background: rgba(58, 27, 25, 0.94);
 }
 
 .utility-controls {
@@ -180,11 +121,14 @@ button {
   gap: 10px;
 }
 
-.inventory-orb {
-  width: 52px;
-  height: 52px;
+.inventory-edge {
+  position: fixed;
+  z-index: 4;
+  top: calc(max(14px, env(safe-area-inset-top)) + 62px);
+  right: 0;
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + clamp(68px, 12dvh, 96px) + 10px);
+  width: max(24px, env(safe-area-inset-right));
   touch-action: none;
-  will-change: transform;
 }
 
 .motion-diagnostics {
@@ -645,11 +589,6 @@ button {
     padding-bottom: max(6px, env(safe-area-inset-bottom));
   }
 
-  .controller-header {
-    top: max(6px, env(safe-area-inset-top));
-    min-height: 36px;
-  }
-
   .utility-controls {
     top: 8px;
   }
@@ -674,6 +613,11 @@ button {
   .found-phone-content {
     padding-block: 16px;
   }
+}
+
+@keyframes voice-recording-pulse {
+  from { opacity: 0.72; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1.08); }
 }
 
 @media (prefers-reduced-motion: reduce) {

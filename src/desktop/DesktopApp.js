@@ -359,11 +359,11 @@ export class DesktopApp {
     );
   }
 
-  handleInventoryPointer({ phase, dx, dy } = {}) {
+  handleInventoryPointer({ phase, dx, dy, entryY } = {}) {
     if (phase === "open") {
       if (!this.canOpenInventory()) return false;
       this.inventoryOpen = true;
-      this.ui?.setInventory?.(this.inventory.snapshot());
+      this.ui?.setInventory?.(this.inventory.snapshot(), { entryEdge: "right", entryY });
       this.inventory.setHovered(this.ui?.inventoryItemAtCursor?.() ?? null);
       return true;
     }

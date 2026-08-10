@@ -3,10 +3,11 @@ import { clampJoystickPoint, normalizeJoystickWithDeadZone } from "../shared/joy
 const TAP_MAX_DISTANCE = 10;
 const HOLD_TO_ENGAGE_MS = 180;
 const DEFAULT_DRAG_THRESHOLD_PX = 14;
-const CROUCH_ENTRY_MS = 280;
-const CROUCH_MIN_DOWN_PX = 48;
-const CROUCH_MAX_HORIZONTAL_RATIO = 0.65;
-const CROUCH_HOLD_MS = 180;
+const CROUCH_ENTRY_MS = 240;
+const CROUCH_MIN_DOWN_PX = 64;
+const CROUCH_MAX_HORIZONTAL_RATIO = 0.55;
+const STAND_EXIT_MS = 220;
+const STAND_MIN_UP_PX = 72;
 
 export class VirtualJoystick {
   constructor(element, {
@@ -18,6 +19,7 @@ export class VirtualJoystick {
     canStart = () => true,
     onReset,
     isBottomPoint = () => false,
+    isCrouching = () => false,
     onCrouchChange,
     clock = () => performance.now(),
     dragThreshold = DEFAULT_DRAG_THRESHOLD_PX,
@@ -32,6 +34,7 @@ export class VirtualJoystick {
     this.canStart = canStart;
     this.onReset = onReset;
     this.isBottomPoint = isBottomPoint;
+    this.isCrouching = isCrouching;
     this.onCrouchChange = onCrouchChange;
     this.clock = clock;
     const fallbackDragThreshold = Math.min(DEFAULT_DRAG_THRESHOLD_PX, this.radius - 1);
@@ -52,9 +55,8 @@ export class VirtualJoystick {
     this.multiTouch = false;
     this.tapCancelled = false;
     this.holdTimer = null;
-    this.crouchTimer = null;
-    this.crouchGeneration = 0;
-    this.crouching = false;
+    this.crouchCommitted = false;
+    this.startedCrouched = false;
     this.startedInBottomRegion = false;
     this.lastPoint = null;
     this.base = element.querySelector(".joystick-base");
@@ -93,7 +95,8 @@ export class VirtualJoystick {
     this.startedAt = this.getEventTime();
     this.multiTouch = false;
     this.tapCancelled = false;
-    this.crouching = false;
+    this.crouchCommitted = false;
+    this.startedCrouched = Boolean(this.isCrouching?.());
     this.startedInBottomRegion = this.isBottomPoint(this.point(event));
     this.lastPoint = { x: event.clientX, y: event.clientY };
     this.element.setPointerCapture?.(event.pointerId);
@@ -109,7 +112,7 @@ export class VirtualJoystick {
     if (event.pointerId !== this.pointerId) return;
     event.preventDefault();
     this.lastPoint = { x: event.clientX, y: event.clientY };
-    if (this.crouching) return;
+    if (this.crouchCommitted) return;
     const displacement = this.displacement(event);
     if (displacement.distance > TAP_MAX_DISTANCE) this.tapCancelled = true;
     if ((this.mode === "tap-candidate" || this.mode === "observing")
@@ -155,31 +158,15 @@ export class VirtualJoystick {
 
   updateCrouchCandidate(event, displacement) {
     const point = this.point(event);
-    if (this.crouchTimer && !this.isBottomPoint(point)) {
-      clearTimeout(this.crouchTimer);
-      this.crouchTimer = null;
-      return;
-    }
-    if (this.crouchTimer
+    if (this.startedCrouched
       || this.startedInBottomRegion
       || !this.isBottomPoint(point)
       || this.getEventTime() - this.startedAt > CROUCH_ENTRY_MS
       || displacement.dy < CROUCH_MIN_DOWN_PX
       || Math.abs(displacement.dx) > CROUCH_MAX_HORIZONTAL_RATIO * displacement.dy) return;
-
-    const pointerId = this.pointerId;
-    const generation = this.crouchGeneration;
-    this.crouchTimer = setTimeout(() => {
-      this.crouchTimer = null;
-      if (generation !== this.crouchGeneration
-        || pointerId !== this.pointerId
-        || this.startedInBottomRegion
-        || !this.lastPoint
-        || !this.isBottomPoint(this.lastPoint)) return;
-      this.crouching = true;
-      this.onChange?.({ x: 0, y: 0 });
-      this.onCrouchChange?.(true);
-    }, CROUCH_HOLD_MS);
+    this.crouchCommitted = true;
+    this.onChange?.({ x: 0, y: 0 });
+    this.onCrouchChange?.(true);
   }
 
   handleEnd(event) {
@@ -188,17 +175,29 @@ export class VirtualJoystick {
     const mode = this.mode;
     const duration = this.getEventTime() - this.startedAt;
     const displacement = event ? this.displacement(event) : { distance: Infinity };
+    const standGesture = this.startedCrouched
+      && duration <= STAND_EXIT_MS
+      && displacement.dy <= -STAND_MIN_UP_PX
+      && Math.abs(displacement.dx) <= CROUCH_MAX_HORIZONTAL_RATIO * -displacement.dy;
     const canTap = mode === "tap-candidate"
       && !this.multiTouch
       && !this.tapCancelled
       && duration < HOLD_TO_ENGAGE_MS
       && displacement.distance <= TAP_MAX_DISTANCE;
+    if (standGesture) {
+      this.onChange?.({ x: 0, y: 0 });
+      this.onCrouchChange?.(false);
+    }
     this.reset();
     if (canTap) this.onTap?.();
   }
 
   handleCancel(event) {
     if (event?.pointerId !== undefined && event.pointerId !== this.pointerId) return;
+    if (this.crouchCommitted || this.isCrouching?.()) {
+      this.onChange?.({ x: 0, y: 0 });
+      this.onCrouchChange?.(false);
+    }
     this.reset();
   }
 
@@ -222,14 +221,13 @@ export class VirtualJoystick {
   reset() {
     const wasActive = this.pointerId !== null;
     const wasEngaged = this.mode === "observing" || this.mode === "dragging";
-    const wasCrouching = this.crouching;
     const pointerId = this.pointerId;
-    this.crouchGeneration += 1;
     this.pointerId = null;
     this.mode = "idle";
     this.multiTouch = false;
     this.tapCancelled = false;
-    this.crouching = false;
+    this.crouchCommitted = false;
+    this.startedCrouched = false;
     this.startedInBottomRegion = false;
     this.lastPoint = null;
     if (pointerId !== null && this.element.hasPointerCapture?.(pointerId)) {
@@ -237,12 +235,9 @@ export class VirtualJoystick {
     }
     clearTimeout(this.holdTimer);
     this.holdTimer = null;
-    clearTimeout(this.crouchTimer);
-    this.crouchTimer = null;
     this.base.classList.remove("is-active");
     this.thumb.style.transform = "translate3d(0, 0, 0)";
     if (wasActive) this.onChange?.({ x: 0, y: 0 });
-    if (wasCrouching) this.onCrouchChange?.(false);
     if (wasEngaged) this.onEngagementChange?.(false);
     if (wasActive) this.onReset?.(pointerId);
   }

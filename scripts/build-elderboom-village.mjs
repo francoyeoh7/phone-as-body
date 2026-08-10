@@ -8,7 +8,7 @@ import { validateEnvironmentManifest } from "../src/desktop/environment/manifest
 import { ELDERBOOM_V1_CONFIG, assertExpectedSourceHash } from "./environment/elderboom-v1.config.mjs";
 import { collectDocumentReferences, nodeWorldBounds, walkNodeWorldTransforms } from "./environment/glb-graph.mjs";
 import { readGlbDocument } from "./environment/glb-io.mjs";
-import { optimizeVillageTextures } from "./environment/optimize-village-textures.mjs";
+import { optimizeVillageTextures, VILLAGE_TEXTURE_LIMITS } from "./environment/optimize-village-textures.mjs";
 
 const JSON_CHUNK = 0x4e4f534a;
 const BIN_CHUNK = 0x004e4942;
@@ -156,6 +156,57 @@ function remapMaterial(material, textureMap) {
   for (const [extension, keys] of Object.entries(slots)) {
     for (const key of keys) remapTextureInfo(material.extensions?.[extension]?.[key], textureMap);
   }
+}
+
+const isFactor = (value, expected) => (
+  Array.isArray(value)
+  && value.length === expected.length
+  && value.every((entry, index) => Math.abs(entry - expected[index]) < 1e-6)
+);
+
+export function repairVillageMaterials(materials = []) {
+  const repairs = { landscape: 0, grass: 0, water: 0 };
+  const grassTemplate = materials.find((material) => (
+    /^MI_Grass_Clumps_rbojr_2K_/.test(material?.name ?? "")
+    && material?.pbrMetallicRoughness?.baseColorTexture
+  ));
+
+  for (const material of materials) {
+    const name = material?.name ?? "";
+    const factor = material?.pbrMetallicRoughness?.baseColorFactor;
+    if (name === "LAndscapepaint" && isFactor(factor, [0, 0, 0, 1])) {
+      material.pbrMetallicRoughness = {
+        ...material.pbrMetallicRoughness,
+        baseColorFactor: [0.18, 0.24, 0.12, 1],
+        metallicFactor: 0,
+        roughnessFactor: 1,
+      };
+      repairs.landscape += 1;
+      continue;
+    }
+    if (/^MI_Grass_Clumps_rbojr_2K_/.test(name) && isFactor(factor, [1, 0, 1, 1])) {
+      if (grassTemplate) {
+        const replacement = structuredClone(grassTemplate);
+        Object.assign(material, replacement, { name });
+      } else {
+        material.pbrMetallicRoughness.baseColorFactor = [0.2, 0.36, 0.12, 1];
+      }
+      repairs.grass += 1;
+      continue;
+    }
+    if (/^M_Water_Ocean_Wall_/.test(name) && isFactor(factor, [1, 0, 1, 1])) {
+      material.pbrMetallicRoughness = {
+        ...material.pbrMetallicRoughness,
+        baseColorFactor: [0.08, 0.24, 0.32, 0.72],
+        metallicFactor: 0,
+        roughnessFactor: 0.18,
+      };
+      material.alphaMode = "BLEND";
+      material.doubleSided = true;
+      repairs.water += 1;
+    }
+  }
+  return repairs;
 }
 
 function primitiveTriangles(json, meshIndex) {
@@ -313,6 +364,7 @@ export function buildSubsetDocument(document, selection) {
     remapMaterial(material, textureMap);
     return material;
   });
+  repairVillageMaterials(materials);
   const textures = ordered(references.textures).map((sourceIndex) => {
     const texture = structuredClone(source.textures[sourceIndex]);
     if (texture.source !== undefined) texture.source = mapped(imageMap, texture.source, "image", false);
@@ -513,8 +565,12 @@ function assertPerformanceGates(metrics, artifact, textureMetrics = {}) {
   const maxBytes = 128 * 1024 * 1024;
   if (artifact.bytes > maxBytes) failures.push(`artifact bytes ${artifact.bytes} > ${maxBytes}`);
   if ((textureMetrics.texels ?? 0) > 120_000_000) failures.push(`texture texels ${textureMetrics.texels} > 120000000`);
-  if ((textureMetrics.maxColorDimension ?? 0) > 512) failures.push(`color texture dimension ${textureMetrics.maxColorDimension} > 512`);
-  if ((textureMetrics.maxDataDimension ?? 0) > 256) failures.push(`data texture dimension ${textureMetrics.maxDataDimension} > 256`);
+  if ((textureMetrics.maxColorDimension ?? 0) > VILLAGE_TEXTURE_LIMITS.color) {
+    failures.push(`color texture dimension ${textureMetrics.maxColorDimension} > ${VILLAGE_TEXTURE_LIMITS.color}`);
+  }
+  if ((textureMetrics.maxDataDimension ?? 0) > VILLAGE_TEXTURE_LIMITS.data) {
+    failures.push(`data texture dimension ${textureMetrics.maxDataDimension} > ${VILLAGE_TEXTURE_LIMITS.data}`);
+  }
   if (failures.length > 0) throw new Error(`Village subset performance gates failed: ${failures.join(", ")}`);
 }
 

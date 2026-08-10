@@ -10,6 +10,8 @@ import {
   assertExpectedSourceHash,
   ELDERBOOM_V1_CONFIG,
 } from "../scripts/environment/elderboom-v1.config.mjs";
+import { VILLAGE_TEXTURE_LIMITS } from "../scripts/environment/optimize-village-textures.mjs";
+import { repairVillageMaterials } from "../scripts/build-elderboom-village.mjs";
 import { syntheticDocument, withSyntheticGlb } from "./fixtures/synthetic-glb.js";
 
 describe("bounded GLB intake", () => {
@@ -80,5 +82,59 @@ describe("ElderBoom v1 intake contract", () => {
     expect(() => { config.selection.bounds.min[0] = 0; }).toThrow(TypeError);
     expect(() => assertExpectedSourceHash("BAD", config)).toThrow(/source hash/i);
     expect(assertExpectedSourceHash(config.source.sha256.toLowerCase(), config)).toBe(true);
+  });
+
+  it("keeps the high-quality local village density and texture limits", () => {
+    expect(ELDERBOOM_V1_CONFIG.foliage).toMatchObject({
+      cellSize: 4,
+      maxInstancesPerMeshPerCell: 4,
+    });
+    expect(ELDERBOOM_V1_CONFIG.foliage).not.toHaveProperty("maxInstancesPerMesh");
+    expect(ELDERBOOM_V1_CONFIG.foliage).not.toHaveProperty("maxHighPolyInstancesPerMesh");
+    expect(VILLAGE_TEXTURE_LIMITS).toEqual({ color: 1024, data: 512 });
+  });
+
+  it("repairs Unreal placeholder landscape, grass, and water materials", () => {
+    const grassTemplate = {
+      name: "MI_Grass_Clumps_rbojr_2K_S_Grass_Clumps_rbojr_Var1_lod1",
+      pbrMetallicRoughness: {
+        baseColorTexture: { index: 7, texCoord: 1 },
+        metallicRoughnessTexture: { index: 8, texCoord: 1 },
+      },
+      normalTexture: { index: 9, texCoord: 1 },
+      alphaMode: "MASK",
+      alphaCutoff: 0.3333,
+      doubleSided: true,
+    };
+    const materials = [
+      { name: "LAndscapepaint", pbrMetallicRoughness: { baseColorFactor: [0, 0, 0, 1] } },
+      grassTemplate,
+      {
+        name: "MI_Grass_Clumps_rbojr_2K_S_Grass_Clumps_rbojr_Var1_lod9",
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 1, 1] },
+        alphaMode: "MASK",
+      },
+      {
+        name: "M_Water_Ocean_Wall_400x244",
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 1, 1], roughnessFactor: 0.1 },
+      },
+      { name: "untouched", pbrMetallicRoughness: { baseColorFactor: [0.5, 0.5, 0.5, 1] } },
+    ];
+
+    expect(repairVillageMaterials(materials)).toEqual({ landscape: 1, grass: 1, water: 1 });
+    expect(materials[0].pbrMetallicRoughness.baseColorFactor).toEqual([0.18, 0.24, 0.12, 1]);
+    expect(materials[2].pbrMetallicRoughness).toEqual(grassTemplate.pbrMetallicRoughness);
+    expect(materials[2].normalTexture).toEqual(grassTemplate.normalTexture);
+    expect(materials[2].pbrMetallicRoughness).not.toBe(grassTemplate.pbrMetallicRoughness);
+    expect(materials[3]).toMatchObject({
+      alphaMode: "BLEND",
+      doubleSided: true,
+      pbrMetallicRoughness: {
+        baseColorFactor: [0.08, 0.24, 0.32, 0.72],
+        metallicFactor: 0,
+        roughnessFactor: 0.18,
+      },
+    });
+    expect(materials[4].pbrMetallicRoughness.baseColorFactor).toEqual([0.5, 0.5, 0.5, 1]);
   });
 });

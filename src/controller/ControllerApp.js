@@ -4,10 +4,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Mic,
-  Package,
   RotateCcw,
   Settings,
-  Wifi,
   X,
 } from "lucide";
 import { isRoomCode } from "../shared/protocol.js";
@@ -16,7 +14,7 @@ import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { MediaPipeHandTracker } from "./MediaPipeHandTracker.js";
 import { ControllerSocket } from "./ControllerSocket.js";
 import { FoundPhoneUI } from "./FoundPhoneUI.js";
-import { InventoryOrbController } from "./InventoryOrbController.js";
+import { InventoryEdgeController } from "./InventoryEdgeController.js";
 import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { PointerOwnership } from "./PointerOwnership.js";
@@ -24,7 +22,7 @@ import { VirtualJoystick } from "./VirtualJoystick.js";
 import { VoiceHoldController } from "./VoiceHoldController.js";
 import "./styles.css";
 
-const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, Package, RotateCcw, Settings, Wifi, X };
+const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, RotateCcw, Settings, X };
 
 const defaultSettings = {
   sensitivity: 1,
@@ -54,6 +52,78 @@ function pulse(pattern = 12) {
 
 function zeroViewDelta() {
   return { yaw: 0, pitch: 0 };
+}
+
+export function controllerShellMarkup(_room, settings = defaultSettings) {
+  return `
+    <main class="controller-shell">
+      <section class="play-surface" aria-label="游戏控制器">
+        <div class="utility-controls">
+          <button class="icon-button" id="settings" aria-label="设置"><i data-lucide="settings"></i></button>
+        </div>
+
+        <div class="inventory-edge" id="inventory-edge" aria-hidden="true"></div>
+
+        <aside class="motion-diagnostics" id="motion-diagnostics" aria-hidden="true" hidden>
+          <div class="aim-plot" aria-hidden="true">
+            <span class="plot-axis plot-axis-x"></span>
+            <span class="plot-axis plot-axis-y"></span>
+            <span class="physical-aim-dot"></span>
+            <span class="output-aim-dot"></span>
+          </div>
+        </aside>
+
+        <div class="joystick-base" aria-hidden="true">
+          <div class="joystick-ring"></div><div class="joystick-thumb"></div>
+        </div>
+      </section>
+
+      <button class="voice-hold" id="voice-hold" type="button" aria-label="按住录音" data-active="false" data-state="idle">
+        <i data-lucide="mic"></i>
+      </button>
+
+      <div class="permission-panel" id="permission-panel">
+        <div class="permission-mark"><i data-lucide="rotate-ccw"></i></div>
+        <p class="eyebrow">CORRIDOR 617</p>
+        <h1 id="permission-title">连接电脑</h1>
+        <p id="permission-copy">请从电脑屏幕扫描二维码进入。</p>
+        <button class="primary-button" id="enable-motion" disabled>允许并开始</button>
+      </div>
+
+      <div class="pause-menu" id="settings-menu" hidden>
+        <div class="pause-heading">
+          <div><p class="eyebrow">控制设置</p><h2>设置</h2></div>
+          <button class="icon-button" id="resume" aria-label="关闭设置"><i data-lucide="x"></i></button>
+        </div>
+        <label>体感灵敏度 <output id="sensitivity-value">${settings.sensitivity.toFixed(1)}</output>
+          <input id="sensitivity" type="range" min="0.6" max="1.6" step="0.1" value="${settings.sensitivity}">
+        </label>
+        <label>转向平滑 <output id="smoothing-value">${Math.round(settings.smoothing * 100)}%</output>
+          <input id="smoothing" type="range" min="0" max="1" step="0.01" value="${settings.smoothing}">
+        </label>
+        <button class="secondary-button" id="recenter" type="button"><i data-lucide="crosshair"></i><span>重新校准方向</span></button>
+      </div>
+    </main>
+
+    <section class="found-phone-ui" id="found-phone-ui" aria-label="拾获的手机" hidden>
+      <div class="found-phone-chassis">
+        <div class="found-phone-speaker" aria-hidden="true"></div>
+        <header class="found-phone-header">
+          <span class="found-phone-status">617</span>
+          <span data-phone-page aria-live="polite"></span>
+        </header>
+        <div class="found-phone-content" aria-live="polite">
+          <p class="found-phone-kind">已恢复资料</p>
+          <h2 data-phone-title></h2>
+          <p data-phone-body></p>
+        </div>
+        <footer class="found-phone-footer">
+          <button class="found-phone-nav" data-phone-previous type="button" aria-label="上一页"><i data-lucide="chevron-left"></i></button>
+          <span>向左或向右翻阅</span>
+          <button class="found-phone-nav" data-phone-next type="button" aria-label="下一页"><i data-lucide="chevron-right"></i></button>
+        </footer>
+      </div>
+    </section>`;
 }
 
 export class ControllerApp {
@@ -94,83 +164,7 @@ export class ControllerApp {
   }
 
   mount() {
-    this.root.innerHTML = `
-      <main class="controller-shell">
-        <header class="controller-header">
-          <div class="connection-state" data-status="connecting">
-            <span class="status-dot"></span>
-            <i data-lucide="wifi"></i>
-            <span id="connection-label">正在连接</span>
-          </div>
-          <strong class="room-code">${this.room || "------"}</strong>
-        </header>
-
-        <section class="play-surface" aria-label="游戏控制器">
-          <div class="utility-controls">
-            <button class="icon-button" id="settings" aria-label="设置"><i data-lucide="settings"></i></button>
-            <button class="icon-button inventory-orb" id="inventory-orb" type="button" aria-label="物品栏"><i data-lucide="package"></i></button>
-          </div>
-
-          <aside class="motion-diagnostics" id="motion-diagnostics" aria-label="体感诊断">
-            <div class="aim-plot" aria-hidden="true">
-              <span class="plot-axis plot-axis-x"></span>
-              <span class="plot-axis plot-axis-y"></span>
-              <span class="physical-aim-dot"></span>
-              <span class="output-aim-dot"></span>
-            </div>
-          </aside>
-
-          <div class="joystick-base" aria-hidden="true">
-            <div class="joystick-ring"></div><div class="joystick-thumb"></div>
-          </div>
-        </section>
-
-        <button class="voice-hold" id="voice-hold" type="button" aria-label="按住录音" data-active="false">
-          <i data-lucide="mic"></i>
-        </button>
-
-        <div class="permission-panel" id="permission-panel">
-          <div class="permission-mark"><i data-lucide="rotate-ccw"></i></div>
-          <p class="eyebrow">CORRIDOR 617</p>
-          <h1 id="permission-title">连接电脑</h1>
-          <p id="permission-copy">请从电脑屏幕扫描二维码进入。</p>
-          <button class="primary-button" id="enable-motion" disabled>允许并开始</button>
-        </div>
-
-        <div class="pause-menu" id="settings-menu" hidden>
-          <div class="pause-heading">
-            <div><p class="eyebrow">控制设置</p><h2>设置</h2></div>
-            <button class="icon-button" id="resume" aria-label="关闭设置"><i data-lucide="x"></i></button>
-          </div>
-          <label>体感灵敏度 <output id="sensitivity-value">${this.settings.sensitivity.toFixed(1)}</output>
-            <input id="sensitivity" type="range" min="0.6" max="1.6" step="0.1" value="${this.settings.sensitivity}">
-          </label>
-          <label>转向平滑 <output id="smoothing-value">${Math.round(this.settings.smoothing * 100)}%</output>
-            <input id="smoothing" type="range" min="0" max="1" step="0.01" value="${this.settings.smoothing}">
-          </label>
-          <button class="secondary-button" id="recenter" type="button"><i data-lucide="crosshair"></i><span>重新校准方向</span></button>
-        </div>
-      </main>
-
-      <section class="found-phone-ui" id="found-phone-ui" aria-label="拾获的手机" hidden>
-        <div class="found-phone-chassis">
-          <div class="found-phone-speaker" aria-hidden="true"></div>
-          <header class="found-phone-header">
-            <span class="found-phone-status">617</span>
-            <span data-phone-page aria-live="polite"></span>
-          </header>
-          <div class="found-phone-content" aria-live="polite">
-            <p class="found-phone-kind">已恢复资料</p>
-            <h2 data-phone-title></h2>
-            <p data-phone-body></p>
-          </div>
-          <footer class="found-phone-footer">
-            <button class="found-phone-nav" data-phone-previous type="button" aria-label="上一页"><i data-lucide="chevron-left"></i></button>
-            <span>向左或向右翻阅</span>
-            <button class="found-phone-nav" data-phone-next type="button" aria-label="下一页"><i data-lucide="chevron-right"></i></button>
-          </footer>
-        </div>
-      </section>`;
+    this.root.innerHTML = controllerShellMarkup(this.room, this.settings);
 
     createIcons({ icons, attrs: { "stroke-width": 1.8 } });
     this.cacheElements();
@@ -192,7 +186,7 @@ export class ControllerApp {
     this.enableMotion = this.root.querySelector("#enable-motion");
     this.pauseMenu = this.root.querySelector("#settings-menu");
     this.playSurface = this.root.querySelector(".play-surface");
-    this.inventoryRegion = this.root.querySelector("#inventory-orb");
+    this.inventoryRegion = this.root.querySelector("#inventory-edge");
     this.voiceRegion = this.root.querySelector("#voice-hold");
     this.foundPhoneUI = new FoundPhoneUI(this.root.querySelector("#found-phone-ui"));
     this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
@@ -213,6 +207,7 @@ export class ControllerApp {
       canStart: (event) => this.claimGameplayPointer(event),
       onReset: (pointerId) => this.releaseGameplayPointer(pointerId),
       isBottomPoint: (point) => this.isBottomPoint(point),
+      isCrouching: () => this.crouching,
       onCrouchChange: (active) => this.handleCrouchChange(active),
       onTap: () => {
         pulse();
@@ -240,6 +235,7 @@ export class ControllerApp {
       ownership: this.pointerOwners,
       isInRegion: (event) => this.isVoicePoint(event),
       onActive: (active) => this.handleVoiceActive(active),
+      onPressState: (state) => this.handleVoicePressState(state),
       onClip: (clip) => this.handleVoiceClip(clip),
     });
     this.voicePointerHandlers = {
@@ -253,21 +249,21 @@ export class ControllerApp {
     for (const [type, handler] of Object.entries(this.voicePointerHandlers)) {
       this.voiceRegion.addEventListener(type, handler);
     }
-    this.inventoryOrb = new InventoryOrbController(this.inventoryRegion, {
+    this.inventoryEdge = new InventoryEdgeController(this.inventoryRegion, {
       ownership: this.pointerOwners,
       canOpen: () => this.canOpenInventory(),
       onClaim: () => this.handleInventoryClaim(),
-      onOpen: () => this.sendInventoryPointer("open"),
+      onOpen: (detail) => this.sendInventoryPointer("open", detail),
       onMove: (delta) => this.sendInventoryPointer("move", delta),
       onCommit: () => this.sendInventoryPointer("commit"),
       onCancel: () => this.sendInventoryPointer("cancel"),
     });
     this.inventoryPointerHandlers = {
-      pointerdown: (event) => this.inventoryOrb.pointerDown(event),
-      pointermove: (event) => this.inventoryOrb.pointerMove(event),
-      pointerup: (event) => this.inventoryOrb.pointerUp(event),
-      pointercancel: (event) => this.inventoryOrb.pointerCancel(event),
-      lostpointercapture: (event) => this.inventoryOrb.pointerCancel(event),
+      pointerdown: (event) => this.inventoryEdge.pointerDown(event),
+      pointermove: (event) => this.inventoryEdge.pointerMove(event),
+      pointerup: (event) => this.inventoryEdge.pointerUp(event),
+      pointercancel: (event) => this.inventoryEdge.pointerCancel(event),
+      lostpointercapture: (event) => this.inventoryEdge.pointerCancel(event),
     };
     for (const [type, handler] of Object.entries(this.inventoryPointerHandlers)) {
       this.inventoryRegion.addEventListener(type, handler);
@@ -314,7 +310,7 @@ export class ControllerApp {
       "invalid-room": "房间码无效",
     };
     this.connectionState = state;
-    this.status.dataset.status = state;
+    if (this.status) this.status.dataset.status = state;
     if (state === "joined" && this.foreground && !this.paused && !this.requiresContinue && !this.destroyed) {
       this.hapticsActive = true;
     } else if (state !== "joined") {
@@ -327,7 +323,7 @@ export class ControllerApp {
       this.cameraMotion?.setMode({ mode: "pulse", context: null, baseline: "fresh" });
       this.cameraMotion?.setFocused(false);
     }
-    this.connectionLabel.textContent = labels[state] ?? "等待连接";
+    if (this.connectionLabel) this.connectionLabel.textContent = labels[state] ?? "等待连接";
     if (state === "joined") {
       this.permissionTitle.textContent = "启用手机控制";
       this.permissionCopy.textContent = "需要动作与后置摄像头权限；画面仅在本机分析。";
@@ -574,7 +570,7 @@ export class ControllerApp {
   }
 
   cancelPointerOwnership() {
-    this.inventoryOrb?.cancel();
+    (this.inventoryEdge ?? this.inventoryOrb)?.cancel?.();
     this.voiceHold?.cancel({ discard: true });
     this.gameplayClaimGeneration = null;
     this.pointerOwners?.cancelAll?.();
@@ -631,7 +627,9 @@ export class ControllerApp {
   sendInventoryPointer(phase, delta = {}) {
     const detail = phase === "move"
       ? { phase, dx: delta.dx, dy: delta.dy }
-      : { phase };
+      : phase === "open" && Number.isFinite(delta.entryY)
+        ? { phase, entryY: delta.entryY }
+        : { phase };
     this.socket?.sendAction("inventory-pointer", detail);
   }
 
@@ -647,6 +645,13 @@ export class ControllerApp {
   handleVoiceActive(active) {
     if (this.voiceRegion) this.voiceRegion.dataset.active = String(Boolean(active));
     this.socket?.sendAction("voice-recording", { active: Boolean(active) });
+  }
+
+  handleVoicePressState(state) {
+    if (!this.voiceRegion) return;
+    this.voiceRegion.dataset.state = state;
+    if (state !== "recording") this.voiceRegion.dataset.active = "false";
+    if (state === "pressed") pulse(8);
   }
 
   handleVoiceClip(clip) {

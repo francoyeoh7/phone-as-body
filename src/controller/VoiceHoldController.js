@@ -24,6 +24,7 @@ export class VoiceHoldController {
     ownership,
     isInRegion,
     onActive,
+    onPressState,
     onClip,
   }) {
     this.clock = clock;
@@ -35,6 +36,7 @@ export class VoiceHoldController {
     this.ownership = ownership;
     this.isInRegion = isInRegion;
     this.onActive = onActive;
+    this.onPressState = onPressState;
     this.onClip = onClip;
     this.attempt = null;
     this.generation = 0;
@@ -78,6 +80,7 @@ export class VoiceHoldController {
     });
     this.attempt = attempt;
     attempt.captureTarget?.setPointerCapture?.(event.pointerId);
+    this.onPressState?.("pressed");
     attempt.dwellTimer = this.setTimeout(() => {
       attempt.dwellTimer = null;
       attempt.dwellReady = true;
@@ -182,10 +185,7 @@ export class VoiceHoldController {
 
   rejectAttempt(attempt) {
     if (this.attempt !== attempt) return false;
-    attempt.discard = true;
-    this.detachAttempt(attempt);
-    attempt.resolveCompletion(false);
-    return false;
+    return this.failAttempt(attempt);
   }
 
   commit(attempt) {
@@ -214,13 +214,10 @@ export class VoiceHoldController {
         this.stopRecording(attempt, { discard: false });
       }, MAX_VOICE_DURATION_MS);
       this.onActive?.(true);
+      this.onPressState?.("recording");
       return true;
     } catch {
-      attempt.discard = true;
-      this.detachAttempt(attempt);
-      this.stopTracks(attempt);
-      attempt.resolveCompletion(false);
-      return false;
+      return this.failAttempt(attempt);
     }
   }
 
@@ -271,9 +268,23 @@ export class VoiceHoldController {
     }
   }
 
-  detachAttempt(attempt) {
+  detachAttempt(attempt, { notifyIdle = true } = {}) {
+    if (!attempt.active && notifyIdle) this.onPressState?.("idle");
     this.releaseAttempt(attempt);
     this.clearAttempt(attempt);
+  }
+
+  failAttempt(attempt) {
+    attempt.discard = true;
+    this.onPressState?.("error");
+    this.detachAttempt(attempt, { notifyIdle: false });
+    this.stopTracks(attempt);
+    attempt.resolveCompletion(false);
+    const generation = this.generation;
+    this.setTimeout(() => {
+      if (!this.attempt && this.generation === generation) this.onPressState?.("idle");
+    }, 420);
+    return false;
   }
 
   releaseAttempt(attempt) {
@@ -312,6 +323,7 @@ export class VoiceHoldController {
     if (!attempt.active || attempt.inactiveNotified) return;
     attempt.inactiveNotified = true;
     this.onActive?.(false);
+    this.onPressState?.("idle");
   }
 
   stopTracks(attempt) {

@@ -37,7 +37,7 @@ function createGesture(options = {}) {
   const onChange = vi.fn();
   const onEngagementChange = vi.fn();
   const onTap = vi.fn();
-  const onCrouchChange = vi.fn();
+  const onCrouchChange = options.onCrouchChange ?? vi.fn();
   let now = 0;
   const gesture = new VirtualJoystick(element, {
     onChange,
@@ -288,24 +288,32 @@ describe("full-surface touch gesture", () => {
     gesture.gesture.destroy();
   });
 
-  it("crouches after a fast downward entry into the bottom region and stands on release", () => {
-    const gesture = createGesture({ isBottomPoint: ({ y }) => y >= 180 });
+  it("keeps crouch after the entry pointer is released and exits on a fast upward flick", () => {
+    let crouching = false;
+    const onCrouchChange = vi.fn((active) => { crouching = active; });
+    const gesture = createGesture({
+      isBottomPoint: ({ y }) => y >= 180,
+      isCrouching: () => crouching,
+      onCrouchChange,
+    });
     gesture.dispatch("pointerdown", { pointerId: 1, clientX: 120, clientY: 120, now: 0 });
     gesture.dispatch("pointermove", { pointerId: 1, clientX: 122, clientY: 190, now: 100 });
 
-    vi.advanceTimersByTime(180);
-
     expect(gesture.onCrouchChange).toHaveBeenCalledWith(true);
     expect(gesture.onChange).toHaveBeenLastCalledWith({ x: 0, y: 0 });
-    gesture.dispatch("pointerup", { pointerId: 1, clientX: 122, clientY: 190, now: 280 });
+    gesture.dispatch("pointerup", { pointerId: 1, clientX: 122, clientY: 190, now: 120 });
+    expect(gesture.onCrouchChange).toHaveBeenLastCalledWith(true);
+
+    gesture.dispatch("pointerdown", { pointerId: 2, clientX: 120, clientY: 190, now: 500 });
+    gesture.dispatch("pointerup", { pointerId: 2, clientX: 122, clientY: 110, now: 650 });
     expect(gesture.onCrouchChange).toHaveBeenLastCalledWith(false);
     gesture.gesture.destroy();
   });
 
   it.each([
-    ["moves down only 47px", { x: 120, y: 167, now: 100 }, ({ y }) => y >= 160],
-    ["enters after 280ms", { x: 122, y: 190, now: 281 }, ({ y }) => y >= 180],
-    ["moves diagonally beyond the 0.65 ratio", { x: 166, y: 190, now: 100 }, ({ y }) => y >= 180],
+    ["moves down only 63px", { x: 120, y: 183, now: 100 }, ({ y }) => y >= 180],
+    ["enters after 240ms", { x: 122, y: 190, now: 241 }, ({ y }) => y >= 180],
+    ["moves diagonally beyond the 0.55 ratio", { x: 160, y: 190, now: 100 }, ({ y }) => y >= 180],
     ["starts inside the bottom region", { x: 122, y: 260, now: 100 }, ({ y }) => y >= 180, { y: 190 }],
     ["runs during task fallback", { x: 122, y: 190, now: 100 }, () => false],
   ])("does not crouch when it %s", (_name, move, isBottomPoint, start = { y: 120 }) => {
@@ -313,35 +321,18 @@ describe("full-surface touch gesture", () => {
     gesture.dispatch("pointerdown", { pointerId: 1, clientX: 120, clientY: start.y, now: 0 });
     gesture.dispatch("pointermove", { pointerId: 1, clientX: move.x, clientY: move.y, now: move.now });
 
-    vi.advanceTimersByTime(180);
-
     expect(gesture.onCrouchChange).not.toHaveBeenCalledWith(true);
     gesture.gesture.destroy();
   });
 
-  it("does not crouch until the complete 180ms bottom-region hold elapses", () => {
+  it("keeps ordinary forward and backward drags as locomotion", () => {
     const gesture = createGesture({ isBottomPoint: ({ y }) => y >= 180 });
     gesture.dispatch("pointerdown", { pointerId: 1, clientX: 120, clientY: 120, now: 0 });
-    gesture.dispatch("pointermove", { pointerId: 1, clientX: 122, clientY: 190, now: 100 });
-
-    vi.advanceTimersByTime(179);
-
-    expect(gesture.onCrouchChange).not.toHaveBeenCalledWith(true);
-    vi.advanceTimersByTime(1);
-    expect(gesture.onCrouchChange).toHaveBeenCalledWith(true);
-    gesture.gesture.destroy();
-  });
-
-  it("abandons crouch when the pointer leaves the bottom region before the hold completes", () => {
-    const gesture = createGesture({ isBottomPoint: ({ y }) => y >= 180 });
-    gesture.dispatch("pointerdown", { pointerId: 1, clientX: 120, clientY: 120, now: 0 });
-    gesture.dispatch("pointermove", { pointerId: 1, clientX: 122, clientY: 190, now: 100 });
-    vi.advanceTimersByTime(100);
-    gesture.dispatch("pointermove", { pointerId: 1, clientX: 122, clientY: 170, now: 200 });
-
-    vi.advanceTimersByTime(180);
+    gesture.dispatch("pointermove", { pointerId: 1, clientX: 120, clientY: 190, now: 260 });
+    gesture.dispatch("pointerup", { pointerId: 1, clientX: 120, clientY: 190, now: 400 });
 
     expect(gesture.onCrouchChange).not.toHaveBeenCalledWith(true);
+    expect(gesture.onChange).toHaveBeenCalledWith(expect.objectContaining({ y: expect.any(Number) }));
     gesture.gesture.destroy();
   });
 
@@ -360,7 +351,6 @@ describe("full-surface touch gesture", () => {
     const gesture = createGesture({ isBottomPoint: ({ y }) => y >= 180 });
     gesture.dispatch("pointerdown", { pointerId: 1, clientX: 120, clientY: 120, now: 0 });
     gesture.dispatch("pointermove", { pointerId: 1, clientX: 122, clientY: 190, now: 100 });
-    vi.advanceTimersByTime(180);
     gesture.dispatch("pointercancel", { pointerId: 1, clientX: 122, clientY: 190, now: 280 });
     gesture.dispatch("lostpointercapture", { pointerId: 1, now: 281 });
 
@@ -368,7 +358,6 @@ describe("full-surface touch gesture", () => {
     expect(gesture.onCrouchChange).toHaveBeenLastCalledWith(false);
 
     gesture.dispatch("pointerdown", { pointerId: 2, clientX: 120, clientY: 120, now: 300 });
-    gesture.dispatch("pointermove", { pointerId: 2, clientX: 122, clientY: 190, now: 400 });
     gesture.gesture.reset();
     vi.advanceTimersByTime(180);
 

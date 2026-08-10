@@ -103,6 +103,7 @@ function createHarness({ permission, chunks, isInRegion, recorderOptions, Blob: 
     release: vi.fn(() => true),
   };
   const onActive = vi.fn();
+  const onPressState = vi.fn();
   const onClip = vi.fn();
   const controller = new VoiceHoldController({
     clock: clock.now,
@@ -114,9 +115,10 @@ function createHarness({ permission, chunks, isInRegion, recorderOptions, Blob: 
     ownership,
     isInRegion: isInRegion ?? ((event) => event.clientY >= 700),
     onActive,
+    onPressState,
     onClip,
   });
-  return { clock, controller, getUserMedia, MediaRecorder, ownership, onActive, onClip, ...media };
+  return { clock, controller, getUserMedia, MediaRecorder, ownership, onActive, onPressState, onClip, ...media };
 }
 
 async function beginRecording(harness, event = pointer(7, 100, 800)) {
@@ -127,6 +129,38 @@ async function beginRecording(harness, event = pointer(7, 100, 800)) {
 }
 
 describe("VoiceHoldController", () => {
+  it("shows immediate press feedback before microphone permission and recording dwell resolve", () => {
+    const pending = deferred();
+    const harness = createHarness({ permission: pending.promise });
+
+    harness.controller.pointerDown(pointer(7, 100, 800));
+
+    expect(harness.onPressState).toHaveBeenCalledExactlyOnceWith("pressed");
+    expect(harness.onActive).not.toHaveBeenCalled();
+  });
+
+  it("returns the press state to idle when a short press is released", async () => {
+    const harness = createHarness();
+
+    harness.controller.pointerDown(pointer(7, 100, 800));
+    await harness.controller.pointerUp(pointer(7, 100, 800));
+
+    expect(harness.onPressState).toHaveBeenLastCalledWith("idle");
+  });
+
+  it("shows a temporary error state when microphone permission is denied", async () => {
+    const harness = createHarness({ permission: Promise.reject(new Error("denied")) });
+
+    harness.controller.pointerDown(pointer(7, 100, 800));
+    await harness.controller.flushPendingPermission();
+
+    expect(harness.onPressState).toHaveBeenLastCalledWith("error");
+    harness.clock.advance(419);
+    expect(harness.onPressState).toHaveBeenLastCalledWith("error");
+    harness.clock.advance(1);
+    expect(harness.onPressState).toHaveBeenLastCalledWith("idle");
+  });
+
   it("requests audio on pointer down and commits after permission and the 420ms dwell", async () => {
     const pending = deferred();
     const harness = createHarness({ permission: pending.promise });

@@ -150,7 +150,11 @@ describe("voice and inventory transient protocol", () => {
 
   it("bounds inventory pointer movement and rejects deltas for other phases", () => {
     expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "open" })).toBe(true);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "open", entryY: 0.25 })).toBe(true);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "open", entryY: -0.01 })).toBe(false);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "open", entryY: 1.01 })).toBe(false);
     expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "move", dx: 12, dy: -4 })).toBe(true);
+    expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "move", dx: 12, dy: -4, entryY: 0.5 })).toBe(false);
     expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "move", dx: 999, dy: 0 })).toBe(false);
     expect(protocol.isControllerAction({ action: "inventory-pointer", phase: "commit", dx: 0, dy: 0 })).toBe(false);
   });

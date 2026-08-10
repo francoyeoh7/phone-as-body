@@ -75,6 +75,18 @@ describe("ElderBoom village asset verifier", () => {
       instances: 2,
     });
     expect(() => assertPerformanceGates({ ...metrics, texels: 100, maxColorDimension: 1, maxDataDimension: 1 }, 64 * 1024 * 1024)).not.toThrow();
+    expect(() => assertPerformanceGates({
+      ...metrics,
+      texels: 100,
+      maxColorDimension: 1024,
+      maxDataDimension: 512,
+    }, 64 * 1024 * 1024)).not.toThrow();
+    expect(() => assertPerformanceGates({
+      ...metrics,
+      texels: 100,
+      maxColorDimension: 1025,
+      maxDataDimension: 512,
+    }, 64 * 1024 * 1024)).toThrow(/color texture dimension/i);
     expect(() => assertPerformanceGates({ ...metrics, drawCalls: 450, texels: 100, maxColorDimension: 1, maxDataDimension: 1 }, 64 * 1024 * 1024)).toThrow(/draw calls/i);
   });
 

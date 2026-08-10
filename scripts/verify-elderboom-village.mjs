@@ -10,6 +10,7 @@ import { buildSubsetDocument, selectSpatialNodes } from "./build-elderboom-villa
 import { ELDERBOOM_V1_CONFIG } from "./environment/elderboom-v1.config.mjs";
 import { assertClosedDocument, collectDocumentReferences } from "./environment/glb-graph.mjs";
 import { readGlbDocument } from "./environment/glb-io.mjs";
+import { VILLAGE_TEXTURE_LIMITS } from "./environment/optimize-village-textures.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -29,8 +30,8 @@ const DEFAULT_GATES = Object.freeze({
   minArtifactBytes: 1,
   maxArtifactBytes: 128 * 1024 * 1024,
   maxTextureTexels: 120_000_000,
-  maxColorDimension: 512,
-  maxDataDimension: 256,
+  maxColorDimension: VILLAGE_TEXTURE_LIMITS.color,
+  maxDataDimension: VILLAGE_TEXTURE_LIMITS.data,
 });
 
 function invariant(condition, message) {

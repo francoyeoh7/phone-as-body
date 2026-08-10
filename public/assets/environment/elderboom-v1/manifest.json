@@ -8,8 +8,8 @@
       "url": "/assets/environment/elderboom-v1/chunks/western-core.glb",
       "required": true,
       "artifact": {
-        "bytes": 50434620,
-        "sha256": "7670DE780AB0BBE9701B58DB9040835247CFE698C6021F2CCFFCD1FD6C302C09"
+        "bytes": 67236796,
+        "sha256": "B2EEC61841721CCA59B42391D2994F523A7AF41E0C5DAADC65CC3323F45F3DA4"
       },
       "bounds": {
         "min": [

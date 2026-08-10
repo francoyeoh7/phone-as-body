@@ -20,6 +20,8 @@ const DATA_SLOTS = new Set([
   "anisotropyTexture",
 ]);
 
+export const VILLAGE_TEXTURE_LIMITS = Object.freeze({ color: 1024, data: 512 });
+
 async function readAt(handle, position, length) {
   const buffer = Buffer.alloc(length);
   let offset = 0;
@@ -138,7 +140,13 @@ export async function inspectRuntimeTextures(document) {
   return { images: document.json.images?.length ?? 0, texels, colorTexels, dataTexels, maxColorDimension, maxDataDimension, mimeTypes: [...mimeTypes].sort() };
 }
 
-export async function optimizeVillageTextures({ inputPath, outputPath, colorMax = 512, dataMax = 256, quality = 82 } = {}) {
+export async function optimizeVillageTextures({
+  inputPath,
+  outputPath,
+  colorMax = VILLAGE_TEXTURE_LIMITS.color,
+  dataMax = VILLAGE_TEXTURE_LIMITS.data,
+  quality = 82,
+} = {}) {
   const document = await readGlbDocument(inputPath);
   document.path = inputPath;
   const input = await open(inputPath, "r");
