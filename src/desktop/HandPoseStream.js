@@ -56,6 +56,28 @@ function slerp(a, b, alpha) {
 
 const WRIST_FIELDS = ["center", "relativeScale", "velocity", "depth", "palmSpan", "reachProgress"];
 const FINGER_FIELDS = ["curls", "landmarks", "worldLandmarks"];
+const WRIST_CENTER_DEAD_ZONE = 0.006;
+const WRIST_SCALE_DEAD_ZONE = 0.015;
+const WRIST_ANGLE_DEAD_ZONE = 0.02;
+
+function arrayDistance(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return Infinity;
+  return Math.hypot(...a.map((value, index) => value - b[index]));
+}
+
+function quaternionAngle(a, b) {
+  const dot = Math.abs(a.reduce((sum, value, index) => sum + value * b[index], 0));
+  return 2 * Math.acos(clamp(dot, -1, 1));
+}
+
+function wristFromQuaternion(value) {
+  const [x, y, z, w] = canonicalize(value);
+  return {
+    right: [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)],
+    up: [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)],
+    forward: [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)],
+  };
+}
 
 function smoothingAlpha(interval, timeConstant) {
   if (!Number.isFinite(timeConstant) || timeConstant <= 0) return 1;
@@ -132,6 +154,19 @@ export class HandPoseStream {
       ? canonicalize(frame.wristQuaternion) : basisQuaternion(frame.wrist);
     this.gesturePose = clone(target);
     const prior = this.pose;
+    if (prior) {
+      if (arrayDistance(prior.center, target.center) < WRIST_CENTER_DEAD_ZONE) {
+        target.center = clone(prior.center);
+      }
+      if (Number.isFinite(prior.relativeScale) && Number.isFinite(target.relativeScale)
+        && Math.abs(prior.relativeScale - target.relativeScale) < WRIST_SCALE_DEAD_ZONE) {
+        target.relativeScale = prior.relativeScale;
+      }
+      const priorQuaternion = prior.wristQuaternion ?? basisQuaternion(prior.wrist);
+      if (quaternionAngle(priorQuaternion, target.wristQuaternion) < WRIST_ANGLE_DEAD_ZONE) {
+        target.wristQuaternion = clone(priorQuaternion);
+      }
+    }
     const interval = prior && Number.isFinite(this.previousAcceptedAt)
       ? Math.max(0, frame.receivedAt - this.previousAcceptedAt) : 0;
     const wristTimeConstant = adaptiveWristTimeConstant(frame, this.options.wristTimeConstantMs);
@@ -149,6 +184,7 @@ export class HandPoseStream {
       }
       this.pose.wristQuaternion = slerp(prior.wristQuaternion ?? basisQuaternion(prior.wrist), target.wristQuaternion, wristAlpha);
     }
+    this.pose.wrist = wristFromQuaternion(this.pose.wristQuaternion);
     this.lastStableAt = frame.receivedAt;
   }
 

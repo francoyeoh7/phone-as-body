@@ -277,6 +277,7 @@ describe("FirstPersonHand", () => {
         arm: shoulder.distanceTo(wrist),
         palm: wrist.distanceTo(palm),
         wristOffset: wrist.distanceTo(root),
+        shoulder,
       };
     };
 
@@ -302,6 +303,8 @@ describe("FirstPersonHand", () => {
     expect(longArm.palm).toBeCloseTo(shortArm.palm, 5);
     expect(shortArm.wristOffset).toBeLessThan(1e-4);
     expect(longArm.wristOffset).toBeLessThan(1e-4);
+    expect(shortArm.shoulder.distanceTo(longArm.shoulder)).toBeLessThan(0.01);
+    expect(longArm.shoulder.distanceTo(new THREE.Vector3(-0.72, -0.62, -0.74))).toBeLessThan(0.01);
   });
 
   it("drives every real MCP and the thumb root into the authored fist for curledHand", async () => {

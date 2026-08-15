@@ -31,6 +31,43 @@ describe("HandPoseStream", () => {
     expect(stream.sample(170).pose.wristQuaternion[3]).toBeGreaterThan(0);
   });
 
+  it("publishes the smoothed wrist basis instead of the raw camera basis", () => {
+    const stream = new HandPoseStream({ wristTimeConstantMs: 60 });
+    stream.accept(pose({ seq: 1, receivedAt: 0 }));
+    stream.accept(pose({
+      seq: 2,
+      receivedAt: 16,
+      wrist: { right: [0, 1, 0], up: [-1, 0, 0], forward: [0, 0, 1] },
+    }));
+
+    const sampled = stream.sample(16).pose;
+    expect(sampled.wrist.right[0]).toBeGreaterThan(0.5);
+    expect(sampled.wrist.right[1]).toBeGreaterThan(0);
+  });
+
+  it("holds sub-threshold wrist noise while still accepting the tracked frame", () => {
+    const stream = new HandPoseStream();
+    const angle = 0.01;
+    stream.accept(pose({ seq: 1, receivedAt: 0, center: [0.5, 0.5, 0], relativeScale: 1 }));
+    stream.accept(pose({
+      seq: 2,
+      receivedAt: 16,
+      center: [0.503, 0.497, 0.001],
+      relativeScale: 1.01,
+      wrist: {
+        right: [Math.cos(angle), Math.sin(angle), 0],
+        up: [-Math.sin(angle), Math.cos(angle), 0],
+        forward: [0, 0, 1],
+      },
+    }));
+
+    const sampled = stream.sample(16);
+    expect(sampled).toMatchObject({ state: "tracked", fresh: true, seq: 2 });
+    expect(sampled.pose.center).toEqual([0.5, 0.5, 0]);
+    expect(sampled.pose.relativeScale).toBe(1);
+    expect(sampled.pose.wrist.right).toEqual([1, 0, 0]);
+  });
+
   it("rejects right tracked frames without replacing the visual left pose", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0, center: [0.2, 0, 0] }));

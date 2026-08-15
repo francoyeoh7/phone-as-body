@@ -281,6 +281,18 @@ function createAuthoredFingerPoses(animations, suffix, restQuaternions) {
   return result;
 }
 
+const OPEN_FINGER_SPREAD_DEGREES = Object.freeze({
+  thumb01: 12,
+  f_index01: 8,
+  f_middle01: 2,
+  f_ring01: -4,
+  f_pinky01: -10,
+});
+
+function authoredFingerCurl(value) {
+  return clamp((value - 0.05) / 0.55, 0, 1);
+}
+
 /** Retargets the authored forearm, wrist, and fingers from a tracked left hand. */
 export function createArmRigAdapter(root, bones, side = "right", animations = []) {
   const suffix = side === "left" ? "L" : "R";
@@ -379,6 +391,11 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
       const handOffset = restShoulderPosition.clone().add(
         restHandPosition.clone().sub(restShoulderPosition).multiplyScalar(armLengthScale),
       );
+      const rootPosition = hasEndpoints
+        ? shoulderTarget.clone().sub(
+          endpointDirection.clone().normalize().multiplyScalar(restArmLength * scale * armLengthScale),
+        )
+        : wristTarget;
       for (const bone of armChain) {
         transforms[bone.name] = {
           position: restArmChainPositions.get(bone).clone().multiplyScalar(armLengthScale),
@@ -393,14 +410,22 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         const child = bone?.children?.[0];
         const authoredPose = authoredFingerPoses[name];
         if (bone && authoredPose && authoredPose.finger !== null) {
+          const baseName = name.slice(0, -this.suffix.length);
+          const spreadDegrees = OPEN_FINGER_SPREAD_DEGREES[baseName] ?? 0;
+          const isFingerRoot = Object.hasOwn(OPEN_FINGER_SPREAD_DEGREES, baseName);
           const trackedCurl = entryData[source.start]?.curl;
-          const curl = clamp(
-            Number.isFinite(trackedCurl) ? trackedCurl : pose?.curls?.[authoredPose.finger] ?? 0,
-            0,
-            1,
+          const curl = isFingerRoot
+            ? authoredFingerCurl(pose?.curls?.[authoredPose.finger] ?? 0)
+            : clamp(Number.isFinite(trackedCurl) ? trackedCurl : pose?.curls?.[authoredPose.finger] ?? 0, 0, 1);
+          const spread = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 0, 1),
+            THREE.MathUtils.degToRad(spreadDegrees * (1 - curl)),
           );
           transforms[name] = {
-            quaternion: authoredPose.open.clone().slerp(authoredPose.closed, curl).normalize(),
+            quaternion: authoredPose.open.clone()
+              .slerp(authoredPose.closed, curl)
+              .multiply(spread)
+              .normalize(),
           };
           continue;
         }
@@ -433,6 +458,7 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         palmScale: scale,
         armLengthScale,
         handOffset,
+        rootPosition,
       };
     },
   };

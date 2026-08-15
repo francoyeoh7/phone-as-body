@@ -327,7 +327,7 @@ export class FirstPersonHand {
     // The authored hand's curled finger envelope ends around local X=0.055.
     // Keep equipment just outside that surface while centering it through the
     // palm height, so the fingers visually wrap beside it without intersecting.
-    this.heldSocket.position.set(0.099, 0.057, 0.006);
+    this.heldSocket.position.set(0.1, 0.057, 0.006);
     this.heldGrip = new THREE.Group();
     this.heldGrip.name = "left-palm-grip";
     this.heldGrip.visible = false;
@@ -571,12 +571,13 @@ export class FirstPersonHand {
     const palmQ = finiteQuaternion(mappedRootQuaternion)
       ? mappedRootQuaternion
       : mappedRootQuaternion ? this.root.quaternion.clone() : quaternionFromBasis(pose.wrist);
+    const rootTarget = finiteVector3(mapped?.rootPosition) ? mapped.rootPosition : desired;
     if (!this.poseInitialized) {
-      this.root.position.copy(desired);
+      this.root.position.copy(rootTarget);
       this.root.quaternion.copy(palmQ);
       this.poseInitialized = true;
     } else {
-      this.root.position.lerp(desired, dampAlpha(seconds, 0.045));
+      this.root.position.lerp(rootTarget, dampAlpha(seconds, 0.045));
       this.root.quaternion.slerp(palmQ, dampAlpha(seconds, 0.045));
     }
 

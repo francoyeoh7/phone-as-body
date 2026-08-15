@@ -129,7 +129,7 @@ describe("hierarchical arm rig adapter", () => {
     expect(longArm.transforms.palm02L?.position).toBeUndefined();
   });
 
-  it("blends authored finger poses from each MediaPipe curl without breaking the rig", () => {
+  it("amplifies whole-finger curl at the MCP and retains open-hand spread", () => {
     const { root, bones } = makeArmRig();
     const open = new THREE.Quaternion();
     const closed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
@@ -151,7 +151,14 @@ describe("hierarchical arm rig adapter", () => {
       relativeScale: 1,
     });
 
-    expect(result.transforms.f_index01L.quaternion.angleTo(open)).toBeCloseTo(Math.PI / 4, 5);
+    const curl = (0.5 - 0.05) / 0.55;
+    const expected = open.clone().slerp(closed, curl).multiply(
+      new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        THREE.MathUtils.degToRad(8 * (1 - curl)),
+      ),
+    );
+    expect(result.transforms.f_index01L.quaternion.angleTo(expected)).toBeLessThan(1e-6);
   });
 
   it("converts MediaPipe camera axes into a matching Three.js palm orientation", () => {
@@ -231,7 +238,7 @@ describe("hierarchical arm rig adapter", () => {
     expect(bones.shoulderR.position.y).toBe(0);
   });
 
-  it("drives adjacent phalanxes from their own tracked bends", () => {
+  it("uses whole-finger curl at the MCP while retaining each distal tracked bend", () => {
     const { root, bones } = makeArmRig();
     const open = new THREE.Quaternion();
     const closed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
@@ -246,7 +253,15 @@ describe("hierarchical arm rig adapter", () => {
       { name: "index-finger-phalanx-intermediate", position: [0, 0.2, 0], curl: 0.85 },
     ], { wrist: { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] }, curls: [0, 0.5, 0, 0, 0] });
 
-    expect(result.transforms.f_index01L.quaternion.angleTo(open)).toBeCloseTo(Math.PI / 2 * 0.15, 5);
-    expect(result.transforms.f_index02L.quaternion.angleTo(open)).toBeCloseTo(Math.PI / 2 * 0.85, 5);
+    const rootCurl = (0.5 - 0.05) / 0.55;
+    const expectedRoot = open.clone().slerp(closed, rootCurl).multiply(
+      new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        THREE.MathUtils.degToRad(8 * (1 - rootCurl)),
+      ),
+    );
+    const expectedIntermediate = open.clone().slerp(closed, 0.85);
+    expect(result.transforms.f_index01L.quaternion.angleTo(expectedRoot)).toBeLessThan(1e-6);
+    expect(result.transforms.f_index02L.quaternion.angleTo(expectedIntermediate)).toBeLessThan(1e-6);
   });
 });
