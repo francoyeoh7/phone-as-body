@@ -37,7 +37,7 @@ const HAND_TRACKED_KEYS = new Set([
   "handConfidence", "trackingConfidence", "landmarks", "worldLandmarks",
   "center", "wrist", "curls", "openness", "grabStrength", "palmFacing",
   "relativeScale", "velocity", "pinchStrength", "reachEligible", "reachProgress",
-  "depth", "palmSpan",
+  "depth", "palmSpan", "inputMirrored",
 ]);
 const HAND_STATUS_KEYS = new Set(["version", "seq", "capturedAt", "modeEpoch", "state", "reason"]);
 
@@ -171,6 +171,7 @@ export function isHandFrame(value) {
     value.handConfidence, value.trackingConfidence, value.openness, value.grabStrength,
     value.pinchStrength, value.reachProgress, value.palmFacing,
   ];
+  if (Object.hasOwn(value, "inputMirrored") && typeof value.inputMirrored !== "boolean") return false;
   return value.handedness === "left"
     ? bounded.every((score) => isFiniteNumber(score) && score >= 0 && score <= 1)
       && isLandmarkArray(value.landmarks)

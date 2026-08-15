@@ -95,7 +95,7 @@ function rotateWorldPoint(point, rotation) {
   }
 }
 
-function palmBasis(worldLandmarks, handedness, inputMirrored) {
+function palmBasisFromWorld(worldLandmarks, flipAcross = false) {
   const upRaw = subtract(worldLandmarks[9], worldLandmarks[0]);
   const acrossPalm = subtract(worldLandmarks[17], worldLandmarks[5]);
   if (length(cross(acrossPalm, upRaw)) < PALM_EPSILON) {
@@ -103,7 +103,7 @@ function palmBasis(worldLandmarks, handedness, inputMirrored) {
   }
   const upSeed = normalize(upRaw, "degenerate palm basis");
   let right = subtract(acrossPalm, scale(upSeed, dot(acrossPalm, upSeed)));
-  if ((handedness === "left") !== inputMirrored) right = scale(right, -1);
+  if (flipAcross) right = scale(right, -1);
   right = normalize(right, "degenerate palm basis");
 
   const forwardRaw = cross(right, upSeed);
@@ -111,6 +111,17 @@ function palmBasis(worldLandmarks, handedness, inputMirrored) {
   const forward = normalize(forwardRaw, "degenerate palm basis");
   const up = normalize(cross(forward, right), "degenerate palm basis");
   return { right, up, forward };
+}
+
+export function derivePhysicalLeftPalmBasis(worldLandmarks) {
+  return palmBasisFromWorld(validateLandmarks(worldLandmarks, "world landmarks"));
+}
+
+function palmBasis(worldLandmarks, handedness, inputMirrored) {
+  if (handedness === "left" && inputMirrored) {
+    return derivePhysicalLeftPalmBasis(worldLandmarks);
+  }
+  return palmBasisFromWorld(worldLandmarks, (handedness === "left") !== inputMirrored);
 }
 
 function jointAngle(first, joint, last) {
@@ -354,7 +365,19 @@ export function createTrackedHandFrame({
     reachEligible: Boolean(reach.eligible),
     reachProgress: clamp(Number(reach.progress) || 0, 0, 1),
   } : {};
-  return { version: 1, seq, capturedAt, modeEpoch, state: "tracked", ...pose, ...reachFeatures };
+  const mirrorFeatures = typeof sample?.inputMirrored === "boolean"
+    ? { inputMirrored: sample.inputMirrored }
+    : {};
+  return {
+    version: 1,
+    seq,
+    capturedAt,
+    modeEpoch,
+    state: "tracked",
+    ...pose,
+    ...reachFeatures,
+    ...mirrorFeatures,
+  };
 }
 
 export function createHandStatusFrame({ seq, capturedAt, modeEpoch, state, reason }) {

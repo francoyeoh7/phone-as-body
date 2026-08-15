@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as handPoseModule from "../src/shared/hand-pose.js";
 import {
   HAND_LANDMARK_COUNT,
   createHandStatusFrame,
@@ -24,7 +25,40 @@ const palmSpan = (sample) => (
   + pointDistance(sample.landmarks[5], sample.landmarks[17])
 ) / 2;
 
+function rotateHalfTurnAroundPalmAxis(worldLandmarks) {
+  const wrist = worldLandmarks[0];
+  const middle = worldLandmarks[9];
+  const axisRaw = [middle.x - wrist.x, middle.y - wrist.y, middle.z - wrist.z];
+  const axisLength = Math.hypot(...axisRaw);
+  const axis = axisRaw.map((value) => value / axisLength);
+  return worldLandmarks.map((point) => {
+    const offset = [point.x - wrist.x, point.y - wrist.y, point.z - wrist.z];
+    const projection = dot(offset, axis);
+    const rotated = axis.map((value, index) => 2 * projection * value - offset[index]);
+    return { x: wrist.x + rotated[0], y: wrist.y + rotated[1], z: wrist.z + rotated[2] };
+  });
+}
+
 describe("hand pose features", () => {
+  it("derives opposite palm normals when a physical left hand turns from palm to dorsum", () => {
+    expect(handPoseModule.derivePhysicalLeftPalmBasis).toBeTypeOf("function");
+    const palmWorld = openHand({ physicalHandedness: "Left", inputMirrored: true }).worldLandmarks;
+    const dorsumWorld = rotateHalfTurnAroundPalmAxis(palmWorld);
+
+    const palm = handPoseModule.derivePhysicalLeftPalmBasis(palmWorld);
+    const dorsum = handPoseModule.derivePhysicalLeftPalmBasis(dorsumWorld);
+
+    expect(dot(palm.forward, dorsum.forward)).toBeLessThan(-0.95);
+    for (const basis of [palm, dorsum]) {
+      expect(length(basis.right)).toBeCloseTo(1, 8);
+      expect(length(basis.up)).toBeCloseTo(1, 8);
+      expect(length(basis.forward)).toBeCloseTo(1, 8);
+      expect(dot(basis.right, basis.up)).toBeCloseTo(0, 8);
+      expect(dot(basis.right, basis.forward)).toBeCloseTo(0, 8);
+      expect(dot(basis.up, basis.forward)).toBeCloseTo(0, 8);
+    }
+  });
+
   it.each([
     [{ videoWidth: 1080, videoHeight: 1920, trackRotation: 0, screenAngle: 0 }, 0],
     [{ videoWidth: 1920, videoHeight: 1080, trackRotation: 0, screenAngle: 90 }, 90],

@@ -1,7 +1,6 @@
 import * as THREE from "three";
 
 const EPSILON = 1e-8;
-const ARM_ENTRY_SWEEP = THREE.MathUtils.degToRad(42);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 
 function normalize(value, fallback = new THREE.Vector3(0, 1, 0)) {
@@ -39,6 +38,42 @@ function displayPoseBasis(pose) {
     up: toThreeCamera(basis.up),
     forward: toThreeCamera(basis.forward),
   };
+}
+
+function frameQuaternion(direction, normalSeed) {
+  const up = normalize(direction, new THREE.Vector3(0, -1, 0));
+  let forward = normalSeed.clone().sub(up.clone().multiplyScalar(normalSeed.dot(up)));
+  if (forward.lengthSq() < EPSILON) {
+    const fallback = Math.abs(up.z) < 0.9
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(1, 0, 0);
+    forward = fallback.sub(up.clone().multiplyScalar(fallback.dot(up)));
+  }
+  forward.normalize();
+  const right = up.clone().cross(forward).normalize();
+  forward = right.clone().cross(up).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(right, up, forward),
+  ).normalize();
+}
+
+function targetForearmDirection(displayBasis, pose) {
+  const center = pose?.center;
+  const hasCenter = Array.isArray(center)
+    && center.length >= 2
+    && Number.isFinite(center[0])
+    && Number.isFinite(center[1]);
+  const tracked = displayBasis.up.clone().negate();
+  if (!hasCenter) return tracked;
+
+  const wristZ = Number.isFinite(center[2]) ? center[2] : 0;
+  const ergonomic = new THREE.Vector3(
+    0.02 - center[0],
+    center[1] - 0.88,
+    wristZ - 0.08,
+  );
+  if (ergonomic.lengthSq() < EPSILON) return tracked;
+  return ergonomic.normalize().lerp(tracked, 0.18).normalize();
 }
 
 function finitePoint(value) {
@@ -246,26 +281,28 @@ function createAuthoredFingerPoses(animations, suffix, restQuaternions) {
   return result;
 }
 
-/**
- * Keeps the forearm on a stable lower-screen entry path while retargeting the
- * wrist basis and blending each finger between the rig's authored poses.
- */
+/** Retargets the authored forearm, wrist, and fingers from a tracked left hand. */
 export function createArmRigAdapter(root, bones, side = "right", animations = []) {
   const suffix = side === "left" ? "L" : "R";
   const otherSuffix = suffix === "L" ? "R" : "L";
   const hand = bones?.[`hand${suffix}`];
+  const upperArm = bones?.[`upper_arm${suffix}`];
+  const forearm = bones?.[`forearm${suffix}`];
   const activeShoulder = bones?.[`shoulder${suffix}`];
   const inactiveShoulder = bones?.[`shoulder${otherSuffix}`];
-  if (!root || !hand || !activeShoulder || !inactiveShoulder) throw new Error("arm rig missing side bones");
-  const armEntryQuaternion = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(0, 0, 1),
-    Math.PI + (side === "left" ? ARM_ENTRY_SWEEP : -ARM_ENTRY_SWEEP),
-  );
+  if (!root || !hand || !upperArm || !forearm || !activeShoulder || !inactiveShoulder) {
+    throw new Error("arm rig missing upper-arm or forearm side bones");
+  }
 
   root.updateMatrixWorld?.(true);
   const restHandPosition = restWorldPosition(hand);
+  const restShoulderPosition = restWorldPosition(activeShoulder);
+  const restArmLength = Math.max(restShoulderPosition.distanceTo(restHandPosition), 0.01);
   const restHandQuaternion = restWorldQuaternion(hand);
   const authoredPalmQuaternion = restPalmQuaternion(bones, suffix, side, restHandQuaternion);
+  const restForearmDirection = restWorldPosition(activeShoulder).sub(restHandPosition).normalize();
+  const restPalmForward = new THREE.Vector3(0, 0, 1).applyQuaternion(authoredPalmQuaternion);
+  const restForearmQuaternion = frameQuaternion(restForearmDirection, restPalmForward);
   const handToPalmQuaternion = restHandQuaternion.clone().invert().multiply(authoredPalmQuaternion).normalize();
   const palmReference = bones?.[`palm02${suffix}`] ?? hand;
   const restPalmSpan = Math.max(restHandPosition.distanceTo(restWorldPosition(palmReference)), 0.02);
@@ -287,11 +324,17 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
     [activeShoulder, activeShoulder.position.clone()],
     [inactiveShoulder, inactiveShoulder.position.clone()],
   ]);
+  const armChain = [upperArm, forearm, hand];
+  const restArmChainPositions = new Map(
+    armChain.map((bone) => [bone, bone.position.clone()]),
+  );
 
   return {
     side,
     suffix,
     restHandPosition,
+    restShoulderPosition,
+    restArmLength,
     restHandQuaternion,
     restPalmQuaternion: authoredPalmQuaternion,
     handToPalmQuaternion,
@@ -301,21 +344,49 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         shoulder.scale.copy(scale);
         shoulder.position.copy(restShoulderPositions.get(shoulder));
       }
+      for (const bone of armChain) bone.position.copy(restArmChainPositions.get(bone));
       activeShoulder.scale.copy(restScales.get(activeShoulder));
     },
-    mapJoints(entries, pose) {
+    mapJoints(entries, pose, endpoints = {}) {
       const points = discoverEntryMap(entries);
       const entryData = discoverEntryData(entries);
       if (!points.wrist) return null;
+      const displayBasis = displayPoseBasis(pose);
       const targetPalmQuaternion = poseBasisQuaternion(pose);
-      const transforms = {};
-      const byName = Object.fromEntries(
-        ARM_SEGMENTS.map(([name, start, end]) => [`${name}${this.suffix}`, { start, end }]),
-      );
       const relativeScale = Number.isFinite(pose?.relativeScale) && pose.relativeScale > EPSILON
         ? pose.relativeScale
         : 1;
       const scale = clamp(1.05 * Math.sqrt(relativeScale), 0.82, 1.32);
+      const wristTarget = finitePoint(endpoints.wristTarget);
+      const shoulderTarget = finitePoint(endpoints.shoulderTarget);
+      const endpointDirection = wristTarget && shoulderTarget
+        ? shoulderTarget.clone().sub(wristTarget)
+        : null;
+      const hasEndpoints = endpointDirection && endpointDirection.lengthSq() > EPSILON;
+      const forearmDirection = hasEndpoints
+        ? endpointDirection.clone().normalize()
+        : targetForearmDirection(displayBasis, pose);
+      const targetForearmQuaternion = frameQuaternion(
+        forearmDirection,
+        displayBasis.forward,
+      );
+      const rootQuaternion = targetForearmQuaternion
+        .multiply(restForearmQuaternion.clone().invert())
+        .normalize();
+      const transforms = {};
+      const targetArmLength = hasEndpoints ? endpointDirection.length() : restArmLength * scale;
+      const armLengthScale = clamp(targetArmLength / (restArmLength * scale), 0.68, 1.38);
+      const handOffset = restShoulderPosition.clone().add(
+        restHandPosition.clone().sub(restShoulderPosition).multiplyScalar(armLengthScale),
+      );
+      for (const bone of armChain) {
+        transforms[bone.name] = {
+          position: restArmChainPositions.get(bone).clone().multiplyScalar(armLengthScale),
+        };
+      }
+      const byName = Object.fromEntries(
+        ARM_SEGMENTS.map(([name, start, end]) => [`${name}${this.suffix}`, { start, end }]),
+      );
 
       for (const [name, source] of Object.entries(byName)) {
         const bone = bones[name];
@@ -348,13 +419,21 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         .multiply(this.handToPalmQuaternion.clone().invert())
         .normalize();
       transforms[hand.name] = {
+        ...transforms[hand.name],
         quaternion: handParentRestQuaternion.invert()
-          .multiply(armEntryQuaternion.clone().invert())
+          .multiply(rootQuaternion.clone().invert())
           .multiply(targetHandWorldQuaternion)
           .normalize(),
       };
 
-      return { transforms, rootQuaternion: armEntryQuaternion.clone(), scale };
+      return {
+        transforms,
+        rootQuaternion,
+        scale,
+        palmScale: scale,
+        armLengthScale,
+        handOffset,
+      };
     },
   };
 }

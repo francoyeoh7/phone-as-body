@@ -13,7 +13,13 @@ function setup(options = {}) {
   const video = { readyState: 2, videoWidth: 320, videoHeight: 240, srcObject: { getTracks: () => [{ getSettings: () => ({ facingMode: "environment" }) }] } };
   const callbacks = { onFrame: vi.fn(), onState: vi.fn() };
   const scheduler = options.scheduler ?? { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 0) };
-  const tracker = new MediaPipeHandTracker({ getVideo: () => video, ...callbacks, scheduler, ...options });
+  const tracker = new MediaPipeHandTracker({
+    getVideo: () => video,
+    ...callbacks,
+    scheduler,
+    inputMirrored: false,
+    ...options,
+  });
   return { tracker, video, callbacks, scheduler };
 }
 
@@ -174,15 +180,33 @@ describe("MediaPipeHandTracker", () => {
     expect(bitmap.close).toHaveBeenCalledOnce();
   });
 
-  it("emits lost after 250ms then keeps a 500ms heartbeat", () => {
-    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 250) };
+  it("emits lost on the first empty result after a tracked hand", () => {
+    const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 87) };
     const { tracker, callbacks } = setup({ scheduler });
     tracker.active = true;
     tracker.modeEpoch = 1;
-    tracker.emitLostIfDue(250);
-    tracker.emitLostIfDue(750);
-    expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.state)).toEqual(["lost", "lost"]);
-    expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250, 750]);
+    tracker.handleResult({ result: handResult(), capturedAt: 20 });
+
+    tracker.handleResult({ result: { landmarks: [] }, capturedAt: 87 });
+
+    expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.state)).toEqual(["tracked", "lost"]);
+    expect(callbacks.onFrame.mock.calls.at(-1)[0].capturedAt).toBe(87);
+    expect(tracker.previous).toBeNull();
+  });
+
+  it("keeps a continuous acquired left hand through a temporary label flip", () => {
+    const { tracker, callbacks } = setup({ inputMirrored: true });
+    tracker.active = true;
+    tracker.modeEpoch = 1;
+
+    tracker.handleResult({ result: handResult({ label: "Left" }), capturedAt: 20 });
+    tracker.handleResult({ result: handResult({ label: "Right" }), capturedAt: 87 });
+
+    const tracked = callbacks.onFrame.mock.calls
+      .map(([frame]) => frame)
+      .filter((frame) => frame.state === "tracked");
+    expect(tracked).toHaveLength(2);
+    expect(tracked[1].handedness).toBe("left");
   });
 
   it("uses only the remaining absolute deadline after inference time", () => {
@@ -252,7 +276,7 @@ describe("MediaPipeHandTracker", () => {
     expect(tracker.calibration).toBeNull();
   });
 
-  it("emits one lost transition then suppresses no-hand inference until the heartbeat", () => {
+  it("emits one lost transition while repeated empty inference results continue", () => {
     const scheduler = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), now: vi.fn(() => 0) };
     const { tracker, callbacks } = setup({ scheduler });
     tracker.active = true;
@@ -264,7 +288,7 @@ describe("MediaPipeHandTracker", () => {
     tracker.handleResult({ result: { landmarks: [] }, capturedAt: 382 });
     tracker.handleResult({ result: { landmarks: [] }, capturedAt: 750 });
 
-    expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250, 750]);
+    expect(callbacks.onFrame.mock.calls.map(([frame]) => frame.capturedAt)).toEqual([250]);
   });
 
   it("drops and closes a bitmap that resolves after suspension or an epoch change", async () => {

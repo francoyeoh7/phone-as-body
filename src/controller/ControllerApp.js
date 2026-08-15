@@ -230,6 +230,7 @@ export class ControllerApp {
       getVideo: () => this.cameraMotion?.getVideoElement?.() ?? null,
       onFrame: (frame) => this.socket?.sendHandFrame?.(frame),
       onState: (state) => this.handleHandTrackingState(state),
+      inputMirrored: true,
     });
     this.voiceHold = new VoiceHoldController({
       ownership: this.pointerOwners,

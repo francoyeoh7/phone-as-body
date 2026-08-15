@@ -318,6 +318,11 @@ describe("HandTrackingDirector", () => {
     now = 1;
     expect(director.acceptFrame(frame({ seq: 1, receivedAt: 1, trackingConfidence: 0.4 }))).toBe(true);
     director.update(0);
+    expect(director.snapshot("door-defense").sample).toMatchObject({
+      state: "tracked",
+      fresh: true,
+      trackingConfidence: 0.4,
+    });
     expect(director.snapshot("door-defense").fresh).toBe(false);
   });
 

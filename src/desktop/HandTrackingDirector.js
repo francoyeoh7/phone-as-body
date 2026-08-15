@@ -154,7 +154,21 @@ export class HandTrackingDirector {
     }
     const state = this.machine.update(sample ?? { state: "lost", fresh: false }, now);
     this.publishTargetContact(["candidate", "confirmed", "held"].includes(state.phase));
-    return { ...state, sample, fresh: sample?.fresh === true };
+    return { ...state, sample, fresh: this.isSemanticFresh(sample) };
+  }
+
+  isSemanticFresh(sample = this.lastSample) {
+    const pose = sample?.gesturePose ?? sample?.pose;
+    const confidence = Number.isFinite(sample?.trackingConfidence)
+      ? sample.trackingConfidence
+      : pose?.trackingConfidence;
+    const threshold = Number.isFinite(this.machine?.defaults?.trackingEnter)
+      ? this.machine.defaults.trackingEnter
+      : 0.62;
+    return sample?.state === "tracked"
+      && sample?.fresh === true
+      && Number.isFinite(confidence)
+      && confidence >= threshold;
   }
 
   snapshot(context) {
@@ -166,7 +180,7 @@ export class HandTrackingDirector {
       fallback: this.fallback,
       unavailable: this.fallback,
       sample,
-      fresh: sample?.fresh === true,
+      fresh: this.isSemanticFresh(sample),
       target: this.target,
     };
   }

@@ -75,9 +75,7 @@ export class HandPoseStream {
   constructor(options = {}) {
     const wristTimeConstantMs = options.wristTimeConstantMs ?? options.smoothingMs ?? 60;
     this.options = {
-      fadeMs: 350,
-      freezeMs: 250,
-      silenceMs: 350,
+      silenceMs: 150,
       fingerTimeConstantMs: 28,
       ...options,
       wristTimeConstantMs,
@@ -111,7 +109,7 @@ export class HandPoseStream {
     this.lastSeq = frame.seq;
     this.lastReceivedAt = frame.receivedAt;
     this.lastFrame = clone(frame);
-    if (frame.state === "tracked" && frame.trackingConfidence >= 0.62) this.acceptTracked(frame);
+    if (frame.state === "tracked") this.acceptTracked(frame);
     this.previousAcceptedAt = frame.receivedAt;
     return true;
   }
@@ -139,10 +137,6 @@ export class HandPoseStream {
     const wristTimeConstant = adaptiveWristTimeConstant(frame, this.options.wristTimeConstantMs);
     let wristAlpha = prior ? smoothingAlpha(interval, wristTimeConstant) : 1;
     let fingerAlpha = prior ? smoothingAlpha(interval, this.options.fingerTimeConstantMs) : 1;
-    if (this.lastStableAt !== null && frame.receivedAt - this.lastStableAt >= this.options.silenceMs) {
-      wristAlpha = Math.min(wristAlpha, 0.25);
-      fingerAlpha = Math.min(fingerAlpha, 0.25);
-    }
     if (!prior || (wristAlpha >= 1 && fingerAlpha >= 1)) this.pose = target;
     else {
       this.pose = { ...prior, ...target };
@@ -170,19 +164,14 @@ export class HandPoseStream {
     if (this.lastFrame.state === "unavailable") return { state: "unavailable", pose: null, gesturePose: null, opacity: 0, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
     const silent = ageMs >= this.options.silenceMs;
     const lost = this.lastFrame.state === "lost" || silent;
-    const opacity = this.visualOpacity(now);
-    if (lost) return { state: "lost", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
-    if (this.lastFrame.state === "tracked" && this.lastFrame.trackingConfidence < 0.62) {
-      return { state: "low-confidence", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
-    }
-    return { state: "tracked", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity, fresh: true, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+    if (lost) return { state: "lost", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity: 0, fresh: false, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
+    return { state: "tracked", pose: this.pose ? clone(this.pose) : null, gesturePose: this.gesturePose ? clone(this.gesturePose) : null, opacity: this.pose ? 1 : 0, fresh: true, receivedAt: this.lastReceivedAt, ageMs, ...rawConfidence };
   }
 
   visualOpacity(now) {
     if (this.lastStableAt === null || this.pose === null) return 0;
     const age = Math.max(0, now - this.lastStableAt);
-    if (age <= this.options.freezeMs) return 1;
-    return clamp(1 - (age - this.options.freezeMs) / this.options.fadeMs);
+    return age < this.options.silenceMs ? 1 : 0;
   }
 }
 

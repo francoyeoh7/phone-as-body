@@ -10,8 +10,6 @@ import {
 import { createReachState, updateReachState } from "../shared/hand-reach.js";
 
 const SAMPLE_INTERVAL_MS = 1000 / 15;
-const LOST_AFTER_MS = 250;
-const STATUS_HEARTBEAT_MS = 500;
 const VIDEO_READY_TIMEOUT_MS = 3_000;
 
 const defaultScheduler = {
@@ -42,23 +40,34 @@ function trackRotation(video) {
   return cardinalRotation(rotation ?? 0);
 }
 
-export function selectPhysicalLeftCandidate(result, previous) {
+function candidateDistance(center, previous) {
+  const prior = previous?.center;
+  return prior ? Math.hypot(center[0] - prior[0], center[1] - prior[1]) : 0;
+}
+
+function canonicalLeftCategory(category, inputMirrored) {
+  return {
+    ...(category && typeof category === "object" ? category : {}),
+    categoryName: inputMirrored ? "Left" : "Right",
+  };
+}
+
+export function selectPhysicalLeftCandidate(result, previous, inputMirrored = true) {
   const landmarks = result?.landmarks ?? [];
   if (!landmarks.length) return null;
   let best = null;
   let bestScore = -Infinity;
   landmarks.forEach((points, index) => {
     const category = result?.handedness?.[index]?.[0];
-    const label = normalizeMediaPipeHandedness(category?.categoryName, false);
-    if (label !== "left") return;
+    const detectedLabel = normalizeMediaPipeHandedness(category?.categoryName, inputMirrored);
+    if (!previous && detectedLabel !== "left") return;
     const center = points?.[0] ? [points[0].x, points[0].y, points[0].z ?? 0] : [0, 0, 0];
-    const prior = previous?.center;
-    const distance = prior ? Math.hypot(center[0] - prior[0], center[1] - prior[1]) : 0;
+    const distance = candidateDistance(center, previous);
     const confidence = Number.isFinite(category?.score) ? category.score : 0;
     const score = previous ? confidence * 0.35 - distance * 0.65 : confidence;
     if (score > bestScore) {
       bestScore = score;
-      best = { index, label };
+      best = { index, label: "left", detectedLabel };
     }
   });
   return best;
@@ -78,6 +87,7 @@ export class MediaPipeHandTracker {
     landmarkerFactory = null,
     sampleIntervalMs = SAMPLE_INTERVAL_MS,
     getScreenOrientation = defaultScreenOrientation,
+    inputMirrored = true,
   } = {}) {
     this.getVideo = getVideo;
     this.onFrame = onFrame;
@@ -94,6 +104,7 @@ export class MediaPipeHandTracker {
     this.landmarkerFactory = landmarkerFactory;
     this.sampleIntervalMs = sampleIntervalMs;
     this.getScreenOrientation = getScreenOrientation;
+    this.inputMirrored = inputMirrored === true;
     this.modeEpoch = 0;
     this.seq = 0;
     this.active = false;
@@ -186,6 +197,7 @@ export class MediaPipeHandTracker {
     this.lastPresentedFrames = null;
     this.nextSampleDeadline = null;
     this.lastResultAt = this.scheduler.now();
+    this.lastState = null;
     this.lastLostAt = -Infinity;
     this.unavailableEpoch = null;
     this.videoUnavailableSince = null;
@@ -391,9 +403,12 @@ export class MediaPipeHandTracker {
   }
 
   handleResult({ result, capturedAt, rotation: capturedRotation }) {
-    const candidate = selectPhysicalLeftCandidate(result, this.previous);
+    const candidate = selectPhysicalLeftCandidate(result, this.previous, this.inputMirrored);
     if (!candidate) { this.emitLostIfDue(capturedAt); return; }
-    const rawHandedness = result.handedness[candidate.index]?.[0];
+    const rawHandedness = canonicalLeftCategory(
+      result.handedness?.[candidate.index]?.[0],
+      this.inputMirrored,
+    );
     const rotation = [0, 90, 180, 270].includes(capturedRotation)
       ? capturedRotation
       : this.resolveVideoRotation();
@@ -412,7 +427,7 @@ export class MediaPipeHandTracker {
         : normalizeCameraLandmarks(rawLandmarks, rotation),
       handedness: rawHandedness,
       capturedAt,
-      inputMirrored: false,
+      inputMirrored: this.inputMirrored,
     };
     try {
       const pose = deriveHandFeatures(sample, this.previous, this.calibration);
@@ -431,33 +446,17 @@ export class MediaPipeHandTracker {
       this.emitState("tracked");
       this.onFrame?.(frame);
       this.clearStatusTimer();
-      this.scheduleStatus();
     } catch { this.emitLostIfDue(capturedAt); }
   }
 
   emitLostIfDue(now) {
-    if (now - this.lastResultAt < LOST_AFTER_MS) { this.scheduleStatus(now); return; }
-    if (now - this.lastLostAt < STATUS_HEARTBEAT_MS) { this.scheduleStatus(now); return; }
+    if (this.lastState === "lost") return;
     this.emitStatusFrame("lost", "no-hand", now);
     this.reachState = createReachState();
     this.calibration = null;
     this.previous = null;
     this.lastLostAt = now;
-    this.scheduleStatus(now);
-  }
-
-  scheduleStatus(now = this.scheduler.now()) {
-    if (this.statusTimer != null || !this.active || this.suspended || this.destroyed) return;
-    const dueAt = Number.isFinite(this.lastLostAt)
-      ? this.lastLostAt + STATUS_HEARTBEAT_MS
-      : this.lastResultAt + LOST_AFTER_MS;
-    this.statusTimer = this.scheduler.setTimeout(() => {
-      this.statusTimer = null;
-      if (!this.active || this.suspended || this.destroyed) return;
-      const heartbeatAt = this.scheduler.now();
-      this.emitLostIfDue(heartbeatAt);
-      this.scheduleStatus(heartbeatAt);
-    }, Math.max(0, dueAt - now));
+    this.clearStatusTimer();
   }
 
   emitStatusFrame(state, reason, capturedAt) {

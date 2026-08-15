@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { createArmRigAdapter, createFlatWebXRAdapter } from "./hand-asset-adapter.js";
+import { createRealisticSleeve } from "./realistic-sleeve.js";
 
 export const WEBXR_JOINTS = [
   "wrist", "thumb-metacarpal", "thumb-phalanx-proximal", "thumb-phalanx-distal", "thumb-tip",
@@ -14,6 +15,7 @@ export const WEBXR_JOINTS = [
 const MP = {
   wrist: 0, thumb: [1, 2, 3, 4], index: [5, 6, 7, 8], middle: [9, 10, 11, 12], ring: [13, 14, 15, 16], pinky: [17, 18, 19, 20],
 };
+const LEFT_SHOULDER_ENTRY = new THREE.Vector3(-0.72, -0.62, -0.74);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 const asPoint = (point) => Array.isArray(point) ? point.slice(0, 3) : [point?.x, point?.y, point?.z];
 const finitePoint = (point) => {
@@ -53,10 +55,17 @@ function targetToCameraPosition(camera, point) {
   if (!Number.isFinite(distance) || distance <= 0.05) return null;
   const depth = clamp(distance * 0.58, 0.55, 0.9);
   const screenScale = depth / distance;
+  return new THREE.Vector3(local.x * screenScale, local.y * screenScale, -depth);
+}
+
+function trackedWristToCameraPosition(center, relativeScale = 1) {
+  const x = Number.isFinite(center?.[0]) ? center[0] : 0.5;
+  const y = Number.isFinite(center?.[1]) ? center[1] : 0.68;
+  const scale = Number.isFinite(relativeScale) ? relativeScale : 1;
   return new THREE.Vector3(
-    local.x * screenScale,
-    local.y * screenScale,
-    -depth,
+    clamp(-0.18 + (x - 0.5) * 0.85, -0.62, 0.3),
+    clamp(-0.1 + (0.6 - y) * 0.75, -0.5, 0.28),
+    clamp(-0.68 + (scale - 1) * 0.16, -0.84, -0.5),
   );
 }
 
@@ -163,6 +172,56 @@ function discoverBones(root) {
   return bones;
 }
 
+function boundsInParent(root, parent) {
+  root.updateWorldMatrix?.(true, true);
+  parent.updateWorldMatrix?.(true, false);
+  const toParent = parent.matrixWorld.clone().invert();
+  const points = [];
+  root.traverse?.((object) => {
+    if (!object.geometry) return;
+    object.geometry.computeBoundingBox?.();
+    const bounds = object.geometry.boundingBox;
+    if (!bounds) return;
+    for (const x of [bounds.min.x, bounds.max.x]) {
+      for (const y of [bounds.min.y, bounds.max.y]) {
+        for (const z of [bounds.min.z, bounds.max.z]) {
+          points.push(new THREE.Vector3(x, y, z)
+            .applyMatrix4(object.matrixWorld)
+            .applyMatrix4(toParent));
+        }
+      }
+    }
+  });
+  return points.length > 0 ? new THREE.Box3().setFromPoints(points) : null;
+}
+
+function fitHeldItemToGrip(item, grip, definition = {}) {
+  const offset = Array.isArray(definition.position)
+    && definition.position.slice(0, 3).every(Number.isFinite)
+    ? new THREE.Vector3().fromArray(definition.position.slice(0, 3))
+    : new THREE.Vector3();
+  item.position.set(0, 0, 0);
+  if (Array.isArray(definition.rotation)
+    && definition.rotation.slice(0, 3).every(Number.isFinite)) {
+    item.rotation.set(...definition.rotation.slice(0, 3));
+  }
+  if (Number.isFinite(definition.scale) && definition.scale > 0) {
+    item.scale.setScalar(definition.scale);
+  }
+  grip.add(item);
+  let bounds = boundsInParent(item, grip);
+  if (!bounds) {
+    item.position.copy(offset);
+    return;
+  }
+  const longestEdge = Math.max(...bounds.getSize(new THREE.Vector3()).toArray());
+  if (longestEdge > 0.15) {
+    item.scale.multiplyScalar(0.15 / longestEdge);
+    bounds = boundsInParent(item, grip);
+  }
+  if (bounds) item.position.add(offset.sub(bounds.getCenter(new THREE.Vector3())));
+}
+
 function discoverArmBones(root) {
   const bones = {};
   root?.traverse?.((object) => {
@@ -263,17 +322,23 @@ export class FirstPersonHand {
     this.root = new THREE.Group();
     this.root.name = "first-person-hand";
     this.root.visible = false;
+    this.heldSocket = new THREE.Group();
+    this.heldSocket.name = "left-palm-socket";
+    // The authored hand's curled finger envelope ends around local X=0.055.
+    // Keep equipment just outside that surface while centering it through the
+    // palm height, so the fingers visually wrap beside it without intersecting.
+    this.heldSocket.position.set(0.099, 0.057, 0.006);
     this.heldGrip = new THREE.Group();
     this.heldGrip.name = "left-palm-grip";
-    this.heldGrip.position.set(0.025, -0.035, -0.12);
-    this.heldGrip.rotation.set(Math.PI / 2, 0, -0.18);
+    this.heldGrip.visible = false;
     this.palmGrip = this.heldGrip;
-    this.root.add(this.heldGrip);
-    if (typeof this.camera?.add === "function") this.camera.add(this.root);
+    if (typeof this.camera?.add === "function") this.camera.add(this.root, this.heldGrip);
+    else this.root.add(this.heldGrip);
     this.models = {};
     this.boneSets = {};
     this.adapters = {};
     this.presentationModel = null;
+    this.presentationSleeve = null;
     this.presentationBones = null;
     this.presentationAdapters = {};
     this.materialRoots = {};
@@ -293,6 +358,8 @@ export class FirstPersonHand {
     this.poseInitialized = false;
     this.heldItem = null;
     this.holding = false;
+    this.heldGripInitialized = false;
+    this.heldGripVelocity = new THREE.Vector3();
   }
 
   async load({ signal } = {}) {
@@ -309,21 +376,26 @@ export class FirstPersonHand {
       setMaterialOpacity(leftScene, 0);
       leftScene.visible = false;
       this.root.add(leftScene);
+      let presentationScene = null;
       try {
         const gltf = await loadWithSignal(loadOne, "/assets/hands/psx-arms.glb", signal);
         throwIfAborted(signal);
-        const scene = retainSkinnedSide(this.cloneScene(gltf.scene ?? gltf.scenes?.[0]), "left");
-        const bones = discoverArmBones(scene);
-        this.presentationModel = scene;
+        presentationScene = retainSkinnedSide(this.cloneScene(gltf.scene ?? gltf.scenes?.[0]), "left");
+        presentationScene.animations = gltf.animations ?? [];
+        const bones = discoverArmBones(presentationScene);
+        this.presentationModel = presentationScene;
         this.presentationBones = bones;
-        this.presentationAdapters.left = createArmRigAdapter(scene, bones, "left", gltf.animations);
-        this.materialRoots.presentation = scene;
-        setMaterialOpacity(scene, 0);
-        scene.visible = false;
-        this.root.add(scene);
+        this.presentationAdapters.left = createArmRigAdapter(presentationScene, bones, "left", gltf.animations);
+        this.presentationSleeve = createRealisticSleeve(presentationScene, bones, "left");
+        this.materialRoots.presentation = presentationScene;
+        setMaterialOpacity(presentationScene, 0);
+        presentationScene.visible = false;
+        this.root.add(presentationScene);
       } catch (error) {
-        if (signal?.aborted || error?.name === "AbortError") throw error;
+        if (presentationScene?.parent === this.root) this.root.remove(presentationScene);
+        if (presentationScene) disposeResources(presentationScene);
         this.presentationModel = null;
+        this.presentationSleeve = null;
         this.presentationBones = null;
         this.presentationAdapters = {};
         this.presentationLoadError = error;
@@ -356,7 +428,8 @@ export class FirstPersonHand {
     this.bones = this.boneSets.left;
     this.adapter = this.adapters.left ?? null;
     const palm = this.presentationBones?.handL ?? this.bones.wrist;
-    palm?.add?.(this.heldGrip);
+    palm?.add?.(this.heldSocket);
+    this.heldGripInitialized = false;
     this._setOpacity(this.opacity);
   }
 
@@ -364,6 +437,7 @@ export class FirstPersonHand {
     this.opacity = clamp(value, 0, 1);
     for (const model of Object.values(this.materialRoots)) setMaterialOpacity(model, this.opacity);
     this.root.visible = this.active && this.loaded && this.opacity > 0.001;
+    this.heldGrip.visible = this.root.visible && this.holding && Boolean(this.heldItem);
   }
 
   setHeldItem(object3D = null) {
@@ -380,7 +454,8 @@ export class FirstPersonHand {
         delete object.userData.interaction;
       });
       this.heldItem.visible = this.holding;
-      this.heldGrip.add(this.heldItem);
+      const grip = this.heldItem.userData?.handGrip;
+      fitHeldItemToGrip(this.heldItem, this.heldGrip, grip);
       this.materialRoots.held = this.heldItem;
       setMaterialOpacity(this.heldItem, this.opacity);
     } else {
@@ -392,6 +467,42 @@ export class FirstPersonHand {
   setHolding(active) {
     this.holding = active === true;
     if (this.heldItem) this.heldItem.visible = this.holding;
+    this.heldGrip.visible = this.root.visible && this.holding && Boolean(this.heldItem);
+    if (this.holding) this.heldGripInitialized = false;
+    return this;
+  }
+
+  updateHeldGrip(delta = 0) {
+    if (!this.heldSocket || !this.heldGrip?.parent) return this;
+    const frame = this.heldGrip.parent;
+    frame.updateWorldMatrix?.(true, false);
+    this.heldSocket.updateWorldMatrix?.(true, false);
+    const targetPosition = this.heldSocket.getWorldPosition(new THREE.Vector3());
+    frame.worldToLocal?.(targetPosition);
+    const targetQuaternion = this.heldSocket.getWorldQuaternion(new THREE.Quaternion());
+    const frameQuaternion = frame.getWorldQuaternion?.(new THREE.Quaternion()) ?? new THREE.Quaternion();
+    targetQuaternion.premultiply(frameQuaternion.invert()).normalize();
+    if (!this.heldGripInitialized) {
+      this.heldGrip.position.copy(targetPosition);
+      if (this.holding && this.heldItem) {
+        this.heldGrip.position.add(new THREE.Vector3(0.024, -0.012, 0.018)
+          .applyQuaternion(targetQuaternion));
+      }
+      this.heldGrip.quaternion.copy(targetQuaternion);
+      this.heldGripVelocity.set(0, 0, 0);
+      this.heldGripInitialized = true;
+      return this;
+    }
+    const seconds = clamp(delta, 0, 0.05);
+    const omega = 19;
+    const decay = Math.exp(-omega * seconds);
+    for (const axis of ["x", "y", "z"]) {
+      const displacement = this.heldGrip.position[axis] - targetPosition[axis];
+      const temporary = (this.heldGripVelocity[axis] + omega * displacement) * seconds;
+      this.heldGrip.position[axis] = targetPosition[axis] + (displacement + temporary) * decay;
+      this.heldGripVelocity[axis] = (this.heldGripVelocity[axis] - omega * temporary) * decay;
+    }
+    this.heldGrip.quaternion.slerp(targetQuaternion, 1 - Math.exp(-seconds / 0.055));
     return this;
   }
 
@@ -424,13 +535,10 @@ export class FirstPersonHand {
     const targetOpacity = Number.isFinite(pose.opacity) ? pose.opacity : pose.state === "lost" || pose.state === "unavailable" ? 0 : Number.isFinite(pose.trackingConfidence) ? pose.trackingConfidence : 1;
     const lost = targetOpacity <= 0 || pose.state === "lost" || pose.state === "unavailable";
     if (lost) {
-      if (!this.lossActive) {
-        this.lossActive = true;
-        this.lossFadeElapsed = 0;
-        this.lossFadeStartOpacity = this.opacity;
-      }
-      this.lossFadeElapsed += seconds * 1000;
-      this._setOpacity(this.lossFadeStartOpacity * clamp(1 - this.lossFadeElapsed / 350, 0, 1));
+      this.lossActive = true;
+      this.lossFadeElapsed = 0;
+      this.lossFadeStartOpacity = 0;
+      this._setOpacity(0);
       return this;
     }
     this.lossActive = false;
@@ -440,14 +548,10 @@ export class FirstPersonHand {
 
     const center = finitePoint(pose.center ?? [0.5, 0.58, 0]);
     const side = "left";
-    const anchor = new THREE.Vector3(-0.42, -0.42, -0.68);
     const eligible = typeof pose.reachEligible === "boolean" ? pose.reachEligible : true;
     const scale = clamp(Number.isFinite(pose.relativeScale) ? pose.relativeScale : 1, 0.6, 1.4);
-    const desired = anchor.clone();
+    const desired = trackedWristToCameraPosition(center, scale);
     if (eligible) {
-      desired.x = clamp(desired.x + (center[0] - 0.3) * 0.22, -0.62, -0.16);
-      desired.y = clamp(desired.y + (0.68 - center[1]) * 0.2, -0.62, -0.2);
-      desired.z = clamp(desired.z + (scale - 1) * 0.1, -0.82, -0.56);
       const contactActive = pose.handedness === "left" && this.targetContact?.engaged === true;
       const contactPoint = contactActive ? this.targetContact.point.clone() : null;
       if (contactPoint && this.targetContact.normal?.lengthSq() > 1e-8) {
@@ -459,7 +563,10 @@ export class FirstPersonHand {
     }
     const joints = expandMediaPipeJoints(pose);
     const presentationAdapter = this.presentationAdapters[side] ?? null;
-    const mapped = presentationAdapter?.mapJoints(joints, pose) ?? this.adapter?.mapJoints(joints, pose);
+    const mapped = presentationAdapter?.mapJoints(joints, pose, {
+      wristTarget: desired,
+      shoulderTarget: LEFT_SHOULDER_ENTRY,
+    }) ?? this.adapter?.mapJoints(joints, pose);
     const mappedRootQuaternion = mapped?.rootQuaternion;
     const palmQ = finiteQuaternion(mappedRootQuaternion)
       ? mappedRootQuaternion
@@ -474,9 +581,11 @@ export class FirstPersonHand {
     }
 
     if (presentationAdapter && this.presentationModel) {
-      const modelScale = clamp(mapped?.scale ?? 1, 0.65, 1.35);
+      const modelScale = clamp(mapped?.palmScale ?? mapped?.scale ?? 1, 0.65, 1.35);
       this.presentationModel.scale.setScalar(modelScale);
-      this.presentationModel.position.copy(presentationAdapter.restHandPosition).multiplyScalar(-modelScale);
+      this.presentationModel.position
+        .copy(mapped?.handOffset ?? presentationAdapter.restHandPosition)
+        .multiplyScalar(-modelScale);
     }
     const activeBones = presentationAdapter ? this.presentationBones : this.bones;
     for (const [name, transform] of Object.entries(mapped?.transforms ?? {})) {
@@ -485,6 +594,7 @@ export class FirstPersonHand {
       if (finiteVector3(transform.position)) bone.position.copy(transform.position);
       if (finiteQuaternion(transform.quaternion)) bone.quaternion.copy(transform.quaternion).normalize();
     }
+    this.updateHeldGrip(seconds);
     return this;
   }
 
@@ -492,7 +602,7 @@ export class FirstPersonHand {
   setFallbackPose(name = "open") { this.fallbackPose = name; return this; }
 
   destroy() {
-    if (typeof this.camera?.remove === "function") this.camera.remove(this.root);
+    if (typeof this.camera?.remove === "function") this.camera.remove(this.root, this.heldGrip);
     this.setHeldItem(null);
     for (const model of Object.values(this.models)) disposeResources(model);
     if (this.presentationModel) disposeResources(this.presentationModel);
@@ -501,15 +611,19 @@ export class FirstPersonHand {
     this.boneSets = {};
     this.adapters = {};
     this.presentationModel = null;
+    this.presentationSleeve = null;
     this.presentationBones = null;
     this.presentationAdapters = {};
     this.materialRoots = {};
     this.heldGrip = null;
+    this.heldSocket = null;
     this.palmGrip = null;
     this.bones = {};
     this.adapter = null;
     this.targetContact = null;
     this.poseInitialized = false;
+    this.heldGripInitialized = false;
+    this.heldGripVelocity = null;
     this.camera = null;
     this.loaded = false;
   }

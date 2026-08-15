@@ -49,40 +49,38 @@ describe("HandPoseStream", () => {
     expect(sampled.gesturePose.pinchStrength).toBe(0.9);
   });
 
-  it("smooths nested landmarks and exposes low confidence without moving the stable render pose", () => {
+  it("renders every structurally valid tracked frame regardless of confidence", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0, landmarks: [[0, 0, 0]], worldLandmarks: [[0, 0, 0]], curls: [0, 0, 0, 0, 0] }));
     stream.accept(pose({ seq: 2, receivedAt: 85, landmarks: [[1, 0, 0]], worldLandmarks: [[1, 0, 0]], curls: [1, 1, 1, 1, 1] }));
     expect(stream.sample(85).pose.landmarks[0][0]).toBeGreaterThan(0.5);
     expect(stream.sample(85).pose.curls[0]).toBeGreaterThan(0.5);
     const before = stream.sample(85).pose.center[0];
-    stream.accept(pose({ seq: 3, receivedAt: 100, trackingConfidence: 0.61, center: [100, 0, 0] }));
+    stream.accept(pose({ seq: 3, receivedAt: 100, trackingConfidence: 0.25, center: [1, 0, 0] }));
     const low = stream.sample(100);
-    expect(low).toMatchObject({ state: "low-confidence", fresh: false, trackingConfidence: 0.61 });
-    expect(low.pose.center[0]).toBe(before);
+    expect(low).toMatchObject({ state: "tracked", fresh: true, trackingConfidence: 0.25, opacity: 1 });
+    expect(low.pose.center[0]).toBeGreaterThan(before);
   });
 
   it("uses every accepted receive timestamp as the smoothing interval anchor", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0, center: [0, 0, 0] }));
-    stream.accept(pose({ seq: 2, receivedAt: 100, trackingConfidence: 0.61, center: [50, 0, 0] }));
+    stream.accept(pose({ seq: 2, receivedAt: 100, trackingConfidence: 0.61, center: [0.5, 0, 0] }));
     stream.accept(pose({ seq: 3, receivedAt: 185, center: [1, 0, 0] }));
-    expect(stream.sample(185).pose.center[0]).toBeCloseTo(1 - Math.exp(-85 / 60), 6);
+    const afterSecond = 0.5 * (1 - Math.exp(-100 / 68));
+    const expected = afterSecond + (1 - afterSecond) * (1 - Math.exp(-85 / 60));
+    expect(stream.sample(185).pose.center[0]).toBeCloseTo(expected, 6);
   });
 
-  it("freezes and fades, detects silence, and handles explicit statuses and epochs", () => {
+  it("clears immediately on explicit loss and uses silence only as a transport watchdog", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0 }));
-    expect(stream.sample(250).opacity).toBe(1);
-    expect(stream.sample(300)).toMatchObject({ state: "tracked", fresh: true });
-    expect(stream.sample(300).opacity).toBeCloseTo(1 - (300 - 250) / 350, 8);
-    expect(stream.sample(600).opacity).toBeCloseTo(0, 8);
-    expect(stream.sample(349).state).toBe("tracked");
-    expect(stream.sample(350).state).toBe("lost");
-    expect(stream.accept(pose({ seq: 2, receivedAt: 360, state: "lost" }))).toBe(true);
-    expect(stream.sample(360).state).toBe("lost");
-    expect(stream.accept(pose({ seq: 3, receivedAt: 370, state: "unavailable" }))).toBe(true);
-    expect(stream.sample(370).state).toBe("unavailable");
+    expect(stream.sample(149)).toMatchObject({ state: "tracked", fresh: true, opacity: 1 });
+    expect(stream.sample(150)).toMatchObject({ state: "lost", fresh: false, opacity: 0 });
+    expect(stream.accept(pose({ seq: 2, receivedAt: 160, state: "lost" }))).toBe(true);
+    expect(stream.sample(160)).toMatchObject({ state: "lost", opacity: 0 });
+    expect(stream.accept(pose({ seq: 3, receivedAt: 170, state: "unavailable" }))).toBe(true);
+    expect(stream.sample(170)).toMatchObject({ state: "unavailable", opacity: 0 });
     expect(stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 400, center: [10, 0, 0] }))).toBe(true);
     expect(stream.sample(400).pose.center[0]).toBe(10);
     expect(stream.sample(400).pose.handedness).toBe("left");
