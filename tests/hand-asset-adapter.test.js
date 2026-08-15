@@ -179,20 +179,27 @@ describe("hierarchical arm rig adapter", () => {
     expect(achievedPalm.angleTo(new THREE.Quaternion())).toBeLessThan(1e-6);
   });
 
-  it("updates the forearm root when the tracked wrist orientation changes", () => {
+  it("keeps the forearm root stable when only the tracked palm orientation changes", () => {
     const { root, bones } = makeArmRig();
     const adapter = createArmRigAdapter(root, bones, "left");
     const trackedJoints = [{ name: "wrist", position: [0, 0, 0] }];
+    const endpoints = {
+      shoulderTarget: new THREE.Vector3(-0.7, -0.9, -0.76),
+      wristTarget: new THREE.Vector3(-0.38, -0.34, -0.68),
+    };
     const neutral = adapter.mapJoints(trackedJoints, {
-      center: [0.35, 0.72, 0],
-      wrist: { right: [1, 0, 0], up: [0, 1, 0], forward: [0, 0, 1] },
-    });
+      wrist: { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] },
+    }, endpoints);
     const turned = adapter.mapJoints(trackedJoints, {
-      center: [0.65, 0.48, -0.05],
-      wrist: { right: [0, 1, 0], up: [-1, 0, 0], forward: [0, 0, 1] },
-    });
+      wrist: { right: [1, 0, 0], up: [0, 0, -1], forward: [0, 1, 0] },
+    }, endpoints);
+    const achievedPalm = (mapped) => mapped.rootQuaternion.clone()
+      .multiply(mapped.transforms.handL.quaternion)
+      .multiply(adapter.handToPalmQuaternion)
+      .normalize();
 
-    expect(neutral.rootQuaternion.angleTo(turned.rootQuaternion)).toBeGreaterThan(0.25);
+    expect(neutral.rootQuaternion.angleTo(turned.rootQuaternion)).toBeLessThan(1e-6);
+    expect(achievedPalm(neutral).angleTo(achievedPalm(turned))).toBeGreaterThan(1);
   });
 
   it("converts tracked wrist depth into the Three.js camera axis", () => {

@@ -380,7 +380,7 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         : targetForearmDirection(displayBasis, pose);
       const targetForearmQuaternion = frameQuaternion(
         forearmDirection,
-        displayBasis.forward,
+        hasEndpoints ? new THREE.Vector3(0, 0, -1) : displayBasis.forward,
       );
       const rootQuaternion = targetForearmQuaternion
         .multiply(restForearmQuaternion.clone().invert())

@@ -15,7 +15,7 @@ export const WEBXR_JOINTS = [
 const MP = {
   wrist: 0, thumb: [1, 2, 3, 4], index: [5, 6, 7, 8], middle: [9, 10, 11, 12], ring: [13, 14, 15, 16], pinky: [17, 18, 19, 20],
 };
-const LEFT_SHOULDER_ENTRY = new THREE.Vector3(-0.72, -0.62, -0.74);
+const LEFT_SHOULDER_ENTRY = new THREE.Vector3(-0.7, -0.9, -0.76);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 const asPoint = (point) => Array.isArray(point) ? point.slice(0, 3) : [point?.x, point?.y, point?.z];
 const finitePoint = (point) => {
@@ -63,10 +63,32 @@ function trackedWristToCameraPosition(center, relativeScale = 1) {
   const y = Number.isFinite(center?.[1]) ? center[1] : 0.68;
   const scale = Number.isFinite(relativeScale) ? relativeScale : 1;
   return new THREE.Vector3(
-    clamp(-0.18 + (x - 0.5) * 0.85, -0.62, 0.3),
-    clamp(-0.1 + (0.6 - y) * 0.75, -0.5, 0.28),
-    clamp(-0.68 + (scale - 1) * 0.16, -0.84, -0.5),
+    clamp(-0.43 + (x - 0.5) * 0.68, -0.67, -0.01),
+    clamp(-0.44 + (0.6 - y) * 1.15, -0.68, 0.04),
+    clamp(-0.68 + (scale - 1) * 0.12, -0.78, -0.56),
   );
+}
+
+function enhancePresentationSkin(root) {
+  const arms = root?.getObjectByName?.("ArmsMesh");
+  if (!arms?.material) return;
+  const materials = Array.isArray(arms.material) ? arms.material : [arms.material];
+  for (const material of materials) {
+    material.metalness = 0;
+    material.roughness = 0.68;
+    material.clearcoat = 0.045;
+    material.clearcoatRoughness = 0.72;
+    material.flatShading = false;
+    if (material.map) {
+      material.map.magFilter = THREE.LinearFilter;
+      material.map.minFilter = THREE.LinearMipmapLinearFilter;
+      material.map.generateMipmaps = true;
+      material.map.anisotropy = Math.max(material.map.anisotropy ?? 1, 8);
+      material.map.needsUpdate = true;
+    }
+    material.needsUpdate = true;
+  }
+  arms.geometry?.computeVertexNormals?.();
 }
 
 export function jointQuaternion(joint, child, palmBasis = {}) {
@@ -381,6 +403,7 @@ export class FirstPersonHand {
         const gltf = await loadWithSignal(loadOne, "/assets/hands/psx-arms.glb", signal);
         throwIfAborted(signal);
         presentationScene = retainSkinnedSide(this.cloneScene(gltf.scene ?? gltf.scenes?.[0]), "left");
+        enhancePresentationSkin(presentationScene);
         presentationScene.animations = gltf.animations ?? [];
         const bones = discoverArmBones(presentationScene);
         this.presentationModel = presentationScene;

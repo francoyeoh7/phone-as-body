@@ -304,7 +304,42 @@ describe("FirstPersonHand", () => {
     expect(shortArm.wristOffset).toBeLessThan(1e-4);
     expect(longArm.wristOffset).toBeLessThan(1e-4);
     expect(shortArm.shoulder.distanceTo(longArm.shoulder)).toBeLessThan(0.01);
-    expect(longArm.shoulder.distanceTo(new THREE.Vector3(-0.72, -0.62, -0.74))).toBeLessThan(0.01);
+    expect(longArm.shoulder.distanceTo(new THREE.Vector3(-0.7, -0.9, -0.76))).toBeLessThan(0.01);
+  });
+
+  it("keeps a neutral short reach compact and hides the shoulder entry below a wide viewport", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
+    await hand.load();
+    const tracked = deriveHandFeatures(openHand({ physicalHandedness: "Left", inputMirrored: true }));
+
+    hand.applyPose({
+      ...tracked,
+      center: [0.5, 0.6, 0],
+      relativeScale: 1,
+      trackingConfidence: 1,
+      reachEligible: true,
+    }, 1);
+    camera.updateMatrixWorld(true);
+    hand.root.updateWorldMatrix(true, true);
+    const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
+    const wrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+    const shoulderNdc = shoulder.clone().project(camera);
+    const sleeve = hand.presentationModel.getObjectByName("LeftSleeveShell");
+    sleeve.skeleton.update();
+    const shoulderEdge = [...new Set(sleeve.geometry.index.array)]
+      .map((index) => sleeve.localToWorld(
+        sleeve.applyBoneTransform(
+          index,
+          new THREE.Vector3().fromBufferAttribute(sleeve.geometry.getAttribute("position"), index),
+        ),
+      ))
+      .sort((a, b) => a.distanceToSquared(shoulder) - b.distanceToSquared(shoulder))
+      .slice(0, 24);
+
+    expect(shoulder.distanceTo(wrist)).toBeLessThan(0.58);
+    expect(shoulderNdc.y).toBeLessThan(-1.25);
+    expect(Math.max(...shoulderEdge.map((point) => point.project(camera).y))).toBeLessThan(-1.02);
   });
 
   it("drives every real MCP and the thumb root into the authored fist for curledHand", async () => {
@@ -392,6 +427,9 @@ describe("FirstPersonHand", () => {
     expect(shell.material.normalMap?.isDataTexture).toBe(true);
     expect(shell.material.roughnessMap?.isDataTexture).toBe(true);
     expect(arms.material.name).toBe("Arms");
+    expect(arms.material.roughness).toBeLessThan(0.85);
+    expect(arms.material.clearcoat).toBeGreaterThan(0);
+    expect(arms.material.flatShading).toBe(false);
     expect(arms.skeleton.bones.some((bone) => bone.name === "f_index01L")).toBe(true);
   });
 
