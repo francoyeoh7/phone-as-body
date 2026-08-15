@@ -15,7 +15,6 @@ export const WEBXR_JOINTS = [
 const MP = {
   wrist: 0, thumb: [1, 2, 3, 4], index: [5, 6, 7, 8], middle: [9, 10, 11, 12], ring: [13, 14, 15, 16], pinky: [17, 18, 19, 20],
 };
-const LEFT_SHOULDER_ENTRY = new THREE.Vector3(-0.7, -0.9, -0.76);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 const asPoint = (point) => Array.isArray(point) ? point.slice(0, 3) : [point?.x, point?.y, point?.z];
 const finitePoint = (point) => {
@@ -63,9 +62,22 @@ function trackedWristToCameraPosition(center, relativeScale = 1) {
   const y = Number.isFinite(center?.[1]) ? center[1] : 0.68;
   const scale = Number.isFinite(relativeScale) ? relativeScale : 1;
   return new THREE.Vector3(
-    clamp(-0.43 + (x - 0.5) * 0.68, -0.67, -0.01),
-    clamp(-0.44 + (0.6 - y) * 1.15, -0.68, 0.04),
+    clamp(-0.46 + (x - 0.5) * 0.68, -0.7, -0.04),
+    clamp(-0.48 + (0.6 - y) * 1.25, -0.7, 0.04),
     clamp(-0.68 + (scale - 1) * 0.12, -0.78, -0.56),
+  );
+}
+
+function trackedShoulderToCameraPosition(center, wristTarget) {
+  const x = Number.isFinite(center?.[0]) ? center[0] : 0.5;
+  const y = Number.isFinite(center?.[1]) ? center[1] : 0.6;
+  const lateral = clamp(x - 0.5, -0.5, 0.5);
+  const vertical = clamp(0.6 - y, -0.4, 0.4);
+  const lifted = Math.max(0, vertical);
+  return new THREE.Vector3(
+    clamp(-0.84 + lateral * 0.25 - vertical * 0.12, -0.96, -0.75),
+    clamp(-0.9 - lifted * 0.56, -1.13, -0.9),
+    clamp(wristTarget.z - 0.08, -0.86, -0.68),
   );
 }
 
@@ -574,6 +586,7 @@ export class FirstPersonHand {
     const eligible = typeof pose.reachEligible === "boolean" ? pose.reachEligible : true;
     const scale = clamp(Number.isFinite(pose.relativeScale) ? pose.relativeScale : 1, 0.6, 1.4);
     const desired = trackedWristToCameraPosition(center, scale);
+    const shoulderTarget = trackedShoulderToCameraPosition(center, desired);
     if (eligible) {
       const contactActive = pose.handedness === "left" && this.targetContact?.engaged === true;
       const contactPoint = contactActive ? this.targetContact.point.clone() : null;
@@ -588,7 +601,7 @@ export class FirstPersonHand {
     const presentationAdapter = this.presentationAdapters[side] ?? null;
     const mapped = presentationAdapter?.mapJoints(joints, pose, {
       wristTarget: desired,
-      shoulderTarget: LEFT_SHOULDER_ENTRY,
+      shoulderTarget,
     }) ?? this.adapter?.mapJoints(joints, pose);
     const mappedRootQuaternion = mapped?.rootQuaternion;
     const palmQ = finiteQuaternion(mappedRootQuaternion)

@@ -261,12 +261,30 @@ describe("FirstPersonHand", () => {
   });
 
   it("changes real arm length with the tracked wrist while preserving palm size and wrist centering", async () => {
-    const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: assetLoader() });
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
     await hand.load();
     const tracked = deriveHandFeatures(openHand({
       physicalHandedness: "Left",
       inputMirrored: true,
     }));
+    const sleeveEdgeMaxNdcY = () => {
+      camera.updateMatrixWorld(true);
+      hand.root.updateWorldMatrix(true, true);
+      const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
+      const sleeve = hand.presentationModel.getObjectByName("LeftSleeveShell");
+      sleeve.skeleton.update();
+      return Math.max(...[...new Set(sleeve.geometry.index.array)]
+        .map((index) => sleeve.localToWorld(
+          sleeve.applyBoneTransform(
+            index,
+            new THREE.Vector3().fromBufferAttribute(sleeve.geometry.getAttribute("position"), index),
+          ),
+        ))
+        .sort((a, b) => a.distanceToSquared(shoulder) - b.distanceToSquared(shoulder))
+        .slice(0, 24)
+        .map((point) => point.project(camera).y));
+    };
     const measure = () => {
       hand.root.updateWorldMatrix(true, true);
       const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
@@ -278,6 +296,7 @@ describe("FirstPersonHand", () => {
         palm: wrist.distanceTo(palm),
         wristOffset: wrist.distanceTo(root),
         shoulder,
+        sleeveEdgeMaxNdcY: sleeveEdgeMaxNdcY(),
       };
     };
 
@@ -303,8 +322,22 @@ describe("FirstPersonHand", () => {
     expect(longArm.palm).toBeCloseTo(shortArm.palm, 5);
     expect(shortArm.wristOffset).toBeLessThan(1e-4);
     expect(longArm.wristOffset).toBeLessThan(1e-4);
-    expect(shortArm.shoulder.distanceTo(longArm.shoulder)).toBeLessThan(0.01);
-    expect(longArm.shoulder.distanceTo(new THREE.Vector3(-0.7, -0.9, -0.76))).toBeLessThan(0.01);
+    expect(shortArm.shoulder.distanceTo(longArm.shoulder)).toBeGreaterThan(0.06);
+    for (const sample of [shortArm, longArm]) {
+      expect(sample.shoulder.x).toBeLessThan(-0.74);
+      expect(sample.shoulder.y).toBeLessThan(-0.84);
+      expect(sample.sleeveEdgeMaxNdcY).toBeLessThan(-1.02);
+    }
+    for (const center of [[0, 0.2, 0], [1, 0.2, 0], [0, 1, 0], [1, 1, 0]]) {
+      hand.applyPose({
+        ...tracked,
+        center,
+        relativeScale: 1,
+        trackingConfidence: 1,
+        reachEligible: true,
+      }, 1);
+      expect(sleeveEdgeMaxNdcY()).toBeLessThan(-1.02);
+    }
   });
 
   it("keeps a neutral short reach compact and hides the shoulder entry below a wide viewport", async () => {

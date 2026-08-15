@@ -458,6 +458,7 @@ export function createFlashlightRig(camera, target, { cookieFactory = makeFlashl
       side: THREE.BackSide,
     }),
   );
+  outerBeam.visible = false;
   outerBeam.rotation.x = -Math.PI / 2;
   outerBeam.position.set(0, -0.05, -8.05);
   const innerBeam = new THREE.Mesh(
@@ -472,6 +473,7 @@ export function createFlashlightRig(camera, target, { cookieFactory = makeFlashl
       side: THREE.BackSide,
     }),
   );
+  innerBeam.visible = false;
   innerBeam.rotation.x = -Math.PI / 2;
   innerBeam.position.set(0, -0.05, -6.05);
   group.add(core, spill, outerBeam, innerBeam, flashlightTarget);

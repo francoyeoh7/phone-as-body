@@ -6,6 +6,7 @@ import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
 import { HandTrackingDirector } from "./HandTrackingDirector.js";
+import { RightHandFlashlight } from "./RightHandFlashlight.js";
 import { InventoryState } from "./InventoryState.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
@@ -85,6 +86,8 @@ export class DesktopApp {
     this.doorDefense = null;
     this.shadowQuest = null;
     this.handTracking = null;
+    this.rightHandFlashlight = null;
+    this.createRightHandFlashlight = (options) => new RightHandFlashlight(options);
     this.inventory = new InventoryState([{ id: "spare-fuse", enabled: true }]);
     this.inventoryOpen = false;
     this.fallbackHolding = false;
@@ -229,6 +232,13 @@ export class DesktopApp {
         return;
       }
       handTracking.hand?.setHeldItem?.(this.experience.objects?.heldFuse ?? null);
+      const rightHandFlashlight = this.createRightHandFlashlight({ camera: this.experience.camera });
+      this.rightHandFlashlight = rightHandFlashlight;
+      await rightHandFlashlight.load({ signal: attempt.controller.signal });
+      if (!this.ownsSceneStart(attempt)) {
+        if (this.experience !== experience) this.disposeScene(experience);
+        return;
+      }
       this.player = new PlayerController({
         ...this.experience,
         onInteract: (id, details) => this.handleInteraction(id, details),
@@ -581,6 +591,10 @@ export class DesktopApp {
         } : { ...phoneInput, crouch: phoneInput.crouch === true };
         this.player.setControllerInput(gameplayInput, this.phone.connected);
         this.player.update(delta);
+        this.rightHandFlashlight?.update?.(delta, {
+          speed: Math.hypot(this.player.velocity.x, this.player.velocity.z),
+          maxSpeed: this.player.movementSpeed,
+        });
         this.handTracking?.update(delta);
         this.sendControlFeedback(phoneInput);
         this.experience.world.timestep = delta;
@@ -719,6 +733,7 @@ export class DesktopApp {
     runCleanup(() => this.foundPhone?.destroy());
     runCleanup(() => this.doorDefense?.destroy());
     runCleanup(() => this.director?.destroy?.());
+    runCleanup(() => this.rightHandFlashlight?.destroy?.());
     runCleanup(() => this.handTracking?.destroy());
     runCleanup(() => this.shadowQuest?.destroy());
     runCleanup(() => this.player?.destroy());
@@ -726,6 +741,7 @@ export class DesktopApp {
     this.foundPhone = null;
     this.doorDefense = null;
     this.handTracking = null;
+    this.rightHandFlashlight = null;
     this.shadowQuest = null;
     this.director = null;
     this.player = null;

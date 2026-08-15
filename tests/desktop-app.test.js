@@ -99,6 +99,12 @@ function createSceneStartHarness() {
   vi.stubGlobal("performance", { now: vi.fn(() => 1000) });
 
   const app = new DesktopApp({});
+  const rightHandFlashlight = {
+    load: vi.fn(async () => true),
+    update: vi.fn(),
+    destroy: vi.fn(),
+  };
+  app.createRightHandFlashlight = vi.fn(() => rightHandFlashlight);
   app.ui = {
     elements: {
       sceneHost: {},
@@ -122,7 +128,7 @@ function createSceneStartHarness() {
     dispose: vi.fn(),
   };
   app.phone = { send: vi.fn(), destroy: vi.fn() };
-  return { app, fakeDocument, fakeWindow };
+  return { app, fakeDocument, fakeWindow, rightHandFlashlight };
 }
 
 function createStartableScene() {
@@ -231,6 +237,7 @@ function createTickHarness({ owner = null } = {}) {
     doorDefense,
     director,
     audio: { update: vi.fn() },
+    rightHandFlashlight: { update: vi.fn(), destroy: vi.fn() },
     sampleDebugPixels: vi.fn(),
   });
   return { app, doorDefense, foundPhone, shadowQuest, director };
@@ -1373,6 +1380,28 @@ describe("fallback Space hold", () => {
 });
 
 describe("desktop village startup", () => {
+  it("loads the persistent right flashlight hand and drives it from player speed", async () => {
+    const { app, rightHandFlashlight } = createSceneStartHarness();
+    const scene = createStartableScene();
+    createSceneMock.mockResolvedValueOnce(scene);
+    vi.spyOn(HandTrackingDirector.prototype, "load").mockResolvedValue(true);
+
+    await app.startGame(false);
+    expect(app.createRightHandFlashlight).toHaveBeenCalledWith({ camera: scene.camera });
+    expect(rightHandFlashlight.load).toHaveBeenCalledOnce();
+
+    const { app: tickApp } = createTickHarness();
+    tickApp.player.velocity = { x: 2.8, z: 1.1 };
+    tickApp.player.movementSpeed = 3.25;
+    tickApp.tick(16);
+    expect(tickApp.rightHandFlashlight.update).toHaveBeenCalledWith(0.016, {
+      speed: Math.hypot(2.8, 1.1),
+      maxSpeed: 3.25,
+    });
+
+    app.disposeRuntime();
+    expect(rightHandFlashlight.destroy).toHaveBeenCalledOnce();
+  });
   it("constructs the village director and leaves corridor defense inactive for ElderBoom", async () => {
     const { app } = createSceneStartHarness();
     const scene = createStartableScene();
