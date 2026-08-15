@@ -169,8 +169,8 @@ async function inspectViewport(browser, name, viewport) {
     if (app.rightHandFlashlight?.root) app.rightHandFlashlight.root.visible = false;
   });
 
-  const dorsumBasis = { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] };
-  const palmBasis = { right: [-1, 0, 0], up: [0, -1, 0], forward: [0, 0, 1] };
+  const dorsumBasis = { right: [-1, 0, 0], up: [0, -1, 0], forward: [0, 0, 1] };
+  const palmBasis = { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] };
   const shortArm = await capturePose(page, `${name}-short`, [0.12, 0.86, 0], dorsumBasis);
   const longArm = await capturePose(page, `${name}-long`, [0.82, 0.25, 0], dorsumBasis);
   const palm = await capturePose(page, `${name}-palm`, [0.72, 0.35, 0], palmBasis);

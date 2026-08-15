@@ -1,12 +1,12 @@
 # Left-Hand Rewrite Recovery Handoff
 
-Updated: 2026-08-15 17:05 Asia/Shanghai
+Updated: 2026-08-15 17:42 Asia/Shanghai
 
 ## Current Runtime
 
 - Local game: `http://127.0.0.1:4176/`
 - Public game/controller origin: `https://psp-homepage-advisor-wisdom.trycloudflare.com`
-- Production Node PID: `8220`
+- Production Node PID: `1928`
 - Cloudflared PID: `12460`
 - Public `/`, `/controller`, and `/api/config`: HTTP 200
 - Public Socket.IO: connected over WebSocket
@@ -26,9 +26,12 @@ or computer restart. After a restart, create a new tunnel, update only
   invisible in that same update with no hold, freeze, or fade.
 - Structurally valid low-confidence frames keep the visual hand continuously
   visible. Confidence `0.62` still gates semantic task and equipment input.
-- The canonical rear-camera physical-left basis renders the model's dorsum.
+- The rear-camera physical-left basis uses the phone-verified half-turn around
+  the palm's longitudinal axis, so a photographed dorsum renders as dorsum.
 - The left shoulder enters from the lower-left. Camera wrist motion changes the
   upper-arm/forearm chain length while palm and finger dimensions remain fixed.
+- Dynamic arm scaling is capped at `1.20`, and the generated sleeve radial scale
+  is `1.18` so the arm is shorter and slightly fuller.
 - Hand frames remain on reliable Socket.IO transport.
 
 ## Verification Evidence
@@ -41,12 +44,16 @@ or computer restart. After a restart, create a new tunnel, update only
   three right-hand flashlight asset assertions, and two authored left-finger
   animation assertions.
 - `npm run build`: passed, 1709 modules transformed.
+- Phone-correction regression: all 298 tracker/basis/adapter/protocol/app tests
+  passed. All 9 selected real-model arm and sleeve tests passed.
 - Final staged checkpoint was also verified in an isolated worktree: core
   rewrite tests `90/90`, real-model rewrite paths `9/9`, and production build
   passed with 1692 modules from the scoped commit snapshot.
 - Successful real-model browser report:
   `.visual-check/latest/left-hand-rewrite-report.json`
-- Desktop arm length: `0.5128809` short to `1.0408465` long.
+- The earlier browser report measured desktop arm length `0.5128809` short to
+  `1.0408465` long before the phone correction. The current real-model test
+  requires the long pose to remain below `0.95`.
 - Palm width: `0.05326613` in both poses.
 - Dorsum/palm achieved-normal dot: `-0.9353346`.
 - Lifecycle sequence: 120/120 low-confidence frames accepted and continuously
@@ -67,6 +74,8 @@ or computer restart. After a restart, create a new tunnel, update only
   `D:\蝴蝶效应\backups\corridor-617-before-left-hand-rewrite-20260815-155955\SHA256SUMS.csv`
 - Final implementation tag: `backup/left-hand-rewrite-complete-20260815`
   (points to the commit containing this handoff).
+- Phone-orientation/proportion correction tag:
+  `backup/left-hand-rewrite-phone-correction-20260815`.
 
 ## Codex Crash Cause And Prevention
 

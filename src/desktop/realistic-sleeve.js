@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-const RADIAL_SCALE = 1.12;
+const RADIAL_SCALE = 1.18;
 const FABRIC_SIZE = 16;
 const EPSILON = 1e-8;
 

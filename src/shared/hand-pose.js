@@ -114,14 +114,18 @@ function palmBasisFromWorld(worldLandmarks, flipAcross = false) {
 }
 
 export function derivePhysicalLeftPalmBasis(worldLandmarks) {
-  return palmBasisFromWorld(validateLandmarks(worldLandmarks, "world landmarks"));
+  return palmBasisFromWorld(
+    validateLandmarks(worldLandmarks, "world landmarks"),
+    true,
+  );
 }
 
 function palmBasis(worldLandmarks, handedness, inputMirrored) {
   if (handedness === "left" && inputMirrored) {
     return derivePhysicalLeftPalmBasis(worldLandmarks);
   }
-  return palmBasisFromWorld(worldLandmarks, (handedness === "left") !== inputMirrored);
+  if (handedness === "left") return palmBasisFromWorld(worldLandmarks);
+  return palmBasisFromWorld(worldLandmarks, inputMirrored);
 }
 
 function jointAngle(first, joint, last) {

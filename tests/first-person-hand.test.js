@@ -298,6 +298,7 @@ describe("FirstPersonHand", () => {
     const longArm = measure();
 
     expect(longArm.arm).toBeGreaterThan(shortArm.arm + 0.05);
+    expect(longArm.arm).toBeLessThan(0.95);
     expect(longArm.palm).toBeCloseTo(shortArm.palm, 5);
     expect(shortArm.wristOffset).toBeLessThan(1e-4);
     expect(longArm.wristOffset).toBeLessThan(1e-4);
@@ -377,7 +378,7 @@ describe("FirstPersonHand", () => {
     expect(shell.geometry.getAttribute("uv").count).toBe(shell.geometry.getAttribute("position").count);
     expect(shell.geometry.getAttribute("skinIndex").itemSize).toBe(4);
     expect(shell.geometry.getAttribute("skinWeight").itemSize).toBe(4);
-    expect(shell.userData.radialScale).toBeCloseTo(1.12, 6);
+    expect(shell.userData.radialScale).toBeCloseTo(1.18, 6);
     expect(cuff.geometry).not.toBe(shell.geometry);
     expect(cuff.material).not.toBe(shell.material);
     expect(shell.material.name).toBe("LeftSleeveFabricMaterial");
@@ -443,7 +444,7 @@ describe("FirstPersonHand", () => {
     }
   });
 
-  it("inflates the real upper-arm and forearm surface by twelve percent around the bone axes", async () => {
+  it("inflates the real upper-arm and forearm surface by eighteen percent around the bone axes", async () => {
     const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: assetLoader() });
     await hand.load();
     const arms = hand.presentationModel.getObjectByName("ArmsMesh");
@@ -478,7 +479,7 @@ describe("FirstPersonHand", () => {
       const center = axisPoint(source);
       const sourceRadius = source.distanceTo(center);
       expect(sourceRadius).toBeGreaterThan(1e-4);
-      expect(sleeve.distanceTo(center) / sourceRadius).toBeCloseTo(1.12, 4);
+      expect(sleeve.distanceTo(center) / sourceRadius).toBeCloseTo(1.18, 4);
     }
   });
 

@@ -122,6 +122,7 @@ describe("hierarchical arm rig adapter", () => {
       .reduce((total, name) => total + mapped.transforms[name].position.length(), 0);
 
     expect(longArm.armLengthScale).toBeGreaterThan(shortArm.armLengthScale);
+    expect(longArm.armLengthScale).toBeLessThanOrEqual(1.2);
     expect(chainLength(longArm)).toBeGreaterThan(chainLength(shortArm));
     expect(longArm.handOffset.distanceTo(shortArm.handOffset)).toBeGreaterThan(0.05);
     expect(longArm.palmScale).toBeCloseTo(shortArm.palmScale, 8);

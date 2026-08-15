@@ -375,7 +375,7 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         .normalize();
       const transforms = {};
       const targetArmLength = hasEndpoints ? endpointDirection.length() : restArmLength * scale;
-      const armLengthScale = clamp(targetArmLength / (restArmLength * scale), 0.68, 1.38);
+      const armLengthScale = clamp(targetArmLength / (restArmLength * scale), 0.68, 1.2);
       const handOffset = restShoulderPosition.clone().add(
         restHandPosition.clone().sub(restShoulderPosition).multiplyScalar(armLengthScale),
       );

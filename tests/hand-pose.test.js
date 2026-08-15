@@ -40,6 +40,14 @@ function rotateHalfTurnAroundPalmAxis(worldLandmarks) {
 }
 
 describe("hand pose features", () => {
+  it("uses the phone-verified rear-camera dorsum orientation for a physical left hand", () => {
+    const dorsumWorld = openHand({ physicalHandedness: "Left", inputMirrored: true }).worldLandmarks;
+    const basis = handPoseModule.derivePhysicalLeftPalmBasis(dorsumWorld);
+
+    expect(basis.right[0]).toBeLessThan(-0.95);
+    expect(basis.forward[2]).toBeGreaterThan(0.95);
+  });
+
   it("derives opposite palm normals when a physical left hand turns from palm to dorsum", () => {
     expect(handPoseModule.derivePhysicalLeftPalmBasis).toBeTypeOf("function");
     const palmWorld = openHand({ physicalHandedness: "Left", inputMirrored: true }).worldLandmarks;
