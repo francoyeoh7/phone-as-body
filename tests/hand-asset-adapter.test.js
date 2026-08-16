@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { createArmRigAdapter, createFlatWebXRAdapter } from "../src/desktop/hand-asset-adapter.js";
 import { WEBXR_JOINTS } from "../src/desktop/FirstPersonHand.js";
+import { deriveHandFeatures } from "../src/shared/hand-pose.js";
+import { openHand } from "./fixtures/hand-landmarks.js";
 
 function makeBones() {
   const bones = {};
@@ -161,26 +163,50 @@ describe("hierarchical arm rig adapter", () => {
     expect(result.transforms.f_index01L.quaternion.angleTo(expected)).toBeLessThan(1e-6);
   });
 
-  it("converts MediaPipe camera axes into the calibrated left presentation frame", () => {
+  it("does not apply a second dorsum flip after physical-left normalization", () => {
     const { root, bones } = makeArmRig();
     const adapter = createArmRigAdapter(root, bones, "left");
+    const legacyRig = makeArmRig();
+    const legacyAdapter = createArmRigAdapter(legacyRig.root, legacyRig.bones, "right");
+    const pose = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+    const endpoints = {
+      shoulderTarget: new THREE.Vector3(-0.72, -0.91, -0.76),
+      wristTarget: new THREE.Vector3(-0.38, -0.34, -0.68),
+    };
     const result = adapter.mapJoints([
       { name: "wrist", position: [0, 0, 0] },
       { name: "middle-finger-metacarpal", position: [0, -0.2, 0] },
-    ], {
-      wrist: { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] },
-      relativeScale: 1,
-    });
+    ], pose, endpoints);
+    const legacyForearmPose = {
+      ...pose,
+      wrist: {
+        right: pose.wrist.right.map((value) => -value),
+        up: pose.wrist.up,
+        forward: pose.wrist.forward.map((value) => -value),
+      },
+    };
+    const legacyForearm = legacyAdapter.mapJoints([
+      { name: "wrist", position: [0, 0, 0] },
+      { name: "middle-finger-metacarpal", position: [0, -0.2, 0] },
+    ], legacyForearmPose, endpoints);
 
     const achievedPalm = result.rootQuaternion.clone()
       .multiply(result.transforms.handL.quaternion)
       .multiply(adapter.handToPalmQuaternion)
       .normalize();
-    const calibratedFrame = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0),
-      Math.PI,
-    );
-    expect(achievedPalm.angleTo(calibratedFrame)).toBeLessThan(1e-6);
+    const display = (vector) => new THREE.Vector3(vector[0], -vector[1], -vector[2]);
+    const expectedPalm = new THREE.Quaternion().setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(
+        display(pose.wrist.right),
+        display(pose.wrist.up),
+        display(pose.wrist.forward),
+      ),
+    ).normalize();
+    expect(achievedPalm.angleTo(expectedPalm)).toBeLessThan(1e-6);
+    expect(result.rootQuaternion.angleTo(legacyForearm.rootQuaternion)).toBeLessThan(1e-6);
   });
 
   it("distributes tracked palm roll through the forearm without changing authored fingers", () => {

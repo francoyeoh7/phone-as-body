@@ -175,8 +175,17 @@ async function inspectViewport(browser, name, viewport) {
     if (app.rightHandFlashlight?.root) app.rightHandFlashlight.root.visible = false;
   });
 
-  const dorsumBasis = { right: [-1, 0, 0], up: [0, -1, 0], forward: [0, 0, 1] };
-  const palmBasis = { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] };
+  // Captured from a real mirrored rear-camera physical-left frame (seq 575).
+  const dorsumBasis = {
+    right: [-0.8408492655353408, -0.5319082786703879, 0.10023021366126626],
+    up: [0.5245816854004985, -0.8464580736746061, -0.09122929821854095],
+    forward: [0.13336629255944124, -0.024131153991885604, 0.9907729908591419],
+  };
+  const palmBasis = {
+    right: dorsumBasis.right.map((value) => -value),
+    up: dorsumBasis.up,
+    forward: dorsumBasis.forward.map((value) => -value),
+  };
   const shortPoints = translateLandmarks(OPEN_POINTS, 0.12, 0.86);
   const longPoints = translateLandmarks(OPEN_POINTS, 0.82, 0.25);
   const palmPoints = translateLandmarks(OPEN_POINTS, 0.72, 0.35);

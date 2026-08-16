@@ -92,60 +92,6 @@ function projectBoundaryEntry(camera, shoulder, wrist) {
   return candidates.sort((left, right) => left.t - right.t)[0] ?? null;
 }
 
-function triangleWorldNormal(mesh, triangleIndex) {
-  const position = mesh.geometry.getAttribute("position");
-  const indices = mesh.geometry.index?.array;
-  const vertices = [];
-  for (let offset = 0; offset < 3; offset += 1) {
-    const index = indices ? indices[triangleIndex * 3 + offset] : triangleIndex * 3 + offset;
-    const point = new THREE.Vector3().fromBufferAttribute(position, index);
-    vertices.push(mesh.localToWorld(mesh.applyBoneTransform(index, point)));
-  }
-  const normal = vertices[1].clone().sub(vertices[0]).cross(vertices[2].clone().sub(vertices[0]));
-  const area = normal.length();
-  return { normal: area > 1e-8 ? normal.multiplyScalar(1 / area) : normal, area };
-}
-
-function authoredDorsalTriangles(hand) {
-  const mesh = hand.presentationModel.getObjectByName("ArmsMesh");
-  const bones = hand.presentationBones;
-  const palmPoints = ["palm01L", "palm02L", "palm03L", "palm04L"]
-    .map((name) => bones[name].getWorldPosition(new THREE.Vector3()));
-  const palmCenter = palmPoints.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(0.25);
-  const authoredForward = palmPoints[0].clone().sub(palmPoints[3])
-    .cross(palmCenter.clone().sub(bones.handL.getWorldPosition(new THREE.Vector3())))
-    .normalize();
-  const handPosition = bones.handL.getWorldPosition(new THREE.Vector3());
-  const triangleCount = (mesh.geometry.index?.count ?? mesh.geometry.getAttribute("position").count) / 3;
-  const selected = [];
-  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
-    const normal = triangleWorldNormal(mesh, triangle);
-    const position = new THREE.Vector3();
-    const indices = mesh.geometry.index?.array;
-    for (let offset = 0; offset < 3; offset += 1) {
-      const index = indices ? indices[triangle * 3 + offset] : triangle * 3 + offset;
-      position.add(mesh.localToWorld(mesh.applyBoneTransform(
-        index,
-        new THREE.Vector3().fromBufferAttribute(mesh.geometry.getAttribute("position"), index),
-      )));
-    }
-    position.multiplyScalar(1 / 3);
-    if (position.distanceTo(handPosition) < 0.25 && normal.normal.dot(authoredForward) > 0.65) selected.push(triangle);
-  }
-  return { mesh, selected };
-}
-
-function averageTriangleNormal(mesh, triangles) {
-  mesh.skeleton.update();
-  mesh.updateWorldMatrix(true, false);
-  const result = new THREE.Vector3();
-  for (const triangle of triangles) {
-    const sample = triangleWorldNormal(mesh, triangle);
-    result.addScaledVector(sample.normal, sample.area);
-  }
-  return result.normalize();
-}
-
 function replaceWristLandmark(pose, x, y, center = pose.center) {
   const landmarks = pose.landmarks.map((point) => (Array.isArray(point) ? point.slice() : { ...point }));
   landmarks[0] = Array.isArray(landmarks[0])
@@ -501,22 +447,40 @@ describe("FirstPersonHand", () => {
     expect(secondWrist.distanceTo(firstWrist)).toBeLessThan(0.02);
   });
 
-  it("presents the authored dorsal surface for a rear-camera physical-left pose", async () => {
+  it("aligns the real GLB palm frame with a captured rear-camera left-hand basis", async () => {
     const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
     const hand = new FirstPersonHand({ camera, loader: assetLoader() });
     await hand.load();
-    const dorsal = authoredDorsalTriangles(hand);
-    expect(dorsal.selected.length).toBeGreaterThan(20);
 
     const tracked = deriveHandFeatures(openHand({
       physicalHandedness: "Left",
       inputMirrored: true,
     }));
-    hand.applyPose({ ...tracked, trackingConfidence: 1, reachEligible: true }, 1);
-    camera.updateMatrixWorld(true);
+    const capturedWrist = {
+      right: [-0.8408492655353408, -0.5319082786703879, 0.10023021366126626],
+      up: [0.5245816854004985, -0.8464580736746061, -0.09122929821854095],
+      forward: [0.13336629255944124, -0.024131153991885604, 0.9907729908591419],
+    };
+    hand.applyPose({
+      ...tracked,
+      wrist: capturedWrist,
+      trackingConfidence: 1,
+      reachEligible: true,
+    }, 1);
     hand.root.updateWorldMatrix(true, true);
-    const towardCamera = camera.getWorldDirection(new THREE.Vector3()).negate();
-    expect(averageTriangleNormal(dorsal.mesh, dorsal.selected).dot(towardCamera)).toBeGreaterThan(0.55);
+    const adapter = hand.presentationAdapters.left;
+    const achievedPalm = hand.presentationBones.handL.getWorldQuaternion(new THREE.Quaternion())
+      .multiply(adapter.handToPalmQuaternion)
+      .normalize();
+    const display = (vector) => new THREE.Vector3(vector[0], -vector[1], -vector[2]);
+    const expectedPalm = new THREE.Quaternion().setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(
+        display(capturedWrist.right),
+        display(capturedWrist.up),
+        display(capturedWrist.forward),
+      ),
+    ).normalize();
+    expect(achievedPalm.angleTo(expectedPalm)).toBeLessThan(1e-5);
   });
 
   it("keeps the non-projecting camera fallback shoulder relative to the tracked wrist", async () => {

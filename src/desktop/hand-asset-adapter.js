@@ -30,22 +30,28 @@ function poseBasis(pose) {
   };
 }
 
-function displayPoseBasis(pose, side = "right") {
+function displayPoseBasis(pose) {
   const basis = poseBasis(pose);
   const toThreeCamera = (vector) => new THREE.Vector3(vector.x, -vector.y, -vector.z);
-  const display = {
+  return {
     right: toThreeCamera(basis.right),
     up: toThreeCamera(basis.up),
     forward: toThreeCamera(basis.forward),
   };
-  // The checked-in left GLB authors its dorsal surface on the opposite side
-  // of the MediaPipe physical-left frame. Rotate the presentation basis 180
-  // degrees around up so rear-camera forward=+Z shows the hand back.
+}
+
+function forearmPoseBasis(displayBasis, side) {
+  const basis = {
+    right: displayBasis.right.clone(),
+    up: displayBasis.up.clone(),
+    forward: displayBasis.forward.clone(),
+  };
+  // Preserve the established left-arm roll while the hand uses its anatomical surface.
   if (side === "left") {
-    display.right.negate();
-    display.forward.negate();
+    basis.right.negate();
+    basis.forward.negate();
   }
-  return display;
+  return basis;
 }
 
 function frameQuaternion(direction, normalSeed) {
@@ -169,8 +175,8 @@ export function createFlatWebXRAdapter(bones, side = "right") {
   };
 }
 
-function poseBasisQuaternion(pose, side = "right") {
-  const basis = displayPoseBasis(pose, side);
+function poseBasisQuaternion(pose) {
+  const basis = displayPoseBasis(pose);
   return new THREE.Quaternion().setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(basis.right, basis.up, basis.forward),
   ).normalize();
@@ -371,8 +377,9 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
       const points = discoverEntryMap(entries);
       const entryData = discoverEntryData(entries);
       if (!points.wrist) return null;
-      const displayBasis = displayPoseBasis(pose, side);
-      const targetPalmQuaternion = poseBasisQuaternion(pose, side);
+      const displayBasis = displayPoseBasis(pose);
+      const forearmBasis = forearmPoseBasis(displayBasis, side);
+      const targetPalmQuaternion = poseBasisQuaternion(pose);
       const relativeScale = Number.isFinite(pose?.relativeScale) && pose.relativeScale > EPSILON
         ? pose.relativeScale
         : 1;
@@ -385,10 +392,10 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
       const hasEndpoints = endpointDirection && endpointDirection.lengthSq() > EPSILON;
       const forearmDirection = hasEndpoints
         ? endpointDirection.clone().normalize()
-        : targetForearmDirection(displayBasis, pose);
+        : targetForearmDirection(forearmBasis, pose);
       const targetForearmQuaternion = frameQuaternion(
         forearmDirection,
-        displayBasis.forward,
+        forearmBasis.forward,
       );
       const rootQuaternion = targetForearmQuaternion
         .multiply(restForearmQuaternion.clone().invert())
