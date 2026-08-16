@@ -73,6 +73,159 @@ function leftFingerEnvelope(hand) {
   return new THREE.Box3().setFromPoints(points);
 }
 
+function projectBoundaryEntry(camera, shoulder, wrist) {
+  const start = shoulder.clone().project(camera);
+  const end = wrist.clone().project(camera);
+  const delta = end.clone().sub(start);
+  const candidates = [];
+  const add = (t, x, y, edge) => {
+    if (t >= 0 && t <= 1 && x >= -1 - 1e-6 && x <= 1 + 1e-6 && y >= -1 - 1e-6 && y <= 1 + 1e-6) {
+      candidates.push({ t, x, y, edge });
+    }
+  };
+  if (Math.abs(delta.x) > 1e-8) {
+    for (const x of [-1, 1]) add((x - start.x) / delta.x, x, start.y + ((x - start.x) / delta.x) * delta.y, x === -1 ? "left" : "right");
+  }
+  if (Math.abs(delta.y) > 1e-8) {
+    for (const y of [-1, 1]) add((y - start.y) / delta.y, start.x + ((y - start.y) / delta.y) * delta.x, y, y === -1 ? "bottom" : "top");
+  }
+  return candidates.sort((left, right) => left.t - right.t)[0] ?? null;
+}
+
+function triangleWorldNormal(mesh, triangleIndex) {
+  const position = mesh.geometry.getAttribute("position");
+  const indices = mesh.geometry.index?.array;
+  const vertices = [];
+  for (let offset = 0; offset < 3; offset += 1) {
+    const index = indices ? indices[triangleIndex * 3 + offset] : triangleIndex * 3 + offset;
+    const point = new THREE.Vector3().fromBufferAttribute(position, index);
+    vertices.push(mesh.localToWorld(mesh.applyBoneTransform(index, point)));
+  }
+  const normal = vertices[1].clone().sub(vertices[0]).cross(vertices[2].clone().sub(vertices[0]));
+  const area = normal.length();
+  return { normal: area > 1e-8 ? normal.multiplyScalar(1 / area) : normal, area };
+}
+
+function authoredDorsalTriangles(hand) {
+  const mesh = hand.presentationModel.getObjectByName("ArmsMesh");
+  const bones = hand.presentationBones;
+  const palmPoints = ["palm01L", "palm02L", "palm03L", "palm04L"]
+    .map((name) => bones[name].getWorldPosition(new THREE.Vector3()));
+  const palmCenter = palmPoints.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(0.25);
+  const authoredForward = palmPoints[0].clone().sub(palmPoints[3])
+    .cross(palmCenter.clone().sub(bones.handL.getWorldPosition(new THREE.Vector3())))
+    .normalize();
+  const handPosition = bones.handL.getWorldPosition(new THREE.Vector3());
+  const triangleCount = (mesh.geometry.index?.count ?? mesh.geometry.getAttribute("position").count) / 3;
+  const selected = [];
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    const normal = triangleWorldNormal(mesh, triangle);
+    const position = new THREE.Vector3();
+    const indices = mesh.geometry.index?.array;
+    for (let offset = 0; offset < 3; offset += 1) {
+      const index = indices ? indices[triangle * 3 + offset] : triangle * 3 + offset;
+      position.add(mesh.localToWorld(mesh.applyBoneTransform(
+        index,
+        new THREE.Vector3().fromBufferAttribute(mesh.geometry.getAttribute("position"), index),
+      )));
+    }
+    position.multiplyScalar(1 / 3);
+    if (position.distanceTo(handPosition) < 0.25 && normal.normal.dot(authoredForward) > 0.65) selected.push(triangle);
+  }
+  return { mesh, selected };
+}
+
+function averageTriangleNormal(mesh, triangles) {
+  mesh.skeleton.update();
+  mesh.updateWorldMatrix(true, false);
+  const result = new THREE.Vector3();
+  for (const triangle of triangles) {
+    const sample = triangleWorldNormal(mesh, triangle);
+    result.addScaledVector(sample.normal, sample.area);
+  }
+  return result.normalize();
+}
+
+function replaceWristLandmark(pose, x, y, center = pose.center) {
+  const landmarks = pose.landmarks.map((point) => (Array.isArray(point) ? point.slice() : { ...point }));
+  landmarks[0] = Array.isArray(landmarks[0])
+    ? [x, y, landmarks[0][2]]
+    : { ...landmarks[0], x, y };
+  return { ...pose, landmarks, center };
+}
+
+function translateTrackedPose(pose, wristX, wristY) {
+  const wrist = pose.landmarks?.[0] ?? [0.5, 0.72, 0];
+  const offsetX = wristX - wrist[0];
+  const offsetY = wristY - wrist[1];
+  return {
+    ...pose,
+    landmarks: pose.landmarks.map((point) => [
+      point[0] + offsetX,
+      point[1] + offsetY,
+      point[2],
+    ]),
+    center: [
+      pose.center[0] + offsetX,
+      pose.center[1] + offsetY,
+      pose.center[2],
+    ],
+  };
+}
+
+function projectedShoulderSleeveOpening(camera, hand) {
+  camera.updateMatrixWorld(true);
+  hand.root.updateWorldMatrix(true, true);
+  const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
+  const wrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+  const armAxis = wrist.clone().sub(shoulder);
+  const sleeve = hand.presentationModel.getObjectByName("LeftSleeveShell");
+  sleeve.skeleton.update();
+  const edgeCounts = new Map();
+  const indexes = sleeve.geometry.index.array;
+  for (let offset = 0; offset < indexes.length; offset += 3) {
+    for (const [start, end] of [
+      [indexes[offset], indexes[offset + 1]],
+      [indexes[offset + 1], indexes[offset + 2]],
+      [indexes[offset + 2], indexes[offset]],
+    ]) {
+      const key = start < end ? `${start}:${end}` : `${end}:${start}`;
+      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const boundaryIndexes = new Set();
+  for (const [key, count] of edgeCounts) {
+    if (count !== 1) continue;
+    key.split(":").forEach((index) => boundaryIndexes.add(Number(index)));
+  }
+  const axisLengthSquared = armAxis.lengthSq();
+  const boundary = [...boundaryIndexes]
+    .map((index) => sleeve.localToWorld(
+      sleeve.applyBoneTransform(
+        index,
+        new THREE.Vector3().fromBufferAttribute(sleeve.geometry.getAttribute("position"), index),
+      ),
+    ))
+    .map((point) => ({
+      point,
+      along: axisLengthSquared > 1e-8
+        ? point.clone().sub(shoulder).dot(armAxis) / axisLengthSquared
+        : Infinity,
+    }))
+    .sort((left, right) => left.along - right.along);
+  const openingEnd = boundary.findIndex((entry, index) => (
+    index < boundary.length - 1 && boundary[index + 1].along - entry.along > 0.05
+  ));
+  if (openingEnd < 0) return [];
+  return boundary.slice(0, openingEnd + 1).map(({ point }) => point.project(camera));
+}
+
+function sleeveOpeningIsOutsideViewport(points, margin = 1.02) {
+  return points.length > 0
+    && (points.every((point) => point.x < -margin)
+      || points.every((point) => point.y < -margin));
+}
+
 describe("FirstPersonHand", () => {
   it("expands 21 landmarks by joint name into 25 finite normalized transforms", () => {
     const expanded = expandMediaPipeJoints({ ...openHand(), worldLandmarks: openHand().worldLandmarks });
@@ -92,11 +245,11 @@ describe("FirstPersonHand", () => {
     const hand = new FirstPersonHand({ camera, loader: loaderFor({ "/assets/hands/left.glb": left.root }), cloneScene: (scene) => scene.clone(true) });
     await hand.load();
     const wristRest = hand.bones.wrist.position.clone();
-    hand.applyPose({ ...openHand(), handedness: "left", center: [0.2, 0.2, 0], palmSpan: 0.2, reachEligible: false, trackingConfidence: 1 }, 0.016);
+    hand.applyPose(replaceWristLandmark({ ...openHand(), handedness: "left", palmSpan: 0.2, reachEligible: false, trackingConfidence: 1 }, 0.2, 0.2, [0.2, 0.2, 0]), 0.016);
     const first = hand.root.position.clone();
     expect(first.x).toBeLessThan(0);
     expect(first.y).toBeGreaterThan(0);
-    hand.applyPose({ ...openHand(), handedness: "left", center: [0.8, 0.45, 0], palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.016);
+    hand.applyPose(replaceWristLandmark({ ...openHand(), handedness: "left", palmSpan: 0.2, reachEligible: true, trackingConfidence: 1 }, 0.8, 0.45, [0.8, 0.45, 0]), 0.016);
     expect(hand.root.position.x).toBeGreaterThan(first.x);
     expect(hand.root.position.y).toBeLessThan(first.y);
     expect(hand.bones.wrist.position.distanceTo(wristRest)).toBeLessThan(1e-6);
@@ -268,23 +421,6 @@ describe("FirstPersonHand", () => {
       physicalHandedness: "Left",
       inputMirrored: true,
     }));
-    const sleeveEdgeMaxNdcY = () => {
-      camera.updateMatrixWorld(true);
-      hand.root.updateWorldMatrix(true, true);
-      const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
-      const sleeve = hand.presentationModel.getObjectByName("LeftSleeveShell");
-      sleeve.skeleton.update();
-      return Math.max(...[...new Set(sleeve.geometry.index.array)]
-        .map((index) => sleeve.localToWorld(
-          sleeve.applyBoneTransform(
-            index,
-            new THREE.Vector3().fromBufferAttribute(sleeve.geometry.getAttribute("position"), index),
-          ),
-        ))
-        .sort((a, b) => a.distanceToSquared(shoulder) - b.distanceToSquared(shoulder))
-        .slice(0, 24)
-        .map((point) => point.project(camera).y));
-    };
     const measure = () => {
       hand.root.updateWorldMatrix(true, true);
       const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
@@ -296,21 +432,21 @@ describe("FirstPersonHand", () => {
         palm: wrist.distanceTo(palm),
         wristOffset: wrist.distanceTo(root),
         shoulder,
-        sleeveEdgeMaxNdcY: sleeveEdgeMaxNdcY(),
+        shoulderNdc: shoulder.clone().project(camera),
+        wristNdc: wrist.clone().project(camera),
+        sleeveOpening: projectedShoulderSleeveOpening(camera, hand),
       };
     };
 
     hand.applyPose({
-      ...tracked,
-      center: [0.08, 0.9, 0],
+      ...translateTrackedPose(tracked, 0.08, 0.9),
       relativeScale: 1,
       trackingConfidence: 1,
       reachEligible: true,
     }, 1);
     const shortArm = measure();
     hand.applyPose({
-      ...tracked,
-      center: [0.72, 0.35, -0.08],
+      ...translateTrackedPose(tracked, 0.90, 0.20),
       relativeScale: 1,
       trackingConfidence: 1,
       reachEligible: true,
@@ -324,20 +460,153 @@ describe("FirstPersonHand", () => {
     expect(longArm.wristOffset).toBeLessThan(1e-4);
     expect(shortArm.shoulder.distanceTo(longArm.shoulder)).toBeGreaterThan(0.06);
     for (const sample of [shortArm, longArm]) {
-      expect(sample.shoulder.x).toBeLessThan(-0.74);
-      expect(sample.shoulder.y).toBeLessThan(-0.84);
-      expect(sample.sleeveEdgeMaxNdcY).toBeLessThan(-1.02);
+      expect(sample.wristNdc.x).toBeGreaterThan(-0.98);
+      expect(sample.wristNdc.x).toBeLessThan(0.40);
+      expect(sample.wristNdc.y).toBeGreaterThan(-0.98);
+      expect(sample.wristNdc.y).toBeLessThan(0.55);
+      expect(sample.shoulderNdc.x < -1.02 || sample.shoulderNdc.y < -1.02).toBe(true);
+      expect(sample.sleeveOpening).toHaveLength(7);
+      expect(sleeveOpeningIsOutsideViewport(sample.sleeveOpening)).toBe(true);
     }
-    for (const center of [[0, 0.2, 0], [1, 0.2, 0], [0, 1, 0], [1, 1, 0]]) {
+    for (const [wristX, wristY] of [[0, 0.2], [1, 0.2], [0, 1], [1, 1]]) {
       hand.applyPose({
-        ...tracked,
-        center,
+        ...translateTrackedPose(tracked, wristX, wristY),
         relativeScale: 1,
         trackingConfidence: 1,
         reachEligible: true,
       }, 1);
-      expect(sleeveEdgeMaxNdcY()).toBeLessThan(-1.02);
+      const sleeveOpening = projectedShoulderSleeveOpening(camera, hand);
+      expect(sleeveOpening).toHaveLength(7);
+      expect(sleeveOpeningIsOutsideViewport(sleeveOpening)).toBe(true);
     }
+  });
+
+  it("anchors the rendered wrist to landmark zero instead of the palm center", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
+    await hand.load();
+    const tracked = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+    const landmarks = tracked.landmarks.map((point) => (Array.isArray(point) ? point.slice() : { ...point }));
+    const first = { ...tracked, center: [0.22, 0.34, 0], landmarks };
+    const second = { ...tracked, center: [0.78, 0.84, 0], landmarks };
+
+    hand.applyPose(first, 1);
+    const firstWrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+    hand.applyPose(second, 1);
+    const secondWrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+
+    expect(secondWrist.distanceTo(firstWrist)).toBeLessThan(0.02);
+  });
+
+  it("presents the authored dorsal surface for a rear-camera physical-left pose", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
+    await hand.load();
+    const dorsal = authoredDorsalTriangles(hand);
+    expect(dorsal.selected.length).toBeGreaterThan(20);
+
+    const tracked = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+    hand.applyPose({ ...tracked, trackingConfidence: 1, reachEligible: true }, 1);
+    camera.updateMatrixWorld(true);
+    hand.root.updateWorldMatrix(true, true);
+    const towardCamera = camera.getWorldDirection(new THREE.Vector3()).negate();
+    expect(averageTriangleNormal(dorsal.mesh, dorsal.selected).dot(towardCamera)).toBeGreaterThan(0.55);
+  });
+
+  it("keeps the non-projecting camera fallback shoulder relative to the tracked wrist", async () => {
+    const hand = new FirstPersonHand({ camera: new THREE.Group(), loader: assetLoader() });
+    await hand.load();
+    const tracked = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+
+    hand.applyPose({ ...tracked, trackingConfidence: 1, reachEligible: true }, 1);
+    hand.root.updateWorldMatrix(true, true);
+    const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
+    const wrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+
+    expect(shoulder.x).toBeLessThan(wrist.x);
+    expect(shoulder.y).toBeLessThan(wrist.y);
+    expect(Math.abs(shoulder.z - wrist.z)).toBeLessThan(0.2);
+  });
+
+  it("moves the arm boundary entry with the tracked wrist landmark", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
+    await hand.load();
+    const tracked = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+    const measure = (pose) => {
+      hand.applyPose(pose, 1);
+      camera.updateMatrixWorld(true);
+      hand.root.updateWorldMatrix(true, true);
+      const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
+      const wrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+      return {
+        shoulder,
+        wrist,
+        wristNdc: wrist.clone().project(camera),
+        entry: projectBoundaryEntry(camera, shoulder, wrist),
+        sleeveOpening: projectedShoulderSleeveOpening(camera, hand),
+      };
+    };
+
+    const left = measure(translateTrackedPose(tracked, 0.30, 0.58));
+    const right = measure(translateTrackedPose(tracked, 0.70, 0.58));
+
+    expect(right.wristNdc.x).toBeGreaterThan(left.wristNdc.x);
+    expect(left.entry).not.toBeNull();
+    expect(right.entry).not.toBeNull();
+    expect(Math.abs(right.entry.x - left.entry.x)).toBeGreaterThan(0.15);
+    expect(["left", "bottom"]).toContain(left.entry.edge);
+    expect(["left", "bottom"]).toContain(right.entry.edge);
+    expect(sleeveOpeningIsOutsideViewport(left.sleeveOpening)).toBe(true);
+    expect(sleeveOpeningIsOutsideViewport(right.sleeveOpening)).toBe(true);
+  });
+
+  it("keeps the shoulder entry continuous while crossing the left-bottom boundary", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
+    await hand.load();
+    const tracked = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+    const shoulders = [];
+    const entriesAlongSweep = [];
+    const sleeveOpenings = [];
+    for (let index = 0; index <= 40; index += 1) {
+      const wristX = 0.24 + index * 0.52 / 40;
+      hand.applyPose({
+        ...translateTrackedPose(tracked, wristX, 0.58),
+        relativeScale: 1,
+        trackingConfidence: 1,
+        reachEligible: true,
+      }, 1 / 15);
+      camera.updateMatrixWorld(true);
+      hand.root.updateWorldMatrix(true, true);
+      const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
+      const wrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
+      shoulders.push(shoulder);
+      entriesAlongSweep.push(projectBoundaryEntry(camera, shoulder, wrist));
+      sleeveOpenings.push(projectedShoulderSleeveOpening(camera, hand));
+    }
+
+    expect(entriesAlongSweep.every(Boolean)).toBe(true);
+    expect(sleeveOpenings.every((opening) => sleeveOpeningIsOutsideViewport(opening))).toBe(true);
+    const largestShoulderStep = shoulders.slice(1).reduce((largest, shoulder, index) => (
+      Math.max(largest, shoulder.distanceTo(shoulders[index]))
+    ), 0);
+    expect(largestShoulderStep).toBeLessThan(0.18);
   });
 
   it("keeps a neutral short reach compact and hides the shoulder entry below a wide viewport", async () => {
@@ -358,21 +627,12 @@ describe("FirstPersonHand", () => {
     const shoulder = hand.presentationBones.shoulderL.getWorldPosition(new THREE.Vector3());
     const wrist = hand.presentationBones.handL.getWorldPosition(new THREE.Vector3());
     const shoulderNdc = shoulder.clone().project(camera);
-    const sleeve = hand.presentationModel.getObjectByName("LeftSleeveShell");
-    sleeve.skeleton.update();
-    const shoulderEdge = [...new Set(sleeve.geometry.index.array)]
-      .map((index) => sleeve.localToWorld(
-        sleeve.applyBoneTransform(
-          index,
-          new THREE.Vector3().fromBufferAttribute(sleeve.geometry.getAttribute("position"), index),
-        ),
-      ))
-      .sort((a, b) => a.distanceToSquared(shoulder) - b.distanceToSquared(shoulder))
-      .slice(0, 24);
+    const sleeveOpening = projectedShoulderSleeveOpening(camera, hand);
 
     expect(shoulder.distanceTo(wrist)).toBeLessThan(0.58);
     expect(shoulderNdc.y).toBeLessThan(-1.25);
-    expect(Math.max(...shoulderEdge.map((point) => point.project(camera).y))).toBeLessThan(-1.02);
+    expect(sleeveOpening).toHaveLength(7);
+    expect(sleeveOpeningIsOutsideViewport(sleeveOpening)).toBe(true);
   });
 
   it("drives every real MCP and the thumb root into the authored fist for curledHand", async () => {

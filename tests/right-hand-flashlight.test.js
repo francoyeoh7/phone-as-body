@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { RightHandFlashlight, motionProfileForSpeed } from "../src/desktop/RightHandFlashlight.js";
+import {
+  RightHandFlashlight,
+  motionProfileForSpeed,
+  __rightHandFlashlightInternals,
+} from "../src/desktop/RightHandFlashlight.js";
 
 function assetLoader() {
   globalThis.self ??= globalThis;
@@ -24,6 +28,60 @@ function palmCenter(rig) {
     result.add(rig.bones[name].getWorldPosition(new THREE.Vector3()));
   }
   return result.multiplyScalar(0.25);
+}
+
+function palmFrame(rig) {
+  const palm01 = rig.bones.palm01R.getWorldPosition(new THREE.Vector3());
+  const palm04 = rig.bones.palm04R.getWorldPosition(new THREE.Vector3());
+  const wrist = rig.bones.handR.getWorldPosition(new THREE.Vector3());
+  const center = palmCenter(rig);
+  const lateral = palm01.sub(palm04).normalize();
+  const longitudinal = center.sub(wrist).normalize();
+  return {
+    lateral,
+    longitudinal,
+    normal: lateral.clone().cross(longitudinal).normalize(),
+  };
+}
+
+function lowerBoundaryEntry(camera, shoulder, wrist) {
+  const shoulderNdc = shoulder.clone().project(camera);
+  const wristNdc = wrist.clone().project(camera);
+  const delta = wristNdc.clone().sub(shoulderNdc);
+  const t = (-1 - shoulderNdc.y) / delta.y;
+  return shoulderNdc.addScaledVector(delta, t);
+}
+
+function sampleGrabClipEnd() {
+  globalThis.self ??= globalThis;
+  const parser = new GLTFLoader();
+  const bytes = fs.readFileSync(path.resolve("public/assets/hands/psx-arms.glb"));
+  return parser.parseAsync(
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    "/assets/hands/",
+  ).then((gltf) => {
+    const clip = gltf.animations.find((candidate) => candidate.name === "grab.R");
+    const mixer = new THREE.AnimationMixer(gltf.scene);
+    const action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.play();
+    mixer.setTime(clip.duration);
+    mixer.update(0);
+    const quaternions = {};
+    gltf.scene.traverse((object) => {
+      if (object.isBone && /^(palm|thumb|f_)/.test(object.name)) {
+        quaternions[object.name] = object.quaternion.clone();
+      }
+    });
+    return quaternions;
+  });
+}
+
+function expectQuaternionComponentsClose(actual, expected, tolerance = 1e-5) {
+  for (const component of ["x", "y", "z", "w"]) {
+    expect(Math.abs(actual[component] - expected[component])).toBeLessThan(tolerance);
+  }
 }
 
 function projectedPixels(camera, point, width = 1920, height = 1080) {
@@ -138,6 +196,118 @@ function nearestSleeveEdgeMaxNdcY(camera, mesh, shoulder, count = 24) {
 }
 
 describe("RightHandFlashlight", () => {
+  it("keeps lower-right entry in camera NDC after yaw and roll", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
+    camera.rotation.set(0.17, 1.08, -0.24, "YXZ");
+    const rig = new RightHandFlashlight({ camera, loader: assetLoader() });
+
+    await rig.load();
+    camera.updateMatrixWorld(true);
+    rig.root.updateMatrixWorld(true);
+
+    const wrist = rig.bones.handR.getWorldPosition(new THREE.Vector3());
+    const shoulder = rig.bones.shoulderR.getWorldPosition(new THREE.Vector3());
+    const entry = lowerBoundaryEntry(camera, shoulder, wrist);
+    const wristNdc = wrist.clone().project(camera);
+    expect(entry.x).toBeGreaterThan(wristNdc.x + 0.16);
+    expect(wristNdc.y).toBeGreaterThan(entry.y + 0.12);
+    expect(wristNdc.x).toBeLessThan(entry.x - 0.16);
+  });
+
+  it("preserves every authored grab.R local quaternion from an independent source clip", async () => {
+    const sampled = await sampleGrabClipEnd();
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
+    const rig = new RightHandFlashlight({ camera, loader: assetLoader() });
+
+    await rig.load();
+    for (const [name, quaternion] of Object.entries(sampled)) {
+      expectQuaternionComponentsClose(rig.model.getObjectByName(name).quaternion, quaternion);
+    }
+  });
+
+  it("guards non-finite camera/frame inputs without writing invalid bone quaternions", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
+    camera.quaternion.set(Number.NaN, 0, 0, 1);
+    const rig = new RightHandFlashlight({ camera, loader: assetLoader() });
+
+    await expect(rig.load()).resolves.toBe(true);
+    rig.model.traverse((object) => {
+      if (!object.isBone) return;
+      expect(Number.isFinite(object.quaternion.x)).toBe(true);
+      expect(Number.isFinite(object.quaternion.y)).toBe(true);
+      expect(Number.isFinite(object.quaternion.z)).toBe(true);
+      expect(Number.isFinite(object.quaternion.w)).toBe(true);
+      expect(object.quaternion.length()).toBeCloseTo(1, 6);
+    });
+
+    const parallel = __rightHandFlashlightInternals.frameFromPalmAxes(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 2, 0),
+      new THREE.Vector3(0, 0, 0),
+    );
+    expect(Number.isFinite(parallel.x)).toBe(true);
+    expect(Number.isFinite(parallel.y)).toBe(true);
+    expect(Number.isFinite(parallel.z)).toBe(true);
+    expect(Number.isFinite(parallel.w)).toBe(true);
+    expect(parallel.length()).toBeCloseTo(1, 6);
+
+    const root = new THREE.Group();
+    const bone = new THREE.Bone();
+    const endBone = new THREE.Bone();
+    root.add(bone);
+    bone.add(endBone);
+    const before = bone.quaternion.clone();
+    __rightHandFlashlightInternals.aimBoneAtDirection(
+      root,
+      bone,
+      endBone,
+      new THREE.Vector3(Number.NaN, 0, 0),
+    );
+    expect(bone.quaternion.x).toBe(before.x);
+    expect(bone.quaternion.y).toBe(before.y);
+    expect(bone.quaternion.z).toBe(before.z);
+    expect(bone.quaternion.w).toBe(before.w);
+  });
+
+  it("aligns the final wrist to the camera reference frame while the arm enters diagonally", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
+    const rig = new RightHandFlashlight({ camera, loader: assetLoader() });
+    const authoredGrab = await sampleGrabClipEnd();
+
+    await rig.load();
+    camera.updateMatrixWorld(true);
+    rig.root.updateMatrixWorld(true);
+
+    const frame = palmFrame(rig);
+    const cameraForward = camera.getWorldDirection(new THREE.Vector3());
+    expect(frame.normal.dot(cameraForward)).toBeGreaterThan(0.88);
+    expect(frame.longitudinal.x).toBeLessThan(-0.15);
+    expect(frame.longitudinal.y).toBeGreaterThan(0.65);
+
+    const wrist = rig.bones.handR.getWorldPosition(new THREE.Vector3());
+    const shoulder = rig.bones.shoulderR.getWorldPosition(new THREE.Vector3());
+    const entry = lowerBoundaryEntry(camera, shoulder, wrist);
+    const wristNdc = wrist.clone().project(camera);
+
+    expect(entry.x).toBeGreaterThan(wristNdc.x + 0.16);
+    expect(wristNdc.y).toBeGreaterThan(entry.y + 0.12);
+    expect(wristNdc.x).toBeLessThan(entry.x - 0.16);
+    for (const [name, quaternion] of Object.entries(authoredGrab)) {
+      expectQuaternionComponentsClose(rig.model.getObjectByName(name).quaternion, quaternion);
+    }
+    rig.model.traverse((object) => {
+      if (!object.isBone) return;
+      expect(Number.isFinite(object.quaternion.x)).toBe(true);
+      expect(Number.isFinite(object.quaternion.y)).toBe(true);
+      expect(Number.isFinite(object.quaternion.z)).toBe(true);
+      expect(Number.isFinite(object.quaternion.w)).toBe(true);
+      expect(object.quaternion.length()).toBeCloseTo(1, 6);
+    });
+    expect(rig.model.userData.firstPersonWristReference).toMatchObject({
+      alignment: "camera-relative-palm-frame",
+    });
+  });
+
   it("loads the authored right arm, keeps the grip socket in the palm, and aims the torch forward", async () => {
     const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
     const rig = new RightHandFlashlight({ camera, loader: assetLoader() });
@@ -165,9 +335,8 @@ describe("RightHandFlashlight", () => {
 
     const wristPixels = projectedPixels(camera, rig.bones.handR.getWorldPosition(new THREE.Vector3()));
     const fingertipPixels = projectedPixels(camera, rig.bones.f_middle03R.getWorldPosition(new THREE.Vector3()));
-    expect(fingertipPixels.y).toBeGreaterThan(wristPixels.y + 2);
+    expect(fingertipPixels.y).toBeLessThan(wristPixels.y - 2);
 
-    expect(rig.model.userData.firstPersonWristRotation).toBeCloseTo(Math.PI, 6);
     expect(rig.basePosition.x).toBeGreaterThan(0.3);
     expect(rig.basePosition.y).toBeLessThan(-0.25);
 

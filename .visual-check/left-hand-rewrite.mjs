@@ -18,6 +18,12 @@ const OPEN_POINTS = [
   [0.65, 0.64, 0.000], [0.68, 0.51, -0.005], [0.70, 0.41, -0.010], [0.72, 0.32, -0.015],
 ];
 
+function translateLandmarks(points, wristX, wristY) {
+  const offsetX = wristX - points[0][0];
+  const offsetY = wristY - points[0][1];
+  return points.map(([x, y, z]) => [x + offsetX, y + offsetY, z]);
+}
+
 async function imageStats(file) {
   const { data, info } = await sharp(file)
     .resize(160, 100, { fit: "fill" })
@@ -37,7 +43,7 @@ async function imageStats(file) {
   return { visibleRatio: visible / pixels, quantizedColors: colors.size };
 }
 
-async function capturePose(page, name, center, basis) {
+async function capturePose(page, name, center, basis, points) {
   const state = await page.evaluate(({ points, centerValue, wristBasis }) => {
     const app = window.__corridor617;
     const hand = app.handTracking.hand;
@@ -130,7 +136,7 @@ async function capturePose(page, name, center, basis) {
       palmWidth: index.distanceTo(pinky),
       forward,
     };
-  }, { points: OPEN_POINTS, centerValue: center, wristBasis: basis });
+  }, { points, centerValue: center, wristBasis: basis });
   const screenshot = path.join(output, `${name}.png`);
   await page.screenshot({ path: screenshot, timeout: 120_000 });
   return { ...state, screenshot, image: await imageStats(screenshot) };
@@ -171,9 +177,12 @@ async function inspectViewport(browser, name, viewport) {
 
   const dorsumBasis = { right: [-1, 0, 0], up: [0, -1, 0], forward: [0, 0, 1] };
   const palmBasis = { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] };
-  const shortArm = await capturePose(page, `${name}-short`, [0.12, 0.86, 0], dorsumBasis);
-  const longArm = await capturePose(page, `${name}-long`, [0.82, 0.25, 0], dorsumBasis);
-  const palm = await capturePose(page, `${name}-palm`, [0.72, 0.35, 0], palmBasis);
+  const shortPoints = translateLandmarks(OPEN_POINTS, 0.12, 0.86);
+  const longPoints = translateLandmarks(OPEN_POINTS, 0.82, 0.25);
+  const palmPoints = translateLandmarks(OPEN_POINTS, 0.72, 0.35);
+  const shortArm = await capturePose(page, `${name}-short`, [0.12, 0.86, 0], dorsumBasis, shortPoints);
+  const longArm = await capturePose(page, `${name}-long`, [0.82, 0.25, 0], dorsumBasis, longPoints);
+  const palm = await capturePose(page, `${name}-palm`, [0.72, 0.35, 0], palmBasis, palmPoints);
 
   const lifecycle = await page.evaluate(({ points, basis }) => {
     const app = window.__corridor617;

@@ -7,13 +7,18 @@ import { createRealisticSleeve } from "./realistic-sleeve.js";
 const ASSET_URL = "/assets/hands/psx-arms.glb";
 const CAMERA_FORWARD = new THREE.Vector3(-0.26, 0.12, -1).normalize();
 const DESIRED_ARM = new THREE.Vector3(0.36, -0.42, 0.18).normalize();
-const WRIST_DIRECTION = new THREE.Vector3(0.065, -0.50, -0.86).normalize();
-const RIGHT_ARM_TO_HAND_DIRECTION = new THREE.Vector3(-0.30, 0.94, -0.20).normalize();
-const HAND_OFFSET_FROM_ROOT = new THREE.Vector3(0, -0.02, -0.24);
-const FIRST_PERSON_WRIST_ROTATION = Math.PI;
+const RIGHT_ARM_TO_HAND_DIRECTION = new THREE.Vector3(-0.65, 0.84, -0.20).normalize();
+const HAND_OFFSET_FROM_ROOT = new THREE.Vector3(0, -0.10, -0.24);
 const EPSILON = 1e-8;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+const isFiniteVector = (vector) => Number.isFinite(vector.x)
+  && Number.isFinite(vector.y)
+  && Number.isFinite(vector.z);
+const isFiniteQuaternion = (quaternion) => Number.isFinite(quaternion.x)
+  && Number.isFinite(quaternion.y)
+  && Number.isFinite(quaternion.z)
+  && Number.isFinite(quaternion.w);
 const smoothstep = (value) => {
   const t = clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
@@ -101,11 +106,23 @@ function disposeResources(root) {
 }
 
 function orthonormalFrame(forwardSeed, upSeed) {
-  const forward = forwardSeed.clone().normalize();
-  let up = upSeed.clone().sub(forward.clone().multiplyScalar(upSeed.dot(forward)));
-  if (up.lengthSq() < EPSILON) up = new THREE.Vector3(0, 1, 0);
+  const forward = isFiniteVector(forwardSeed) && forwardSeed.lengthSq() >= EPSILON
+    ? forwardSeed.clone().normalize()
+    : new THREE.Vector3(0, 0, -1);
+  let up = isFiniteVector(upSeed)
+    ? upSeed.clone().sub(forward.clone().multiplyScalar(upSeed.dot(forward)))
+    : new THREE.Vector3(0, 1, 0);
+  if (!isFiniteVector(up) || up.lengthSq() < EPSILON) up = new THREE.Vector3(0, 1, 0);
   up.normalize();
-  const right = up.clone().cross(forward).normalize();
+  const right = up.clone().cross(forward);
+  if (!isFiniteVector(right) || right.lengthSq() < EPSILON) {
+    const fallbackAxis = Math.abs(forward.x) < 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+    right.copy(fallbackAxis.cross(forward).normalize());
+  } else {
+    right.normalize();
+  }
   up = forward.clone().cross(right).normalize();
   return new THREE.Quaternion().setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(right, up, forward),
@@ -122,36 +139,114 @@ function aimBoneAtDirection(root, bone, endBone, direction) {
   root.updateMatrixWorld(true);
   const start = bone.getWorldPosition(new THREE.Vector3());
   const end = endBone.getWorldPosition(new THREE.Vector3());
-  const current = end.sub(start).normalize();
-  if (current.lengthSq() < EPSILON || direction.lengthSq() < EPSILON) return;
-  const worldDelta = new THREE.Quaternion().setFromUnitVectors(current, direction.clone().normalize());
+  const current = end.sub(start);
+  if (!isFiniteVector(current) || !isFiniteVector(direction)
+    || current.lengthSq() < EPSILON || direction.lengthSq() < EPSILON) return;
+  current.normalize();
+  const target = direction.clone().normalize();
+  const worldDelta = new THREE.Quaternion().setFromUnitVectors(current, target);
+  if (!isFiniteQuaternion(worldDelta)) return;
   const parentWorld = bone.parent.getWorldQuaternion(new THREE.Quaternion());
+  if (!isFiniteQuaternion(parentWorld)) return;
   const localDelta = parentWorld.clone().invert().multiply(worldDelta).multiply(parentWorld);
-  bone.quaternion.premultiply(localDelta).normalize();
+  if (!isFiniteQuaternion(localDelta)) return;
+  const candidate = bone.quaternion.clone().premultiply(localDelta);
+  if (!isFiniteQuaternion(candidate) || candidate.lengthSq() < EPSILON) return;
+  bone.quaternion.copy(candidate.normalize());
   root.updateMatrixWorld(true);
 }
 
-function rotateBoneInWorld(root, bone, axis, angle) {
-  root.updateMatrixWorld(true);
-  const worldDelta = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-  const parentWorld = bone.parent.getWorldQuaternion(new THREE.Quaternion());
-  const localDelta = parentWorld.clone().invert().multiply(worldDelta).multiply(parentWorld);
-  bone.quaternion.premultiply(localDelta).normalize();
-  root.updateMatrixWorld(true);
+function frameFromPalmAxes(lateralSeed, longitudinalSeed, fallbackNormal) {
+  const lateral = lateralSeed.clone();
+  if (!isFiniteVector(lateral) || lateral.lengthSq() < EPSILON) lateral.set(1, 0, 0);
+  lateral.normalize();
+
+  let longitudinal = longitudinalSeed.clone()
+    .addScaledVector(lateral, -longitudinalSeed.dot(lateral));
+  if (!isFiniteVector(longitudinal) || longitudinal.lengthSq() < EPSILON) {
+    longitudinal = fallbackNormal.clone().cross(lateral);
+  }
+  if (!isFiniteVector(longitudinal) || longitudinal.lengthSq() < EPSILON) {
+    const fallbackAxis = Math.abs(lateral.y) < 0.9
+      ? new THREE.Vector3(0, 1, 0)
+      : new THREE.Vector3(1, 0, 0);
+    longitudinal = fallbackAxis.cross(lateral);
+  }
+  longitudinal.normalize();
+  const normal = lateral.clone().cross(longitudinal).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(lateral, longitudinal, normal),
+  ).normalize();
 }
 
-function applyReferenceGripSilhouette(root, bones) {
-  aimBoneAtDirection(root, bones.forearmR, bones.handR, WRIST_DIRECTION);
+function alignHandToCameraReference(root, bones, camera) {
+  root.updateMatrixWorld(true);
+  const hand = bones.handR;
+  const palm = averageBonePosition(bones, ["palm01R", "palm02R", "palm03R", "palm04R"]);
+  const lateral = bones.palm01R.getWorldPosition(new THREE.Vector3())
+    .sub(bones.palm04R.getWorldPosition(new THREE.Vector3()));
+  const longitudinal = palm.sub(hand.getWorldPosition(new THREE.Vector3()));
+  const cameraQuaternion = camera?.getWorldQuaternion(new THREE.Quaternion())
+    ?? new THREE.Quaternion();
+  if (!isFiniteQuaternion(cameraQuaternion)) cameraQuaternion.identity();
+  const targetLongitudinal = new THREE.Vector3(-0.30, 0.95, 0)
+    .applyQuaternion(cameraQuaternion)
+    .normalize();
+  const targetLateral = new THREE.Vector3(-0.95, -0.30, 0)
+    .applyQuaternion(cameraQuaternion)
+    .normalize();
+  const targetNormal = new THREE.Vector3(0, 0, -1)
+    .applyQuaternion(cameraQuaternion)
+    .normalize();
+  const sourceFrame = frameFromPalmAxes(lateral, longitudinal, targetNormal);
+  const targetFrame = frameFromPalmAxes(targetLateral, targetLongitudinal, targetNormal);
+  const worldDelta = targetFrame.multiply(sourceFrame.invert()).normalize();
+  const handWorld = hand.getWorldQuaternion(new THREE.Quaternion());
+  if (!isFiniteQuaternion(worldDelta) || !isFiniteQuaternion(handWorld)) {
+    return {
+      alignment: "camera-relative-palm-frame",
+      lateral: targetLateral.toArray(),
+      longitudinal: targetLongitudinal.toArray(),
+      normal: targetNormal.toArray(),
+    };
+  }
+  const targetHandWorld = worldDelta.multiply(handWorld).normalize();
+  const parentWorld = hand.parent.getWorldQuaternion(new THREE.Quaternion());
+  if (!isFiniteQuaternion(targetHandWorld) || !isFiniteQuaternion(parentWorld)) {
+    return {
+      alignment: "camera-relative-palm-frame",
+      lateral: targetLateral.toArray(),
+      longitudinal: targetLongitudinal.toArray(),
+      normal: targetNormal.toArray(),
+    };
+  }
+  hand.quaternion.copy(parentWorld.invert().multiply(targetHandWorld)).normalize();
+  root.updateMatrixWorld(true);
+
+  return {
+    alignment: "camera-relative-palm-frame",
+    lateral: targetLateral.toArray(),
+    longitudinal: targetLongitudinal.toArray(),
+    normal: targetNormal.toArray(),
+  };
 }
 
-function extendArmToScreenBoundary(root, bones) {
+function extendArmToScreenBoundary(root, bones, camera) {
   root.updateMatrixWorld(true);
   const handWorldQuaternion = bones.handR.getWorldQuaternion(new THREE.Quaternion());
-  aimBoneAtDirection(root, bones.shoulderR, bones.upper_armR, RIGHT_ARM_TO_HAND_DIRECTION);
-  aimBoneAtDirection(root, bones.upper_armR, bones.forearmR, RIGHT_ARM_TO_HAND_DIRECTION);
-  aimBoneAtDirection(root, bones.forearmR, bones.handR, RIGHT_ARM_TO_HAND_DIRECTION);
+  const cameraQuaternion = camera?.getWorldQuaternion(new THREE.Quaternion())
+    ?? new THREE.Quaternion();
+  if (!isFiniteQuaternion(cameraQuaternion)) cameraQuaternion.identity();
+  const desiredWorldDirection = RIGHT_ARM_TO_HAND_DIRECTION.clone()
+    .applyQuaternion(cameraQuaternion).normalize();
+  aimBoneAtDirection(root, bones.shoulderR, bones.upper_armR, desiredWorldDirection);
+  aimBoneAtDirection(root, bones.upper_armR, bones.forearmR, desiredWorldDirection);
+  aimBoneAtDirection(root, bones.forearmR, bones.handR, desiredWorldDirection);
   const parentWorldQuaternion = bones.handR.parent.getWorldQuaternion(new THREE.Quaternion());
-  bones.handR.quaternion.copy(parentWorldQuaternion.invert().multiply(handWorldQuaternion));
+  if (isFiniteQuaternion(handWorldQuaternion) && isFiniteQuaternion(parentWorldQuaternion)) {
+    const preservedHand = parentWorldQuaternion.clone().invert().multiply(handWorldQuaternion);
+    if (isFiniteQuaternion(preservedHand)) bones.handR.quaternion.copy(preservedHand.normalize());
+  }
   root.updateMatrixWorld(true);
 }
 
@@ -293,6 +388,7 @@ export class RightHandFlashlight {
       this.action.clampWhenFinished = true;
       this.action.play();
       this.mixer.setTime(grabClip.duration);
+      this.mixer.update(0);
       this.action.paused = true;
       for (const name of ["shoulderR", "upper_armR", "forearmR"]) {
         bones[name].position.copy(armRest[name].position);
@@ -302,6 +398,11 @@ export class RightHandFlashlight {
       bones.handR.position.copy(armRest.handR.position);
       bones.handR.scale.copy(armRest.handR.scale);
       model.updateMatrixWorld(true);
+      model.userData.grabEndLocalQuaternions = {};
+      model.traverse((object) => {
+        if (!object.isBone || !/^(palm|thumb|f_)/.test(object.name)) return;
+        model.userData.grabEndLocalQuaternions[object.name] = object.quaternion.toArray();
+      });
 
       this.sleeve = createRealisticSleeve(model, bones, "right");
       model.updateMatrixWorld(true);
@@ -315,8 +416,6 @@ export class RightHandFlashlight {
       );
       const targetFrame = orthonormalFrame(CAMERA_FORWARD, DESIRED_ARM);
       model.quaternion.copy(targetFrame.multiply(sourceFrame.invert()).normalize());
-      model.position.copy(handPosition).applyQuaternion(model.quaternion).multiplyScalar(-1);
-      model.userData.firstPersonWristRotation = FIRST_PERSON_WRIST_ROTATION;
       model.traverse((object) => {
         if (!object.isMesh) return;
         object.castShadow = true;
@@ -328,14 +427,16 @@ export class RightHandFlashlight {
       this.bones = bones;
       this.handBone = bones.handR;
       this.root.updateMatrixWorld(true);
-      applyReferenceGripSilhouette(this.root, bones);
-      rotateBoneInWorld(
+      extendArmToScreenBoundary(this.root, bones, this.camera);
+      model.userData.firstPersonWristReference = alignHandToCameraReference(
         this.root,
-        bones.handR,
-        new THREE.Vector3(0, 1, 0),
-        FIRST_PERSON_WRIST_ROTATION,
+        bones,
+        this.camera,
       );
-      extendArmToScreenBoundary(this.root, bones);
+      for (const [name, quaternion] of Object.entries(model.userData.grabEndLocalQuaternions)) {
+        model.getObjectByName(name).quaternion.fromArray(quaternion).normalize();
+      }
+      this.root.updateMatrixWorld(true);
       const currentHandInRoot = this.root.worldToLocal(
         bones.handR.getWorldPosition(new THREE.Vector3()),
       );
@@ -358,8 +459,8 @@ export class RightHandFlashlight {
       const gripVertical = CAMERA_FORWARD.clone().cross(gripLateral).normalize();
       const gripWorld = palm
         .addScaledVector(towardFingers, radius * 0.62)
-        .addScaledVector(gripLateral, 0.01)
-        .addScaledVector(gripVertical, -0.03);
+        .addScaledVector(gripLateral, -0.003)
+        .addScaledVector(gripVertical, 0);
       const gripLocal = this.root.worldToLocal(gripWorld.clone());
       const flashlight = createFlashlightModel(radius);
       const socket = new THREE.Group();
@@ -448,3 +549,9 @@ export class RightHandFlashlight {
     this.loaded = false;
   }
 }
+
+export const __rightHandFlashlightInternals = Object.freeze({
+  aimBoneAtDirection,
+  frameFromPalmAxes,
+  orthonormalFrame,
+});

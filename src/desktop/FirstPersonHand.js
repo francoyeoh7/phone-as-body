@@ -21,6 +21,19 @@ const finitePoint = (point) => {
   const value = asPoint(point);
   return value.length === 3 && value.every(Number.isFinite) ? value : [0, 0, 0];
 };
+const finiteCameraPoint = (point, fallback = [0, 0, 0]) => {
+  const value = asPoint(point);
+  if (value.length === 3 && value.every(Number.isFinite)) return value;
+  return fallback === null ? null : fallback.slice(0, 3);
+};
+const averageCameraPoints = (points, fallback = [0.5, 0.62, 0]) => {
+  const valid = (points ?? [])
+    .map((point) => finiteCameraPoint(point, null))
+    .filter((point) => point !== null);
+  if (!valid.length) return fallback.slice(0, 3);
+  return valid.reduce((sum, point) => sum.map((value, index) => value + point[index]), [0, 0, 0])
+    .map((value) => value / valid.length);
+};
 const finiteVector3 = (value) => value?.isVector3 === true
   && [value.x, value.y, value.z].every(Number.isFinite);
 const finiteQuaternion = (value) => value?.isQuaternion === true
@@ -57,28 +70,62 @@ function targetToCameraPosition(camera, point) {
   return new THREE.Vector3(local.x * screenScale, local.y * screenScale, -depth);
 }
 
-function trackedWristToCameraPosition(center, relativeScale = 1) {
-  const x = Number.isFinite(center?.[0]) ? center[0] : 0.5;
-  const y = Number.isFinite(center?.[1]) ? center[1] : 0.68;
+function mapTrackedWristToCameraPosition(point, relativeScale = 1) {
+  const x = Number.isFinite(point?.[0]) ? point[0] : 0.5;
+  const y = Number.isFinite(point?.[1]) ? point[1] : 0.72;
   const scale = Number.isFinite(relativeScale) ? relativeScale : 1;
   return new THREE.Vector3(
-    clamp(-0.46 + (x - 0.5) * 0.68, -0.7, -0.04),
-    clamp(-0.48 + (0.6 - y) * 1.25, -0.7, 0.04),
-    clamp(-0.68 + (scale - 1) * 0.12, -0.78, -0.56),
+    clamp(-0.40 + (x - 0.5) * 0.68, -0.74, 0.08),
+    clamp(-0.19 + (0.62 - y) * 0.62, -0.46, 0.25),
+    clamp(-0.68 + (scale - 1) * 0.12, -0.82, -0.56),
   );
 }
 
-function trackedShoulderToCameraPosition(center, wristTarget) {
-  const x = Number.isFinite(center?.[0]) ? center[0] : 0.5;
-  const y = Number.isFinite(center?.[1]) ? center[1] : 0.6;
-  const lateral = clamp(x - 0.5, -0.5, 0.5);
-  const vertical = clamp(0.6 - y, -0.4, 0.4);
-  const lifted = Math.max(0, vertical);
-  return new THREE.Vector3(
-    clamp(-0.84 + lateral * 0.25 - vertical * 0.12, -0.96, -0.75),
-    clamp(-0.9 - lifted * 0.56, -1.13, -0.9),
-    clamp(wristTarget.z - 0.08, -0.86, -0.68),
+function solveTrackedShoulderEntry(camera, wristTarget, wristUv, palmUv, maxLength) {
+  const fallback = new THREE.Vector2(-0.72, -0.69);
+  const outward = new THREE.Vector2(
+    (wristUv?.[0] ?? 0.5) - (palmUv?.[0] ?? 0.5),
+    (palmUv?.[1] ?? 0.62) - (wristUv?.[1] ?? 0.72),
   );
+  const direction = outward.lengthSq() > 1e-6 ? outward.normalize() : fallback.clone();
+  direction.lerp(fallback, 0.7).normalize();
+  direction.x = Math.min(direction.x, -0.12);
+  direction.y = Math.min(direction.y, -0.18);
+  direction.normalize();
+
+  if (!camera?.isCamera) {
+    const fallbackTarget = wristTarget.clone().add(new THREE.Vector3(direction.x, direction.y, 0));
+    const delta = fallbackTarget.clone().sub(wristTarget);
+    if (delta.length() > maxLength) fallbackTarget.copy(wristTarget).add(delta.setLength(maxLength));
+    return fallbackTarget;
+  }
+
+  camera.updateMatrixWorld?.(true);
+  camera.updateProjectionMatrix?.();
+  const wristNdc = camera.localToWorld(wristTarget.clone()).project(camera);
+  const outsideMargin = 0.64;
+  const tangentialTravel = 0.35;
+  const outsideCandidates = [
+    new THREE.Vector3(
+      Math.min(-1 - outsideMargin, wristNdc.x - outsideMargin),
+      wristNdc.y + direction.y * tangentialTravel,
+      wristNdc.z,
+    ),
+    new THREE.Vector3(
+      wristNdc.x + direction.x * tangentialTravel,
+      Math.min(-1 - outsideMargin, wristNdc.y - outsideMargin),
+      wristNdc.z,
+    ),
+  ];
+  const shoulderTarget = outsideCandidates
+    .map((outside) => camera.worldToLocal(outside.unproject(camera)))
+    .sort((left, right) => left.distanceToSquared(wristTarget) - right.distanceToSquared(wristTarget))[0];
+  if (!finiteVector3(shoulderTarget)) {
+    return wristTarget.clone().add(new THREE.Vector3(-0.42, -0.42, 0));
+  }
+  const delta = shoulderTarget.sub(wristTarget);
+  if (delta.length() > maxLength) delta.setLength(maxLength);
+  return wristTarget.clone().add(delta);
 }
 
 function enhancePresentationSkin(root) {
@@ -390,6 +437,7 @@ export class FirstPersonHand {
     this.fallbackPose = "open";
     this.targetContact = null;
     this.poseInitialized = false;
+    this.entryTarget = null;
     this.heldItem = null;
     this.holding = false;
     this.heldGripInitialized = false;
@@ -573,6 +621,7 @@ export class FirstPersonHand {
       this.lossActive = true;
       this.lossFadeElapsed = 0;
       this.lossFadeStartOpacity = 0;
+      this.entryTarget = null;
       this._setOpacity(0);
       return this;
     }
@@ -582,11 +631,15 @@ export class FirstPersonHand {
     this._setOpacity(targetOpacity);
 
     const center = finitePoint(pose.center ?? [0.5, 0.58, 0]);
+    const wristUv = finiteCameraPoint(pose.landmarks?.[0], center);
+    const palmUv = averageCameraPoints(
+      [5, 9, 13, 17].map((index) => pose.landmarks?.[index]),
+      center,
+    );
     const side = "left";
     const eligible = typeof pose.reachEligible === "boolean" ? pose.reachEligible : true;
     const scale = clamp(Number.isFinite(pose.relativeScale) ? pose.relativeScale : 1, 0.6, 1.4);
-    const desired = trackedWristToCameraPosition(center, scale);
-    const shoulderTarget = trackedShoulderToCameraPosition(center, desired);
+    const desired = mapTrackedWristToCameraPosition(wristUv, scale);
     if (eligible) {
       const contactActive = pose.handedness === "left" && this.targetContact?.engaged === true;
       const contactPoint = contactActive ? this.targetContact.point.clone() : null;
@@ -597,8 +650,19 @@ export class FirstPersonHand {
       const reachProgress = Number.isFinite(pose.reachProgress) ? pose.reachProgress : 1;
       if (targetPosition) desired.lerp(targetPosition, clamp(reachProgress, 0, 1));
     }
-    const joints = expandMediaPipeJoints(pose);
     const presentationAdapter = this.presentationAdapters[side] ?? null;
+    const maxArmLength = Math.max(0.05, (presentationAdapter?.restArmLength ?? 0.58) * scale * 1.26);
+    const solvedShoulderTarget = solveTrackedShoulderEntry(
+      this.camera,
+      desired,
+      wristUv,
+      palmUv,
+      maxArmLength,
+    );
+    if (!this.entryTarget || !this.poseInitialized) this.entryTarget = solvedShoulderTarget.clone();
+    else this.entryTarget.lerp(solvedShoulderTarget, dampAlpha(seconds, 0.08));
+    const shoulderTarget = this.entryTarget.clone();
+    const joints = expandMediaPipeJoints(pose);
     const mapped = presentationAdapter?.mapJoints(joints, pose, {
       wristTarget: desired,
       shoulderTarget,

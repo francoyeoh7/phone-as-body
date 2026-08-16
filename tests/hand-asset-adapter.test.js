@@ -161,7 +161,7 @@ describe("hierarchical arm rig adapter", () => {
     expect(result.transforms.f_index01L.quaternion.angleTo(expected)).toBeLessThan(1e-6);
   });
 
-  it("converts MediaPipe camera axes into a matching Three.js palm orientation", () => {
+  it("converts MediaPipe camera axes into the calibrated left presentation frame", () => {
     const { root, bones } = makeArmRig();
     const adapter = createArmRigAdapter(root, bones, "left");
     const result = adapter.mapJoints([
@@ -176,29 +176,51 @@ describe("hierarchical arm rig adapter", () => {
       .multiply(result.transforms.handL.quaternion)
       .multiply(adapter.handToPalmQuaternion)
       .normalize();
-    expect(achievedPalm.angleTo(new THREE.Quaternion())).toBeLessThan(1e-6);
+    const calibratedFrame = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      Math.PI,
+    );
+    expect(achievedPalm.angleTo(calibratedFrame)).toBeLessThan(1e-6);
   });
 
-  it("keeps the forearm root stable when only the tracked palm orientation changes", () => {
+  it("distributes tracked palm roll through the forearm without changing authored fingers", () => {
     const { root, bones } = makeArmRig();
-    const adapter = createArmRigAdapter(root, bones, "left");
-    const trackedJoints = [{ name: "wrist", position: [0, 0, 0] }];
+    const open = new THREE.Quaternion();
+    const closed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    const animations = [
+      new THREE.AnimationClip("rest", 1, [
+        new THREE.QuaternionKeyframeTrack("f_index01L.quaternion", [0, 1], [...open.toArray(), ...open.toArray()]),
+      ]),
+      new THREE.AnimationClip("grab.L", 1, [
+        new THREE.QuaternionKeyframeTrack("f_index01L.quaternion", [0, 1], [...open.toArray(), ...closed.toArray()]),
+      ]),
+    ];
+    const adapter = createArmRigAdapter(root, bones, "left", animations);
+    const trackedJoints = [
+      { name: "wrist", position: [0, 0, 0] },
+      { name: "index-finger-phalanx-proximal", position: [0.1, 0.2, 0], curl: 0.45 },
+    ];
     const endpoints = {
       shoulderTarget: new THREE.Vector3(-0.7, -0.9, -0.76),
       wristTarget: new THREE.Vector3(-0.38, -0.34, -0.68),
     };
     const neutral = adapter.mapJoints(trackedJoints, {
       wrist: { right: [1, 0, 0], up: [0, -1, 0], forward: [0, 0, -1] },
+      curls: [0, 0.45, 0, 0, 0],
     }, endpoints);
     const turned = adapter.mapJoints(trackedJoints, {
       wrist: { right: [1, 0, 0], up: [0, 0, -1], forward: [0, 1, 0] },
+      curls: [0, 0.45, 0, 0, 0],
     }, endpoints);
     const achievedPalm = (mapped) => mapped.rootQuaternion.clone()
       .multiply(mapped.transforms.handL.quaternion)
       .multiply(adapter.handToPalmQuaternion)
       .normalize();
 
-    expect(neutral.rootQuaternion.angleTo(turned.rootQuaternion)).toBeLessThan(1e-6);
+    expect(neutral.rootQuaternion.angleTo(turned.rootQuaternion)).toBeGreaterThan(0.15);
+    expect(neutral.rootQuaternion.angleTo(turned.rootQuaternion)).toBeLessThan(Math.PI - 0.05);
+    expect(neutral.transforms.f_index01L.quaternion.angleTo(turned.transforms.f_index01L.quaternion))
+      .toBeLessThan(1e-6);
     expect(achievedPalm(neutral).angleTo(achievedPalm(turned))).toBeGreaterThan(1);
   });
 

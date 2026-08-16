@@ -30,14 +30,22 @@ function poseBasis(pose) {
   };
 }
 
-function displayPoseBasis(pose) {
+function displayPoseBasis(pose, side = "right") {
   const basis = poseBasis(pose);
   const toThreeCamera = (vector) => new THREE.Vector3(vector.x, -vector.y, -vector.z);
-  return {
+  const display = {
     right: toThreeCamera(basis.right),
     up: toThreeCamera(basis.up),
     forward: toThreeCamera(basis.forward),
   };
+  // The checked-in left GLB authors its dorsal surface on the opposite side
+  // of the MediaPipe physical-left frame. Rotate the presentation basis 180
+  // degrees around up so rear-camera forward=+Z shows the hand back.
+  if (side === "left") {
+    display.right.negate();
+    display.forward.negate();
+  }
+  return display;
 }
 
 function frameQuaternion(direction, normalSeed) {
@@ -161,8 +169,8 @@ export function createFlatWebXRAdapter(bones, side = "right") {
   };
 }
 
-function poseBasisQuaternion(pose) {
-  const basis = displayPoseBasis(pose);
+function poseBasisQuaternion(pose, side = "right") {
+  const basis = displayPoseBasis(pose, side);
   return new THREE.Quaternion().setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(basis.right, basis.up, basis.forward),
   ).normalize();
@@ -363,8 +371,8 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
       const points = discoverEntryMap(entries);
       const entryData = discoverEntryData(entries);
       if (!points.wrist) return null;
-      const displayBasis = displayPoseBasis(pose);
-      const targetPalmQuaternion = poseBasisQuaternion(pose);
+      const displayBasis = displayPoseBasis(pose, side);
+      const targetPalmQuaternion = poseBasisQuaternion(pose, side);
       const relativeScale = Number.isFinite(pose?.relativeScale) && pose.relativeScale > EPSILON
         ? pose.relativeScale
         : 1;
@@ -380,7 +388,7 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
         : targetForearmDirection(displayBasis, pose);
       const targetForearmQuaternion = frameQuaternion(
         forearmDirection,
-        hasEndpoints ? new THREE.Vector3(0, 0, -1) : displayBasis.forward,
+        displayBasis.forward,
       );
       const rootQuaternion = targetForearmQuaternion
         .multiply(restForearmQuaternion.clone().invert())
@@ -391,11 +399,7 @@ export function createArmRigAdapter(root, bones, side = "right", animations = []
       const handOffset = restShoulderPosition.clone().add(
         restHandPosition.clone().sub(restShoulderPosition).multiplyScalar(armLengthScale),
       );
-      const rootPosition = hasEndpoints
-        ? shoulderTarget.clone().sub(
-          endpointDirection.clone().normalize().multiplyScalar(restArmLength * scale * armLengthScale),
-        )
-        : wristTarget;
+      const rootPosition = wristTarget.clone();
       for (const bone of armChain) {
         transforms[bone.name] = {
           position: restArmChainPositions.get(bone).clone().multiplyScalar(armLengthScale),
