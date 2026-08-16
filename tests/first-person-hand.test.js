@@ -447,6 +447,32 @@ describe("FirstPersonHand", () => {
     expect(secondWrist.distanceTo(firstWrist)).toBeLessThan(0.02);
   });
 
+  it("renders from the stabilized visual wrist instead of raw landmark jitter", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
+    const hand = new FirstPersonHand({ camera, loader: assetLoader() });
+    await hand.load();
+    const tracked = deriveHandFeatures(openHand({
+      physicalHandedness: "Left",
+      inputMirrored: true,
+    }));
+    const withRawWrist = (x, visualX) => ({
+      ...replaceWristLandmark(tracked, x, 0.58),
+      visualWrist: [visualX, 0.58, 0],
+      trackingConfidence: 1,
+      reachEligible: true,
+    });
+
+    hand.applyPose(withRawWrist(0.3, 0.3), 1);
+    const first = hand.root.position.clone();
+    hand.applyPose(withRawWrist(0.7, 0.3), 1);
+    const rawJitter = hand.root.position.clone();
+    hand.applyPose(withRawWrist(0.7, 0.7), 1);
+    const deliberateMove = hand.root.position.clone();
+
+    expect(rawJitter.distanceTo(first)).toBeLessThan(0.01);
+    expect(deliberateMove.x - rawJitter.x).toBeGreaterThan(0.2);
+  });
+
   it("aligns the real GLB palm frame with a captured rear-camera left-hand basis", async () => {
     const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 10);
     const hand = new FirstPersonHand({ camera, loader: assetLoader() });

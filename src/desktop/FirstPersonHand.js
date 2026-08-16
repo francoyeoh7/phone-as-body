@@ -631,7 +631,7 @@ export class FirstPersonHand {
     this._setOpacity(targetOpacity);
 
     const center = finitePoint(pose.center ?? [0.5, 0.58, 0]);
-    const wristUv = finiteCameraPoint(pose.landmarks?.[0], center);
+    const wristUv = finiteCameraPoint(pose.visualWrist ?? pose.landmarks?.[0], center);
     const palmUv = averageCameraPoints(
       [5, 9, 13, 17].map((index) => pose.landmarks?.[index]),
       center,

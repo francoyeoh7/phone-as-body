@@ -54,11 +54,12 @@ function slerp(a, b, alpha) {
   return canonicalize(a.map((value, index) => value * wa + target[index] * wb));
 }
 
-const WRIST_FIELDS = ["center", "relativeScale", "velocity", "depth", "palmSpan", "reachProgress"];
+const WRIST_FIELDS = ["center", "visualWrist", "relativeScale", "velocity", "depth", "palmSpan", "reachProgress"];
 const FINGER_FIELDS = ["curls", "landmarks", "worldLandmarks"];
 const WRIST_CENTER_DEAD_ZONE = 0.006;
 const WRIST_SCALE_DEAD_ZONE = 0.015;
-const WRIST_ANGLE_DEAD_ZONE = 0.02;
+const VISUAL_WRIST_DEAD_ZONE = 0.008;
+const VISUAL_WRIST_ANGLE_DEAD_ZONE = 0.035;
 
 function arrayDistance(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return Infinity;
@@ -68,6 +69,21 @@ function arrayDistance(a, b) {
 function quaternionAngle(a, b) {
   const dot = Math.abs(a.reduce((sum, value, index) => sum + value * b[index], 0));
   return 2 * Math.acos(clamp(dot, -1, 1));
+}
+
+function softVectorDeadZone(anchor, target, radius) {
+  const distance = arrayDistance(anchor, target);
+  if (!Number.isFinite(distance)) return clone(target);
+  if (distance <= radius) return clone(anchor);
+  const alpha = (distance - radius) / distance;
+  return anchor.map((value, index) => lerp(value, target[index], alpha));
+}
+
+function softQuaternionDeadZone(anchor, target, radius) {
+  const angle = quaternionAngle(anchor, target);
+  if (!Number.isFinite(angle)) return clone(target);
+  if (angle <= radius) return clone(anchor);
+  return slerp(anchor, target, (angle - radius) / angle);
 }
 
 function wristFromQuaternion(value) {
@@ -153,6 +169,7 @@ export class HandPoseStream {
     target.wristQuaternion = Array.isArray(frame.wristQuaternion)
       ? canonicalize(frame.wristQuaternion) : basisQuaternion(frame.wrist);
     this.gesturePose = clone(target);
+    target.visualWrist = clone(frame.visualWrist ?? frame.landmarks?.[0] ?? frame.center);
     const prior = this.pose;
     if (prior) {
       if (arrayDistance(prior.center, target.center) < WRIST_CENTER_DEAD_ZONE) {
@@ -163,9 +180,13 @@ export class HandPoseStream {
         target.relativeScale = prior.relativeScale;
       }
       const priorQuaternion = prior.wristQuaternion ?? basisQuaternion(prior.wrist);
-      if (quaternionAngle(priorQuaternion, target.wristQuaternion) < WRIST_ANGLE_DEAD_ZONE) {
-        target.wristQuaternion = clone(priorQuaternion);
-      }
+      const priorVisualWrist = prior.visualWrist ?? prior.landmarks?.[0] ?? prior.center;
+      target.visualWrist = softVectorDeadZone(priorVisualWrist, target.visualWrist, VISUAL_WRIST_DEAD_ZONE);
+      target.wristQuaternion = softQuaternionDeadZone(
+        priorQuaternion,
+        target.wristQuaternion,
+        VISUAL_WRIST_ANGLE_DEAD_ZONE,
+      );
     }
     const interval = prior && Number.isFinite(this.previousAcceptedAt)
       ? Math.max(0, frame.receivedAt - this.previousAcceptedAt) : 0;

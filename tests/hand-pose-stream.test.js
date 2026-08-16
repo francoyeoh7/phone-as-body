@@ -8,6 +8,12 @@ const pose = (overrides = {}) => ({
   openness: 0.9, grabStrength: 0.1, palmFacing: 0.9, relativeScale: 1, velocity: 0, ...overrides,
 });
 
+const rotatedWrist = (angle) => ({
+  right: [Math.cos(angle), Math.sin(angle), 0],
+  up: [-Math.sin(angle), Math.cos(angle), 0],
+  forward: [0, 0, 1],
+});
+
 describe("HandPoseStream", () => {
   it("rejects stale sequence and sender-clock skew, and smooths only on receipt", () => {
     const stream = new HandPoseStream();
@@ -66,6 +72,74 @@ describe("HandPoseStream", () => {
     expect(sampled.pose.center).toEqual([0.5, 0.5, 0]);
     expect(sampled.pose.relativeScale).toBe(1);
     expect(sampled.pose.wrist.right).toEqual([1, 0, 0]);
+  });
+
+  it("holds stationary visual palm jitter while preserving the latest raw gesture pose", () => {
+    const stream = new HandPoseStream();
+    const base = [0.5, 0.5, 0];
+    stream.accept(pose({
+      seq: 1,
+      receivedAt: 0,
+      center: base,
+      landmarks: [base],
+      wrist: rotatedWrist(0),
+    }));
+
+    let latestOffset = 0;
+    let latestAngle = 0;
+    for (let seq = 2; seq <= 9; seq += 1) {
+      latestOffset = seq % 2 === 0 ? 0.005 : -0.005;
+      latestAngle = seq % 2 === 0 ? 0.028 : -0.028;
+      stream.accept(pose({
+        seq,
+        receivedAt: (seq - 1) * 66,
+        center: base,
+        landmarks: [[base[0] + latestOffset, base[1] - latestOffset, 0]],
+        wrist: rotatedWrist(latestAngle),
+      }));
+    }
+
+    const sampled = stream.sample(528);
+    expect(sampled.pose.visualWrist).toEqual(base);
+    expect(sampled.pose.wrist.right[0]).toBeCloseTo(1, 8);
+    expect(sampled.pose.wrist.right[1]).toBeCloseTo(0, 8);
+    expect(sampled.gesturePose.landmarks[0][0]).toBeCloseTo(base[0] + latestOffset, 8);
+    expect(sampled.gesturePose.wrist.right[1]).toBeCloseTo(Math.sin(latestAngle), 8);
+  });
+
+  it("unlocks visual palm motion within two 15 Hz frames without delaying gestures", () => {
+    const stream = new HandPoseStream({ wristTimeConstantMs: 60 });
+    const angle = Math.PI / 12;
+    stream.accept(pose({
+      seq: 1,
+      receivedAt: 0,
+      center: [0.5, 0.5, 0],
+      landmarks: [[0.5, 0.5, 0]],
+      wrist: rotatedWrist(0),
+    }));
+    stream.accept(pose({
+      seq: 2,
+      receivedAt: 66,
+      center: [0.6, 0.5, 0],
+      landmarks: [[0.6, 0.5, 0]],
+      wrist: rotatedWrist(angle),
+    }));
+
+    const immediate = stream.sample(66);
+    expect(immediate.gesturePose.landmarks[0][0]).toBe(0.6);
+    expect(immediate.gesturePose.wrist.right[1]).toBeCloseTo(Math.sin(angle), 8);
+
+    stream.accept(pose({
+      seq: 3,
+      receivedAt: 132,
+      center: [0.6, 0.5, 0],
+      landmarks: [[0.6, 0.5, 0]],
+      wrist: rotatedWrist(angle),
+    }));
+    const sampled = stream.sample(132);
+    expect(sampled.pose.visualWrist).toBeDefined();
+    expect(sampled.pose.visualWrist[0]).toBeGreaterThan(0.58);
+    expect(Math.atan2(sampled.pose.wrist.right[1], sampled.pose.wrist.right[0])).toBeGreaterThan(0.19);
   });
 
   it("rejects right tracked frames without replacing the visual left pose", () => {
