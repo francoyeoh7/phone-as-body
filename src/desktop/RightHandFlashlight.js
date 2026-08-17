@@ -343,7 +343,7 @@ export class RightHandFlashlight {
     this.root = new THREE.Group();
     this.root.name = "persistent-right-flashlight-hand";
     this.root.visible = false;
-    this.basePosition = new THREE.Vector3(0.34, -0.28, -0.62);
+    this.basePosition = new THREE.Vector3(0.705, -0.28, -0.62);
     this.root.position.copy(this.basePosition);
     this.baseQuaternion = new THREE.Quaternion();
     this.model = null;

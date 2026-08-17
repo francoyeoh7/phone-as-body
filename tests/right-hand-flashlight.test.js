@@ -195,6 +195,25 @@ function nearestSleeveEdgeMaxNdcY(camera, mesh, shoulder, count = 24) {
     .map((point) => point.project(camera).y));
 }
 
+function skinnedMeshMaxVisibleNdcX(camera, mesh) {
+  mesh.skeleton?.update();
+  mesh.updateWorldMatrix(true, false);
+  const indices = mesh.geometry.index
+    ? [...new Set(mesh.geometry.index.array)]
+    : Array.from({ length: mesh.geometry.getAttribute("position").count }, (_, index) => index);
+  return Math.max(...indices.map((index) => {
+    const point = new THREE.Vector3().fromBufferAttribute(
+      mesh.geometry.getAttribute("position"),
+      index,
+    );
+    if (mesh.isSkinnedMesh) mesh.applyBoneTransform(index, point);
+    const ndc = mesh.localToWorld(point).project(camera);
+    return ndc.y >= -1 && ndc.y <= 1 && ndc.z >= -1 && ndc.z <= 1
+      ? ndc.x
+      : Number.NEGATIVE_INFINITY;
+  }));
+}
+
 function positivePeakTimes(values, fps = 60) {
   const peaks = [];
   for (let index = 1; index < values.length - 1; index += 1) {
@@ -310,6 +329,25 @@ describe("RightHandFlashlight", () => {
     expect(entry.x).toBeGreaterThan(wristNdc.x + 0.16);
     expect(wristNdc.y).toBeGreaterThan(entry.y + 0.12);
     expect(wristNdc.x).toBeLessThan(entry.x - 0.16);
+  });
+
+  it("places the right wrist midway between its former position and the right edge", async () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
+    const rig = new RightHandFlashlight({ camera, loader: assetLoader() });
+
+    await rig.load();
+    camera.updateMatrixWorld(true);
+    rig.root.updateMatrixWorld(true);
+
+    const wristNdc = rig.bones.handR.getWorldPosition(new THREE.Vector3()).project(camera);
+    const modelMaxNdcX = [];
+    rig.model.traverse((object) => {
+      if (object.isMesh) modelMaxNdcX.push(skinnedMeshMaxVisibleNdcX(camera, object));
+    });
+
+    expect(wristNdc.x).toBeCloseTo(0.659, 2);
+    expect(wristNdc.y).toBeCloseTo(-0.631, 2);
+    expect(Math.max(...modelMaxNdcX)).toBeLessThan(0.91);
   });
 
   it("preserves every authored grab.R local quaternion from an independent source clip", async () => {
