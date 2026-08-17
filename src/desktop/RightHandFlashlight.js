@@ -11,8 +11,7 @@ const RIGHT_ARM_TO_HAND_DIRECTION = new THREE.Vector3(-0.65, 0.84, -0.20).normal
 const HAND_OFFSET_FROM_ROOT = new THREE.Vector3(0, -0.10, -0.24);
 const EPSILON = 1e-8;
 const IDLE_BOB_FREQUENCY = 0.2;
-const WALK_BOB_FREQUENCY_GAIN = 6;
-const RUN_BOB_FREQUENCY_GAIN = 2.7;
+const MOVEMENT_BOB_FREQUENCY = 1 / 1.5;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 const isFiniteVector = (vector) => Number.isFinite(vector.x)
@@ -329,7 +328,8 @@ export function motionProfileForSpeed(speed = 0, maxSpeed = 3.25) {
     normalized,
     walk,
     run,
-    frequency: IDLE_BOB_FREQUENCY + walk * WALK_BOB_FREQUENCY_GAIN + run * RUN_BOB_FREQUENCY_GAIN,
+    frequency: IDLE_BOB_FREQUENCY
+      + walk * (MOVEMENT_BOB_FREQUENCY - IDLE_BOB_FREQUENCY),
     translationAmplitude: 0.0032 + walk * 0.011 + run * 0.024,
     rotationAmplitude: 0.005 + walk * 0.017 + run * 0.031,
   };
@@ -356,6 +356,9 @@ export class RightHandFlashlight {
     this.action = null;
     this.phase = 0;
     this.smoothedSpeed = 0;
+    this.bobFrequency = null;
+    this.bobTranslationAmplitude = null;
+    this.bobRotationAmplitude = null;
     this.loaded = false;
     this.destroyed = false;
     if (typeof this.camera?.add === "function") this.camera.add(this.root);
@@ -512,19 +515,31 @@ export class RightHandFlashlight {
     const speedAlpha = 1 - Math.exp(-seconds / 0.11);
     this.smoothedSpeed += (speed - this.smoothedSpeed) * speedAlpha;
     const profile = motionProfileForSpeed(this.smoothedSpeed, maxSpeed);
-    this.phase += seconds * profile.frequency * Math.PI * 2;
-    const amplitude = profile.translationAmplitude;
-    const rotation = profile.rotationAmplitude;
+    if (!Number.isFinite(this.bobTranslationAmplitude)) {
+      this.bobFrequency = profile.frequency;
+      this.bobTranslationAmplitude = profile.translationAmplitude;
+      this.bobRotationAmplitude = profile.rotationAmplitude;
+    }
+    this.bobFrequency = Math.max(this.bobFrequency, profile.frequency);
+    this.phase += seconds * this.bobFrequency * Math.PI * 2;
+    if (this.phase >= Math.PI * 2) {
+      this.phase %= Math.PI * 2;
+      this.bobFrequency = profile.frequency;
+      this.bobTranslationAmplitude = profile.translationAmplitude;
+      this.bobRotationAmplitude = profile.rotationAmplitude;
+    }
+    const amplitude = this.bobTranslationAmplitude;
+    const rotation = this.bobRotationAmplitude;
     const stride = Math.sin(this.phase);
-    const doubleStride = Math.sin(this.phase * 2 + 0.42);
-    const breath = Math.sin(this.phase * 0.48 + 0.8);
+    const offsetStride = Math.sin(this.phase + 0.42) - Math.sin(0.42);
+    const lift = (1 - Math.cos(this.phase)) * 0.5;
     this.root.position.set(
       this.basePosition.x + stride * amplitude * 0.52,
-      this.basePosition.y + Math.abs(doubleStride) * amplitude * 0.62 + breath * 0.0022,
-      this.basePosition.z + doubleStride * amplitude * 0.22,
+      this.basePosition.y + lift * amplitude * 0.62,
+      this.basePosition.z + offsetStride * amplitude * 0.22,
     );
     this.root.quaternion.setFromEuler(new THREE.Euler(
-      doubleStride * rotation * 0.32,
+      offsetStride * rotation * 0.32,
       stride * rotation * 0.48,
       stride * rotation * 0.72,
       "YXZ",

@@ -195,15 +195,103 @@ function nearestSleeveEdgeMaxNdcY(camera, mesh, shoulder, count = 24) {
     .map((point) => point.project(camera).y));
 }
 
+function positivePeakTimes(values, fps = 60) {
+  const peaks = [];
+  for (let index = 1; index < values.length - 1; index += 1) {
+    if (values[index] > values[index - 1] && values[index] >= values[index + 1]) {
+      peaks.push(index / fps);
+    }
+  }
+  return peaks;
+}
+
+function expectBobSpacing(values, minimumPeaks = 4) {
+  const peaks = positivePeakTimes(values);
+  expect(peaks.length).toBeGreaterThanOrEqual(minimumPeaks);
+  for (let index = 1; index < peaks.length; index += 1) {
+    expect(peaks[index] - peaks[index - 1]).toBeGreaterThanOrEqual(1.5 - 1 / 60);
+  }
+}
+
 describe("RightHandFlashlight", () => {
-  it("keeps idle natural motion at 0.2 Hz while preserving walking and running cadence", () => {
+  it("keeps idle motion at 0.2 Hz and caps all movement at one bob per 1.5 seconds", () => {
     const idle = motionProfileForSpeed(0, 3.25);
     const walk = motionProfileForSpeed(0.64 * 3.25, 3.25);
     const run = motionProfileForSpeed(3.25, 3.25);
 
     expect(idle.frequency).toBeCloseTo(0.2, 6);
-    expect(walk.frequency).toBeCloseTo(6.2, 6);
-    expect(run.frequency).toBeCloseTo(8.9, 6);
+    expect(walk.frequency).toBeCloseTo(1 / 1.5, 6);
+    expect(run.frequency).toBeCloseTo(1 / 1.5, 6);
+  });
+
+  it("keeps visible walking translation and rotation peaks at least 1.5 seconds apart", () => {
+    const rig = new RightHandFlashlight();
+    const speed = 0.64 * 3.25;
+    const samples = {
+      positionX: [], positionY: [], positionZ: [],
+      rotationX: [], rotationY: [], rotationZ: [],
+    };
+    rig.loaded = true;
+    rig.smoothedSpeed = speed;
+
+    for (let frame = 0; frame < 9 * 60; frame += 1) {
+      rig.update(1 / 60, { speed, maxSpeed: 3.25 });
+      samples.positionX.push(rig.root.position.x);
+      samples.positionY.push(rig.root.position.y);
+      samples.positionZ.push(rig.root.position.z);
+      const rotation = new THREE.Euler().setFromQuaternion(rig.root.quaternion, "YXZ");
+      samples.rotationX.push(rotation.x);
+      samples.rotationY.push(rotation.y);
+      samples.rotationZ.push(rotation.z);
+    }
+
+    for (const values of Object.values(samples)) expectBobSpacing(values);
+  });
+
+  it("does not create a second bob before 1.5 seconds when walking starts", () => {
+    const rig = new RightHandFlashlight();
+    const samples = [];
+    rig.loaded = true;
+
+    for (let frame = 0; frame < 9 * 60; frame += 1) {
+      const speed = frame < 2 ? 0 : 0.64 * 3.25;
+      rig.update(1 / 60, { speed, maxSpeed: 3.25 });
+      samples.push(rig.root.position.y);
+    }
+
+    expectBobSpacing(samples);
+  });
+
+  it("does not create extra vertical bobs when walking stops", () => {
+    const rig = new RightHandFlashlight();
+    const samples = [];
+    rig.loaded = true;
+
+    for (let frame = 0; frame < 10 * 60; frame += 1) {
+      const speed = frame < 5 * 60 ? 3.2 : 0;
+      rig.update(1 / 60, { speed, maxSpeed: 3.25 });
+      samples.push(rig.root.position.y);
+    }
+
+    expectBobSpacing(samples);
+  });
+
+  it("returns to the idle envelope within one 1.5-second cycle after stopping", () => {
+    const rig = new RightHandFlashlight();
+    rig.loaded = true;
+
+    for (let frame = 0; frame < 3 * 60; frame += 1) {
+      rig.update(1 / 60, { speed: 3.2, maxSpeed: 3.25 });
+    }
+    const settledStopSamples = [];
+    for (let frame = 0; frame < 2 * 60; frame += 1) {
+      rig.update(1 / 60, { speed: 0, maxSpeed: 3.25 });
+      if (frame >= 1.5 * 60) {
+        settledStopSamples.push(Math.abs(rig.root.position.y - rig.basePosition.y));
+      }
+    }
+
+    expect(Math.max(...settledStopSamples)).toBeLessThan(0.003);
   });
 
   it("keeps lower-right entry in camera NDC after yaw and roll", async () => {
