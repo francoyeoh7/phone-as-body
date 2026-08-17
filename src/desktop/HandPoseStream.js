@@ -113,7 +113,7 @@ export class HandPoseStream {
   constructor(options = {}) {
     const wristTimeConstantMs = options.wristTimeConstantMs ?? options.smoothingMs ?? 60;
     this.options = {
-      silenceMs: 150,
+      silenceMs: 350,
       fingerTimeConstantMs: 28,
       ...options,
       wristTimeConstantMs,

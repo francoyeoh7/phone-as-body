@@ -186,12 +186,12 @@ describe("HandPoseStream", () => {
   it("clears immediately on explicit loss and uses silence only as a transport watchdog", () => {
     const stream = new HandPoseStream();
     stream.accept(pose({ seq: 1, receivedAt: 0 }));
-    expect(stream.sample(149)).toMatchObject({ state: "tracked", fresh: true, opacity: 1 });
-    expect(stream.sample(150)).toMatchObject({ state: "lost", fresh: false, opacity: 0 });
-    expect(stream.accept(pose({ seq: 2, receivedAt: 160, state: "lost" }))).toBe(true);
-    expect(stream.sample(160)).toMatchObject({ state: "lost", opacity: 0 });
-    expect(stream.accept(pose({ seq: 3, receivedAt: 170, state: "unavailable" }))).toBe(true);
-    expect(stream.sample(170)).toMatchObject({ state: "unavailable", opacity: 0 });
+    expect(stream.sample(349)).toMatchObject({ state: "tracked", fresh: true, opacity: 1 });
+    expect(stream.sample(350)).toMatchObject({ state: "lost", fresh: false, opacity: 0 });
+    expect(stream.accept(pose({ seq: 2, receivedAt: 360, state: "lost" }))).toBe(true);
+    expect(stream.sample(360)).toMatchObject({ state: "lost", opacity: 0 });
+    expect(stream.accept(pose({ seq: 3, receivedAt: 370, state: "unavailable" }))).toBe(true);
+    expect(stream.sample(370)).toMatchObject({ state: "unavailable", opacity: 0 });
     expect(stream.accept(pose({ seq: 1, modeEpoch: 1, receivedAt: 400, center: [10, 0, 0] }))).toBe(true);
     expect(stream.sample(400).pose.center[0]).toBe(10);
     expect(stream.sample(400).pose.handedness).toBe("left");

@@ -10,6 +10,7 @@ import {
 import { createReachState, updateReachState } from "../shared/hand-reach.js";
 
 const SAMPLE_INTERVAL_MS = 1000 / 15;
+const LOST_AFTER_CONSECUTIVE_MISSES = 2;
 const VIDEO_READY_TIMEOUT_MS = 3_000;
 
 const defaultScheduler = {
@@ -123,6 +124,7 @@ export class MediaPipeHandTracker {
     this.lastResultAt = -Infinity;
     this.lastState = null;
     this.lastLostAt = -Infinity;
+    this.consecutiveMisses = 0;
     this.previous = null;
     this.reachState = createReachState();
     this.calibration = null;
@@ -199,6 +201,7 @@ export class MediaPipeHandTracker {
     this.lastResultAt = this.scheduler.now();
     this.lastState = null;
     this.lastLostAt = -Infinity;
+    this.consecutiveMisses = 0;
     this.unavailableEpoch = null;
     this.videoUnavailableSince = null;
     this.workerFallbackEpoch = null;
@@ -443,6 +446,7 @@ export class MediaPipeHandTracker {
       this.previous = frame;
       this.lastResultAt = capturedAt;
       this.lastLostAt = -Infinity;
+      this.consecutiveMisses = 0;
       this.emitState("tracked");
       this.onFrame?.(frame);
       this.clearStatusTimer();
@@ -451,6 +455,8 @@ export class MediaPipeHandTracker {
 
   emitLostIfDue(now) {
     if (this.lastState === "lost") return;
+    this.consecutiveMisses += 1;
+    if (this.consecutiveMisses < LOST_AFTER_CONSECUTIVE_MISSES) return;
     this.emitStatusFrame("lost", "no-hand", now);
     this.reachState = createReachState();
     this.calibration = null;
@@ -487,6 +493,7 @@ export class MediaPipeHandTracker {
   resume() {
     this.suspended = false;
     this.videoUnavailableSince = null;
+    this.consecutiveMisses = 0;
     if (this.active) {
       this.resetSampleDeadline();
       this.schedule(0);
