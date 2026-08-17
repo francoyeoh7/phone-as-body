@@ -196,6 +196,16 @@ function nearestSleeveEdgeMaxNdcY(camera, mesh, shoulder, count = 24) {
 }
 
 describe("RightHandFlashlight", () => {
+  it("keeps idle natural motion at 0.2 Hz while preserving walking and running cadence", () => {
+    const idle = motionProfileForSpeed(0, 3.25);
+    const walk = motionProfileForSpeed(0.64 * 3.25, 3.25);
+    const run = motionProfileForSpeed(3.25, 3.25);
+
+    expect(idle.frequency).toBeCloseTo(0.2, 6);
+    expect(walk.frequency).toBeCloseTo(6.2, 6);
+    expect(run.frequency).toBeCloseTo(8.9, 6);
+  });
+
   it("keeps lower-right entry in camera NDC after yaw and roll", async () => {
     const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 100);
     camera.rotation.set(0.17, 1.08, -0.24, "YXZ");

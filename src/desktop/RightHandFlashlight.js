@@ -10,6 +10,9 @@ const DESIRED_ARM = new THREE.Vector3(0.36, -0.42, 0.18).normalize();
 const RIGHT_ARM_TO_HAND_DIRECTION = new THREE.Vector3(-0.65, 0.84, -0.20).normalize();
 const HAND_OFFSET_FROM_ROOT = new THREE.Vector3(0, -0.10, -0.24);
 const EPSILON = 1e-8;
+const IDLE_BOB_FREQUENCY = 0.2;
+const WALK_BOB_FREQUENCY_GAIN = 6;
+const RUN_BOB_FREQUENCY_GAIN = 2.7;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 const isFiniteVector = (vector) => Number.isFinite(vector.x)
@@ -326,7 +329,7 @@ export function motionProfileForSpeed(speed = 0, maxSpeed = 3.25) {
     normalized,
     walk,
     run,
-    frequency: 1.3 + walk * 4.9 + run * 2.7,
+    frequency: IDLE_BOB_FREQUENCY + walk * WALK_BOB_FREQUENCY_GAIN + run * RUN_BOB_FREQUENCY_GAIN,
     translationAmplitude: 0.0032 + walk * 0.011 + run * 0.024,
     rotationAmplitude: 0.005 + walk * 0.017 + run * 0.031,
   };
