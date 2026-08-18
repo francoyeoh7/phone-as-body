@@ -24,6 +24,10 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "voice-recording",
   "voice-transcript",
   "inventory-pointer",
+  "presentation-open",
+  "presentation-next",
+  "presentation-prev",
+  "presentation-close",
 ]);
 
 export const MAX_VOICE_DURATION_MS = 10_000;
@@ -222,6 +226,10 @@ export function isControllerAction(value) {
     "voice-recording": ["action", "sentAt", "active"],
     "voice-transcript": ["action", "sentAt", "transcript", "confidence", "voiceLevel"],
     "inventory-pointer": ["action", "sentAt", "phase", "dx", "dy", "entryY"],
+    "presentation-open": ["action", "sentAt", "source"],
+    "presentation-next": ["action", "sentAt"],
+    "presentation-prev": ["action", "sentAt"],
+    "presentation-close": ["action", "sentAt"],
   };
   if (Object.keys(value).some((key) => !allowedKeys[value.action].includes(key))) return false;
 
@@ -240,6 +248,9 @@ export function isControllerAction(value) {
       && isFiniteNumber(value.voiceLevel) && value.voiceLevel >= 0 && value.voiceLevel <= 1;
   }
   if (value.action === "settings") return isControllerSettings(value.settings);
+  if (value.action === "presentation-open") {
+    return value.source === undefined || ["settings", "door"].includes(value.source);
+  }
   if (value.action === "inventory-pointer") {
     if (!["open", "move", "commit", "cancel"].includes(value.phase)) return false;
     if (value.phase === "open") {

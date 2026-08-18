@@ -39,7 +39,7 @@ button {
   background: #070909;
 }
 
-.desktop-shell[data-clean-view="true"] > :not(.scene-host):not(.player-transcript):not(.knock-cinematic-video) {
+.desktop-shell[data-clean-view="true"] > :not(.scene-host):not(.player-transcript):not(.knock-cinematic-video):not(.presentation-overlay) {
   display: none !important;
 }
 
@@ -144,6 +144,91 @@ button {
 
 .knock-cinematic-video[data-active="true"] {
   opacity: 1;
+}
+
+.presentation-overlay {
+  position: fixed;
+  z-index: 24;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(18px, 4vw, 52px);
+  background: rgba(3, 5, 5, 0.94);
+  pointer-events: auto;
+}
+
+.presentation-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1180px, 100%);
+  height: min(92vh, 860px);
+  min-height: 0;
+  border: 1px solid rgba(210, 173, 99, 0.36);
+  background: #0b0e0d;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.52);
+}
+
+.presentation-header,
+.presentation-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 16px;
+  color: #d7d6cb;
+  background: rgba(17, 21, 19, 0.96);
+}
+
+.presentation-header {
+  border-bottom: 1px solid rgba(210, 173, 99, 0.2);
+  font-size: 13px;
+}
+
+.presentation-footer {
+  justify-content: center;
+  border-top: 1px solid rgba(210, 173, 99, 0.2);
+}
+
+.presentation-canvas {
+  display: grid;
+  min-height: 0;
+  place-items: center;
+  padding: 12px;
+  background: #050706;
+}
+
+.presentation-canvas img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.presentation-nav,
+.presentation-close {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(219, 219, 205, 0.28);
+  border-radius: 3px;
+  color: #e5e2d6;
+  background: rgba(35, 40, 36, 0.9);
+  cursor: pointer;
+}
+
+.presentation-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.presentation-nav svg,
+.presentation-close svg {
+  width: 18px;
+  height: 18px;
 }
 
 .inventory-items {

@@ -1,4 +1,5 @@
 import { PhoneSession } from "./PhoneSession.js";
+import * as THREE from "three";
 import { PlayerController } from "./PlayerController.js";
 import { HorrorDirector } from "./HorrorDirector.js";
 import { VillageDirector } from "./VillageDirector.js";
@@ -6,6 +7,7 @@ import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
 import { KnockDoorDirector } from "./KnockDoorDirector.js";
+import { PresentationDirector } from "./PresentationDirector.js";
 import { HandTrackingDirector } from "./HandTrackingDirector.js";
 import { RightHandFlashlight } from "./RightHandFlashlight.js";
 import { InventoryState } from "./InventoryState.js";
@@ -88,6 +90,7 @@ export class DesktopApp {
     this.doorDefense = null;
     this.shadowQuest = null;
     this.knockDoor = null;
+    this.presentation = null;
     this.npcRuntime = null;
     this.createNpcRuntime = createDesktopNpcRuntime;
     this.fetchImpl = globalThis.fetch?.bind(globalThis) ?? null;
@@ -289,6 +292,7 @@ export class DesktopApp {
             camera: this.experience.camera,
             ui: this.ui,
             staticOccluderRoots: this.experience.staticOccluderRoots,
+            onTranscript: (result) => this.handleRecognizedTranscript(result),
           });
         } catch (error) {
           console.warn("NPC voice runtime unavailable; village movement remains active.", error);
@@ -322,6 +326,14 @@ export class DesktopApp {
         ui: this.ui,
         handTracking: this.handTracking,
       }) : null;
+      this.presentation = isVillage && this.experience.objects?.presentationPaper
+        ? new PresentationDirector({
+          ui: this.ui,
+          phone: this.phone,
+          paper: this.experience.objects.presentationPaper,
+          fetchImpl: this.fetchImpl,
+        })
+        : null;
       this.shadowQuest = !isVillage && this.experience.objects?.shadowQuest ? new ShadowQuestDirector({
         experience: this.experience,
         player: this.player,
@@ -359,6 +371,14 @@ export class DesktopApp {
   handlePhoneAction(payload = {}) {
     if (this.destroyed) return;
     const { action, settings } = payload;
+    if (action === "presentation-open") return this.presentation?.open({ source: payload.source ?? "settings" });
+    if (action === "presentation-next") return this.presentation?.next();
+    if (action === "presentation-prev") return this.presentation?.previous();
+    if (action === "presentation-close") {
+      const closed = this.presentation?.close();
+      if (closed && this.paused) this.setPaused(false, false);
+      return closed;
+    }
     if (action === "inventory-pointer") return this.handleInventoryPointer(payload);
     if (action === "gesture-presence") {
       return;
@@ -391,12 +411,35 @@ export class DesktopApp {
         confidence: payload.confidence,
         voiceLevel: payload.voiceLevel,
       };
-      const transcript = String(result.transcript ?? "").trim();
-      if (transcript) this.ui?.setPlayerTranscript?.(transcript, true);
+      const transcript = this.handleRecognizedTranscript(result);
       return this.npcRuntime?.acceptTranscript?.(result) ?? Boolean(transcript);
     }
     if (action === "pause") this.setPaused(true);
     if (action === "resume") this.setPaused(false);
+  }
+
+  handleRecognizedTranscript(result = {}) {
+    const transcript = String(result.transcript ?? "").trim();
+    if (!transcript) return "";
+    this.ui?.setPlayerTranscript?.(transcript, true);
+    this.tryPresentationVoiceTrigger(transcript);
+    return transcript;
+  }
+
+  isNearStoryDoor() {
+    if (this.currentTargetId === "knock-door") return true;
+    const door = this.experience?.objects?.knockDoor?.root;
+    const camera = this.experience?.camera;
+    if (!door?.getWorldPosition || !camera?.position) return false;
+    return door.getWorldPosition(new THREE.Vector3()).distanceTo(camera.position) <= 3.6;
+  }
+
+  tryPresentationVoiceTrigger(transcript) {
+    if (!this.presentation || this.presentation.isOpen() || !this.isNearStoryDoor()) return false;
+    if (!/(?:ppt|\u5e7b\u706f\u7247|\u6f14\u793a\u6587\u7a3f|\u7b54\u8fa9)/i.test(String(transcript))) return false;
+    this.presentation.showPaper();
+    this.ui?.setPrompt?.("抓取 PPT");
+    return true;
   }
 
   canOpenInventory() {
@@ -407,6 +450,7 @@ export class DesktopApp {
       && !this.paused
       && !this.destroyed
       && !this.inventoryOpen
+      && !this.presentation?.isOpen?.()
       && !this.doorDefense?.isCinematic?.()
       && !this.knockDoor?.isCinematic?.()
       && !this.foundPhone?.isInspecting?.()
@@ -422,6 +466,7 @@ export class DesktopApp {
       && !this.paused
       && !this.destroyed
       && !this.inventoryOpen
+      && !this.presentation?.isOpen?.()
       && !this.doorDefense?.isCinematic?.()
       && !this.knockDoor?.isCinematic?.()
       && !this.foundPhone?.isInspecting?.()
@@ -505,6 +550,7 @@ export class DesktopApp {
     runCleanup(() => {
       if (!this.closeInventory()) this.inventory?.setHovered?.(null);
     });
+    runCleanup(() => this.presentation?.close?.());
     runCleanup(() => this.player?.resetCrouch?.());
     runCleanup(() => this.handTracking?.suppressEquipment?.());
     runCleanup(() => this.releaseFallbackHold());
@@ -528,11 +574,15 @@ export class DesktopApp {
   handleInteraction(id, details = {}) {
     if (
       this.inventoryOpen
+      || this.presentation?.isOpen?.()
       || this.doorDefense?.isCinematic()
       || this.knockDoor?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
+    if (id === "presentation-paper") {
+      return this.presentation?.open({ source: "door" }) ?? false;
+    }
     if (this.foundPhone?.handleInteraction(id, details)) {
       if (this.foundPhone.isInspecting?.()) this.clearTransientInteractionState("cinematic:found-phone");
       return true;
@@ -551,6 +601,7 @@ export class DesktopApp {
       || this.destroyed
       || this.paused
       || this.inventoryOpen
+      || this.presentation?.isOpen?.()
       || event?.targetId !== this.currentTargetId
       || event?.targetEpoch !== this.currentTargetEpoch
       || this.doorDefense?.isCinematic()
@@ -558,6 +609,9 @@ export class DesktopApp {
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
+    if (this.currentTargetId === "presentation-paper") {
+      return this.presentation?.open({ source: "door" }) ?? false;
+    }
     if (this.currentTargetId === "knock-door") return false;
     this.player?.interact?.("hand");
     return true;
@@ -621,7 +675,8 @@ export class DesktopApp {
       });
       const transcript = String(result?.transcript ?? "").trim();
       if (!transcript || this.destroyed) return false;
-      this.ui?.setPlayerTranscript?.(transcript, true);
+      this.handleRecognizedTranscript(result);
+      this.npcRuntime?.acceptTranscript?.(result);
       return true;
     } catch {
       return false;
@@ -640,6 +695,7 @@ export class DesktopApp {
       if (!this.started || this.fallback) return;
       this.ui.showPairing(false);
       this.phone?.send({ type: "target-focus", id: this.currentTargetId });
+      this.presentation?.sendState?.();
       this.setPaused(false);
       return;
     }
@@ -703,7 +759,8 @@ export class DesktopApp {
       if (!this.paused) {
         this.elapsed += delta;
         const phoneInput = this.phone.currentInput();
-        const gameplayInput = this.inventoryOpen ? {
+        const presentationOpen = this.presentation?.isOpen?.() === true;
+        const gameplayInput = this.inventoryOpen || presentationOpen ? {
           ...phoneInput,
           move: { x: 0, y: 0 },
           viewDelta: { yaw: 0, pitch: 0 },
@@ -725,12 +782,12 @@ export class DesktopApp {
         this.npcRuntime?.update?.();
         this.foundPhone?.update(delta);
         const doorWasCinematic = this.doorDefense?.isCinematic?.() === true;
-        if (!this.inventoryOpen) this.doorDefense?.update(delta);
+        if (!this.inventoryOpen && !presentationOpen) this.doorDefense?.update(delta);
         if (!doorWasCinematic && this.doorDefense?.isCinematic?.()) {
           this.clearTransientInteractionState("cinematic:door-defense");
         }
         const knockWasCinematic = this.knockDoor?.isCinematic?.() === true;
-        if (!this.inventoryOpen) this.knockDoor?.update(delta, { focused: this.currentTargetId === "knock-door" });
+        if (!this.inventoryOpen && !presentationOpen) this.knockDoor?.update(delta, { focused: this.currentTargetId === "knock-door" });
         if (!knockWasCinematic && this.knockDoor?.isCinematic?.()) {
           this.clearTransientInteractionState("cinematic:knock-door");
         }
@@ -741,7 +798,8 @@ export class DesktopApp {
         const cinematicOwned = this.doorDefense?.isCinematic()
           || this.knockDoor?.isCinematic()
           || this.foundPhone?.isInspecting()
-          || this.shadowQuest?.isCinematic();
+          || this.shadowQuest?.isCinematic()
+          || presentationOpen;
         if (!cinematicOwned) this.director?.update(delta, this.elapsed);
         this.audio.update(delta, Math.hypot(this.player.velocity.x, this.player.velocity.z));
         if (import.meta.env.DEV) {
@@ -862,6 +920,7 @@ export class DesktopApp {
     runCleanup(() => this.foundPhone?.destroy());
     runCleanup(() => this.doorDefense?.destroy());
     runCleanup(() => this.knockDoor?.destroy());
+    runCleanup(() => this.presentation?.destroy?.());
     runCleanup(() => this.director?.destroy?.());
     runCleanup(() => this.rightHandFlashlight?.destroy?.());
     runCleanup(() => this.handTracking?.destroy());
@@ -872,6 +931,7 @@ export class DesktopApp {
     this.npcRuntime = null;
     this.doorDefense = null;
     this.knockDoor = null;
+    this.presentation = null;
     this.handTracking = null;
     this.rightHandFlashlight = null;
     this.shadowQuest = null;

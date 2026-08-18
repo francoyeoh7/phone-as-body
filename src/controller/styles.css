@@ -403,6 +403,74 @@ button {
   width: 17px;
 }
 
+.presentation-launch {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.presentation-controls {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(80px, 1fr) 72px 72px;
+  align-items: center;
+  gap: 14px;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  color: #e7e5da;
+  background: #0b0e0d;
+  touch-action: none;
+}
+
+.presentation-controls > span {
+  text-align: center;
+  color: #d2ad63;
+  font: 700 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.presentation-control {
+  display: inline-grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid #4a4f48;
+  border-radius: 4px;
+  color: #ebe8dc;
+  background: #1b201d;
+}
+
+.presentation-control:disabled {
+  opacity: 0.34;
+}
+
+.presentation-control:active:not(:disabled) {
+  background: #343c35;
+  transform: scale(0.96);
+}
+
+.presentation-control svg {
+  width: 28px;
+  height: 28px;
+}
+
+.presentation-exit {
+  color: #f0b9b1;
+  border-color: #704541;
+}
+
+@media (max-width: 460px) {
+  .presentation-controls {
+    grid-template-columns: 64px minmax(48px, 1fr) 64px 64px;
+    gap: 8px;
+  }
+
+  .presentation-control {
+    width: 64px;
+    height: 64px;
+  }
+}
+
 @media (max-height: 520px) {
   .motion-diagnostics {
     top: 8px;

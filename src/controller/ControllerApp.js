@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Mic,
+  Presentation,
   RotateCcw,
   Settings,
   X,
@@ -24,7 +25,7 @@ import { VoiceHoldController } from "./VoiceHoldController.js";
 import { BrowserVoiceRecognizer } from "./BrowserVoiceRecognizer.js";
 import "./styles.css";
 
-const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, RotateCcw, Settings, X };
+const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, Presentation, RotateCcw, Settings, X };
 
 const defaultSettings = {
   sensitivity: 1,
@@ -104,7 +105,15 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
           <input id="smoothing" type="range" min="0" max="1" step="0.01" value="${settings.smoothing}">
         </label>
         <button class="secondary-button" id="recenter" type="button"><i data-lucide="crosshair"></i><span>重新校准方向</span></button>
+        <button class="secondary-button presentation-launch" id="presentation-open" type="button"><i data-lucide="presentation"></i><span>PPT</span></button>
       </div>
+
+      <section class="presentation-controls" id="presentation-controls" hidden aria-label="PPT 控制">
+        <button class="presentation-control" id="presentation-prev" type="button" aria-label="上一页"><i data-lucide="chevron-left"></i></button>
+        <span id="presentation-controller-page" aria-live="polite">1 / 1</span>
+        <button class="presentation-control" id="presentation-next" type="button" aria-label="下一页"><i data-lucide="chevron-right"></i></button>
+        <button class="presentation-control presentation-exit" id="presentation-close" type="button" aria-label="退出 PPT"><i data-lucide="x"></i></button>
+      </section>
     </main>
 
     <section class="found-phone-ui" id="found-phone-ui" aria-label="拾获的手机" hidden>
@@ -145,6 +154,7 @@ export class ControllerApp {
     this.cameraEnabled = false;
     this.handTaskContext = null;
     this.handTrackingState = "idle";
+    this.presentationActive = false;
     this.doorFallbackHolding = false;
     this.voiceRecognizer = null;
     this.voiceRecognitionStarted = false;
@@ -196,6 +206,11 @@ export class ControllerApp {
     this.playSurface = this.root.querySelector(".play-surface");
     this.inventoryRegion = this.root.querySelector("#inventory-edge");
     this.voiceRegion = this.root.querySelector("#voice-hold");
+    this.presentationControls = this.root.querySelector("#presentation-controls");
+    this.presentationPage = this.root.querySelector("#presentation-controller-page");
+    this.presentationPrevious = this.root.querySelector("#presentation-prev");
+    this.presentationNext = this.root.querySelector("#presentation-next");
+    this.presentationClose = this.root.querySelector("#presentation-close");
     this.foundPhoneUI = new FoundPhoneUI(this.root.querySelector("#found-phone-ui"));
     this.diagnostics = new MotionDiagnostics(this.root.querySelector("#motion-diagnostics"));
   }
@@ -291,6 +306,25 @@ export class ControllerApp {
     });
     this.root.querySelector("#settings").addEventListener("click", () => this.setPaused(true));
     this.root.querySelector("#resume").addEventListener("click", () => this.setPaused(false));
+    this.root.querySelector("#presentation-open").addEventListener("click", () => {
+      pulse([12, 24, 12]);
+      this.setPaused(false);
+      this.setPresentationControls({ active: true, index: 0, total: 13 });
+      this.socket?.sendAction("presentation-open", { source: "settings" });
+    });
+    this.presentationPrevious.addEventListener("click", () => {
+      pulse(8);
+      this.socket?.sendAction("presentation-prev");
+    });
+    this.presentationNext.addEventListener("click", () => {
+      pulse(8);
+      this.socket?.sendAction("presentation-next");
+    });
+    this.presentationClose.addEventListener("click", () => {
+      pulse([12, 24, 12]);
+      this.setPresentationControls({ active: false });
+      this.socket?.sendAction("presentation-close");
+    });
     this.bindSettings();
     document.addEventListener("visibilitychange", this.handleVisibility);
     window.addEventListener("pagehide", this.handlePageHide);
@@ -860,7 +894,23 @@ export class ControllerApp {
     }
   }
 
+  setPresentationControls({ active = false, index = 0, total = 0 } = {}) {
+    this.presentationActive = Boolean(active);
+    if (!this.presentationControls) return;
+    this.presentationControls.hidden = !this.presentationActive;
+    if (!this.presentationActive) return;
+    const count = Math.max(1, Number(total) || 1);
+    const page = Math.min(count - 1, Math.max(0, Number(index) || 0));
+    this.presentationPage.textContent = `${page + 1} / ${count}`;
+    this.presentationPrevious.disabled = page <= 0;
+    this.presentationNext.disabled = page >= count - 1;
+  }
+
   handleDesktopEvent(event) {
+    if (event.type === "presentation-state") {
+      this.setPresentationControls(event);
+      return;
+    }
     if (event.type === "hand-task") {
       if (!event.active && this.doorFallbackHolding) {
         this.socket?.sendAction("task-hold", { context: "door-defense", active: false });

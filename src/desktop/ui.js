@@ -1,6 +1,20 @@
-import { createIcons, Keyboard, Mic, Package, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff } from "lucide";
+import {
+  ChevronLeft,
+  ChevronRight,
+  createIcons,
+  Keyboard,
+  Mic,
+  Package,
+  RotateCcw,
+  ScanLine,
+  Smartphone,
+  Volume2,
+  Wifi,
+  WifiOff,
+  X,
+} from "lucide";
 
-const icons = { Keyboard, Mic, Package, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff };
+const icons = { ChevronLeft, ChevronRight, Keyboard, Mic, Package, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff, X };
 const INVENTORY_WIDTH = 360;
 const INVENTORY_HEIGHT = 72;
 const INVENTORY_SLOT_SIZE = 52;
@@ -24,6 +38,20 @@ export function createDesktopUI(root) {
         <div class="scene-placeholder"></div>
       </div>
       <video class="knock-cinematic-video" id="knock-cinematic-video" playsinline preload="auto" hidden aria-hidden="true"></video>
+      <section class="presentation-overlay" id="presentation-overlay" hidden aria-label="PPT 展示">
+        <div class="presentation-stage">
+          <header class="presentation-header">
+            <span id="presentation-title">PPT</span>
+            <span id="presentation-page" aria-live="polite"></span>
+            <button class="presentation-close" id="presentation-close" type="button" aria-label="退出 PPT"><i data-lucide="x"></i></button>
+          </header>
+          <div class="presentation-canvas"><img id="presentation-slide" alt="PPT 幻灯片"></div>
+          <footer class="presentation-footer">
+            <button class="presentation-nav" id="presentation-previous" type="button" aria-label="上一页"><i data-lucide="chevron-left"></i></button>
+            <button class="presentation-nav" id="presentation-next" type="button" aria-label="下一页"><i data-lucide="chevron-right"></i></button>
+          </footer>
+        </div>
+      </section>
 
       <header class="game-header">
         <div class="location-mark"><strong>617</strong><span>东侧维护走廊</span></div>
@@ -84,6 +112,13 @@ export function createDesktopUI(root) {
     shell: root.querySelector(".desktop-shell"),
     sceneHost: root.querySelector("#scene-host"),
     knockVideo: root.querySelector("#knock-cinematic-video"),
+    presentation: root.querySelector("#presentation-overlay"),
+    presentationTitle: root.querySelector("#presentation-title"),
+    presentationPage: root.querySelector("#presentation-page"),
+    presentationSlide: root.querySelector("#presentation-slide"),
+    presentationPrevious: root.querySelector("#presentation-previous"),
+    presentationNext: root.querySelector("#presentation-next"),
+    presentationClose: root.querySelector("#presentation-close"),
     pairing: root.querySelector("#pairing-overlay"),
     qr: root.querySelector("#pairing-qr"),
     qrLoading: root.querySelector(".qr-loading"),
@@ -241,6 +276,22 @@ export function createDesktopUI(root) {
       video.currentTime = 0;
       video.removeAttribute?.("src");
       video.load?.();
+    },
+    setPresentation({ active = false, index = 0, total = 0, src = "", label = "PPT" } = {}) {
+      elements.presentation.hidden = !active;
+      if (!active) {
+        elements.presentationSlide.removeAttribute("src");
+        elements.presentationPage.textContent = "";
+        return;
+      }
+      elements.presentationTitle.textContent = label || "PPT";
+      elements.presentationPage.textContent = `${index + 1} / ${total}`;
+      if (src) {
+        const absolute = typeof location === "undefined" ? src : new URL(src, location.href).href;
+        if (elements.presentationSlide.src !== absolute) elements.presentationSlide.src = src;
+      }
+      elements.presentationPrevious.disabled = index <= 0;
+      elements.presentationNext.disabled = index >= total - 1;
     },
     setInventory(snapshot = {}, { entryEdge = "right", entryY = 0.5 } = {}) {
       elements.inventoryBar.hidden = false;

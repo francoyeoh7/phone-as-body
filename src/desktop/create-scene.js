@@ -435,6 +435,59 @@ function createKnockDoorProp(scene, position, rotationY = 0) {
   return result;
 }
 
+function createPresentationPaper(scene, position, rotationY = 0) {
+  const root = new THREE.Group();
+  root.name = "presentation-paper";
+  root.position.set(...position);
+  root.rotation.y = rotationY;
+  root.userData.interactableId = "presentation-paper";
+  const paperMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf0e8cf,
+    roughness: 0.84,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const sheet = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.42), paperMaterial);
+  sheet.name = "presentation-paper-sheet";
+  sheet.rotation.x = -Math.PI / 2;
+  sheet.position.set(0, 0.035, 0.34);
+  sheet.castShadow = true;
+  sheet.receiveShadow = true;
+  root.add(sheet);
+  const fold = new THREE.Mesh(
+    new THREE.BoxGeometry(0.02, 0.006, 0.39),
+    new THREE.MeshStandardMaterial({ color: 0xc9bea3, roughness: 0.9 }),
+  );
+  fold.position.set(-0.08, 0.039, 0.34);
+  fold.rotation.y = 0.08;
+  root.add(fold);
+  const halo = new THREE.Mesh(
+    new THREE.RingGeometry(0.18, 0.25, 24),
+    new THREE.MeshBasicMaterial({ color: 0xd3b15e, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
+  );
+  halo.rotation.x = -Math.PI / 2;
+  halo.position.set(0, 0.01, 0.34);
+  halo.visible = false;
+  root.add(halo);
+  root.visible = false;
+  scene.add(root);
+  return {
+    id: "presentation-paper",
+    label: "抓取 PPT",
+    root,
+    mesh: sheet,
+    halo,
+    enabled: false,
+    interaction: {
+      anchor: root,
+      contactRadius: 0.22,
+      maxUseDistance: 2.35,
+      approachDirection: new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY),
+      contactNormal: new THREE.Vector3(0, 1, 0),
+    },
+  };
+}
+
 export function createRenderOnlyFuseModel() {
   const root = new THREE.Group();
   root.name = "spare-fuse-model";
@@ -1363,8 +1416,13 @@ export async function createScene(host, {
       knockDoorDefinition.position,
       knockDoorDefinition.rotationY,
     );
+    const presentationPaper = createPresentationPaper(
+      gameplayRoot,
+      knockDoorDefinition.position,
+      knockDoorDefinition.rotationY,
+    );
 
-    const interactables = [fuse, foundPhone, washbasin, knockDoor];
+    const interactables = [fuse, foundPhone, washbasin, knockDoor, presentationPaper];
     const staticOccluderRoots = environmentColliders.occluderRoots;
     const compatibleLights = villageLightCompatibility(environment);
     const worldAnchors = {
@@ -1372,6 +1430,7 @@ export async function createScene(host, {
       foundPhone: foundPhone.root,
       washbasin: washbasin.root,
       knockDoor: knockDoor.root,
+      presentationPaper: presentationPaper.root,
     };
 
     await renderer.compileAsync?.(scene, camera);
@@ -1399,6 +1458,7 @@ export async function createScene(host, {
         foundPhone,
         washbasin,
         knockDoor,
+        presentationPaper,
         npcs: npcSystem,
         corridor: {
           layout: null,

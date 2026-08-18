@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "title": "杨弈的答辩 PPT",
+  "slides": [
+    { "src": "/assets/presentation/slide-01.png", "label": "第 1 页" },
+    { "src": "/assets/presentation/slide-02.png", "label": "第 2 页" },
+    { "src": "/assets/presentation/slide-03.png", "label": "第 3 页" },
+    { "src": "/assets/presentation/slide-04.png", "label": "第 4 页" },
+    { "src": "/assets/presentation/slide-05.png", "label": "第 5 页" },
+    { "src": "/assets/presentation/slide-06.png", "label": "第 6 页" },
+    { "src": "/assets/presentation/slide-07.png", "label": "第 7 页" },
+    { "src": "/assets/presentation/slide-08.png", "label": "第 8 页" },
+    { "src": "/assets/presentation/slide-09.png", "label": "第 9 页" },
+    { "src": "/assets/presentation/slide-10.png", "label": "第 10 页" },
+    { "src": "/assets/presentation/slide-11.png", "label": "第 11 页" },
+    { "src": "/assets/presentation/slide-12.png", "label": "第 12 页" },
+    { "src": "/assets/presentation/slide-13.png", "label": "第 13 页" }
+  ]
+}

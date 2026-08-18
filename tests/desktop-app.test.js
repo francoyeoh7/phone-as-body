@@ -13,6 +13,8 @@ const { createSceneMock } = vi.hoisted(() => ({ createSceneMock: vi.fn() }));
 vi.mock("../src/desktop/create-scene.js", () => ({ createScene: createSceneMock }));
 
 vi.mock("lucide", () => ({
+  ChevronLeft: {},
+  ChevronRight: {},
   createIcons: vi.fn(),
   Keyboard: {},
   Mic: {},
@@ -23,6 +25,7 @@ vi.mock("lucide", () => ({
   Volume2: {},
   Wifi: {},
   WifiOff: {},
+  X: {},
 }));
 
 vi.mock("socket.io-client", () => ({
@@ -384,6 +387,42 @@ describe("desktop control feedback", () => {
     expect(ui.setPlayerTranscript).toHaveBeenCalledWith("我在门外", true);
   });
 
+
+  it("reveals the PPT paper only for a PPT voice keyword at the story door", () => {
+    const presentation = {
+      isOpen: vi.fn(() => false),
+      showPaper: vi.fn(() => true),
+    };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      currentTargetId: "knock-door",
+      presentation,
+      ui: { setPlayerTranscript: vi.fn(), setPrompt: vi.fn() },
+    });
+
+    expect(app.tryPresentationVoiceTrigger("PPT")).toBe(true);
+    expect(presentation.showPaper).toHaveBeenCalledOnce();
+    expect(app.tryPresentationVoiceTrigger("hello")).toBe(false);
+  });
+
+  it("opens the deck when the tracked hand grabs the visible paper", () => {
+    const presentation = { open: vi.fn(() => true) };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      paused: false,
+      inventoryOpen: false,
+      currentTargetId: "presentation-paper",
+      currentTargetEpoch: 4,
+      presentation,
+      doorDefense: null,
+      knockDoor: null,
+      foundPhone: null,
+      shadowQuest: null,
+    });
+
+    expect(app.handleHandGesture({ type: "grab", targetId: "presentation-paper", targetEpoch: 4 })).toBe(true);
+    expect(presentation.open).toHaveBeenCalledWith({ source: "door" });
+  });
 
   it("reports each applied input sequence and resulting camera angles once", () => {
     const app = Object.assign(Object.create(DesktopApp.prototype), {
