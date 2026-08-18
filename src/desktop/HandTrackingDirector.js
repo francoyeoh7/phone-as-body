@@ -84,6 +84,7 @@ export class HandTrackingDirector {
     this.owner = context;
     this.fallback = Boolean(this.hand?.fallback || this.lastSample?.state === "unavailable");
     this.machine.begin({ context, requiredAction, preCalibrated, skipCalibration, now: this.now() });
+    this.inventoryGesture?.reset?.();
     this.gestureGate.reset({ requireRelease: true });
     this.suppressEquipment();
     this.hand?.setContext?.(context);
@@ -97,6 +98,7 @@ export class HandTrackingDirector {
     const activeContext = this.owner;
     this.owner = null;
     this.machine.reset();
+    this.inventoryGesture?.reset?.();
     this.gestureGate.reset({ requireRelease: true });
     this.suppressEquipment();
     this.publishTargetContact(false);
@@ -217,7 +219,6 @@ export class HandTrackingDirector {
   }
 
   suppressEquipment() {
-    this.inventoryGesture?.reset?.();
     this.equipmentGate?.suppressUntilRelease?.();
     this.hand?.setHolding?.(false);
   }
