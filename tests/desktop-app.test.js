@@ -1572,6 +1572,7 @@ describe("desktop door-defense UI", () => {
     const video = elements.get("#knock-cinematic-video");
 
     expect(video).toBe(ui.elements.knockVideo);
+    expect(root.innerHTML).toContain('preload="auto"');
     ui.prepareKnockVideo("/assets/cinematics/village-knock-grab-v1.mp4");
     expect(video.src).toBe("/assets/cinematics/village-knock-grab-v1.mp4");
     expect(video.hidden).toBe(true);

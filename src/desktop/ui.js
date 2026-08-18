@@ -23,7 +23,7 @@ export function createDesktopUI(root) {
       <div class="scene-host" id="scene-host" aria-label="杨弈的demo 游戏画面">
         <div class="scene-placeholder"></div>
       </div>
-      <video class="knock-cinematic-video" id="knock-cinematic-video" playsinline preload="metadata" hidden aria-hidden="true"></video>
+      <video class="knock-cinematic-video" id="knock-cinematic-video" playsinline preload="auto" hidden aria-hidden="true"></video>
 
       <header class="game-header">
         <div class="location-mark"><strong>617</strong><span>东侧维护走廊</span></div>
