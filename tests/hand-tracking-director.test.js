@@ -20,6 +20,54 @@ function frame(overrides = {}) {
 }
 
 describe("HandTrackingDirector", () => {
+  it("gives a tracked right-edge swipe priority over equipment and emits a dwell commit", () => {
+    let now = 0;
+    let inventoryOpen = false;
+    let hoveredId = null;
+    const events = [];
+    const samples = [
+      { state: "tracked", fresh: true, pose: { center: [0.9, 0.5, 0] } },
+      { state: "tracked", fresh: true, pose: { center: [0.68, 0.5, 0] } },
+      { state: "tracked", fresh: true, pose: { center: [0.56, 0.5, 0] } },
+    ];
+    const stream = { sample: vi.fn(() => samples[Math.min(stream.index++, samples.length - 1)]), index: 0 };
+    const equipmentGate = { update: vi.fn(() => "grab"), suppressUntilRelease: vi.fn(), reset: vi.fn() };
+    const hand = { fallback: false, setHolding: vi.fn(), setVisible: vi.fn(), applyPose: vi.fn(), destroy: vi.fn() };
+    const director = new HandTrackingDirector({
+      hand,
+      stream,
+      equipmentGate,
+      getEquippedId: () => "spare-fuse",
+      canPresentEquipment: () => true,
+      canOpenInventory: () => true,
+      isInventoryOpen: () => inventoryOpen,
+      getInventoryHoveredId: () => hoveredId,
+      onInventoryGesture: (event) => {
+        events.push(event);
+        if (event.type === "open") inventoryOpen = true;
+        if (event.type === "commit" || event.type === "cancel") inventoryOpen = false;
+      },
+      now: () => now,
+      sendControllerEvent: vi.fn(),
+    });
+
+    director.update(0);
+    now = 180;
+    director.update(0);
+    hoveredId = "spare-fuse";
+    now = 220;
+    director.update(0);
+    now = 499;
+    director.update(0);
+    now = 500;
+    director.update(0);
+
+    expect(events.map((event) => event.type)).toEqual(["open", "move", "move", "commit"]);
+    expect(events.at(-1)).toMatchObject({ id: "spare-fuse" });
+    expect(equipmentGate.update).not.toHaveBeenCalled();
+    expect(equipmentGate.suppressUntilRelease).toHaveBeenCalled();
+  });
+
   it("routes semantic task, focused target, then untargeted equipment in priority order", () => {
     const tracked = {
       state: "tracked", fresh: true, trackingConfidence: 0.95, modeEpoch: 1, seq: 1,

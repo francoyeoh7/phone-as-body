@@ -2,6 +2,7 @@ import { FirstPersonHand } from "./FirstPersonHand.js";
 import { HandPoseStream } from "./HandPoseStream.js";
 import { HandGestureGate } from "./HandGestureGate.js";
 import { HeldEquipmentGate } from "./HeldEquipmentGate.js";
+import { HandInventoryGesture } from "./HandInventoryGesture.js";
 import { HandTaskStateMachine } from "../shared/hand-task-state.js";
 
 const finitePoint = (value) => {
@@ -22,7 +23,15 @@ export class HandTrackingDirector {
     this.equipmentGate = options.equipmentGate ?? new HeldEquipmentGate();
     this.getEquippedId = typeof options.getEquippedId === "function" ? options.getEquippedId : () => null;
     this.canPresentEquipment = typeof options.canPresentEquipment === "function" ? options.canPresentEquipment : () => true;
+    this.canOpenInventory = typeof options.canOpenInventory === "function" ? options.canOpenInventory : () => true;
+    this.isInventoryOpen = typeof options.isInventoryOpen === "function" ? options.isInventoryOpen : () => false;
+    this.getInventoryHoveredId = typeof options.getInventoryHoveredId === "function" ? options.getInventoryHoveredId : () => null;
     this.onGesture = typeof options.onGesture === "function" ? options.onGesture : () => {};
+    this.onInventoryGesture = typeof options.onInventoryGesture === "function" ? options.onInventoryGesture : () => {};
+    this.inventoryGesture = options.inventoryGesture ?? new HandInventoryGesture({
+      onEvent: (event) => this.onInventoryGesture(event),
+      getHoveredId: () => this.getInventoryHoveredId(),
+    });
     this.owner = null;
     this.lastAcceptedAt = null;
     this.lastSample = null;
@@ -128,6 +137,15 @@ export class HandTrackingDirector {
       this.hand?.applyPose?.({ state: sample.state, opacity: 0 }, delta);
     }
     if (!this.owner) {
+      const inventoryEvents = this.inventoryGesture?.update(sample, now, {
+        canOpen: this.canOpenInventory,
+        inventoryOpen: this.isInventoryOpen() === true,
+      }) ?? [];
+      if (this.inventoryGesture?.isCapturing?.() || inventoryEvents.length > 0) {
+        this.equipmentGate?.suppressUntilRelease?.();
+        if (!inventoryEvents.some((event) => event?.type === "commit")) this.hand?.setHolding?.(false);
+        return sample ? { sample, fallback: this.fallback, inventoryEvents } : { inventoryEvents };
+      }
       if (!this.target?.id) {
         const equippedId = this.getEquippedId();
         if (!equippedId || !this.canPresentEquipment()) {
@@ -191,13 +209,23 @@ export class HandTrackingDirector {
 
   setPaused(paused) {
     this.paused = Boolean(paused);
-    if (this.paused) this.suppressEquipment();
+    if (this.paused) {
+      this.inventoryGesture?.reset?.();
+      this.suppressEquipment();
+    }
     return this;
   }
 
   suppressEquipment() {
+    this.inventoryGesture?.reset?.();
     this.equipmentGate?.suppressUntilRelease?.();
     this.hand?.setHolding?.(false);
+  }
+
+  presentEquippedItem() {
+    this.equipmentGate?.reset?.();
+    this.hand?.setHolding?.(true);
+    return this;
   }
 
   async load({ signal } = {}) {
@@ -226,6 +254,7 @@ export class HandTrackingDirector {
     if (this.destroyed) return;
     if (this.owner) this.endTask(this.owner);
     this.destroyed = true;
+    this.inventoryGesture?.reset?.();
     this.suppressEquipment();
     this.hand?.destroy?.();
     this.owner = null;

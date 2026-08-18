@@ -455,7 +455,12 @@ describe("desktop inventory routing", () => {
       doorDefense: { isCinematic: vi.fn(() => false) },
       foundPhone: { isInspecting: vi.fn(() => false) },
       shadowQuest: { isCinematic: vi.fn(() => false) },
-      handTracking: { owner: null },
+      handTracking: {
+        owner: null,
+        hand: { setHeldItem: vi.fn() },
+        presentEquippedItem: vi.fn(),
+      },
+      experience: { objects: { heldFuse: { id: "held-fuse" } } },
     }, overrides);
     return { app, inventory, ui };
   }
@@ -476,6 +481,19 @@ describe("desktop inventory routing", () => {
     expect(inventory.snapshot().hoveredId).toBeNull();
     expect(ui.closeInventory).toHaveBeenCalledOnce();
     expect(app.inventoryOpen).toBe(false);
+    expect(app.handTracking.presentEquippedItem).toHaveBeenCalledOnce();
+  });
+
+  it("routes tracked-hand swipe events through the inventory and presents the selected item", () => {
+    const { app, inventory, ui } = createInventoryApp();
+
+    expect(app.handleTrackedInventoryGesture({ type: "open", entryY: 0.4 })).toBe(true);
+    expect(app.handleTrackedInventoryGesture({ type: "move", dx: -28, dy: 4 })).toBe(true);
+    expect(app.handleTrackedInventoryGesture({ type: "commit", id: "spare-fuse" })).toBe(true);
+
+    expect(inventory.snapshot().equippedId).toBe("spare-fuse");
+    expect(app.handTracking.presentEquippedItem).toHaveBeenCalledOnce();
+    expect(ui.closeInventory).toHaveBeenCalledOnce();
   });
 
   it("preserves equipment on empty release and cancellation", () => {
@@ -1548,6 +1566,23 @@ describe("scene startup error classification", () => {
 });
 
 describe("desktop door-defense UI", () => {
+  it("prepares, shows, and releases the bounded knock cinematic video layer", async () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const video = elements.get("#knock-cinematic-video");
+
+    expect(video).toBe(ui.elements.knockVideo);
+    ui.prepareKnockVideo("/assets/cinematics/village-knock-grab-v1.mp4");
+    expect(video.src).toBe("/assets/cinematics/village-knock-grab-v1.mp4");
+    expect(video.hidden).toBe(true);
+    await ui.playKnockVideo();
+    expect(video.hidden).toBe(false);
+    expect(video.dataset.active).toBe("true");
+    ui.releaseKnockVideo();
+    expect(video.hidden).toBe(true);
+    expect(video.dataset.active).toBe("false");
+  });
+
   it("keeps runtime UI endpoints available behind a canvas-only clean view", () => {
     const { root, elements } = createRoot();
     const ui = createDesktopUI(root);

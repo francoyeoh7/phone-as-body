@@ -239,8 +239,13 @@ export class DesktopApp {
         camera: this.experience.camera,
         sendControllerEvent: (event) => this.phone?.send(event),
         onGesture: (event) => this.handleHandGesture(event),
+        onInventoryGesture: (event) => this.handleTrackedInventoryGesture(event),
         getEquippedId: () => this.inventory.snapshot().equippedId,
         canPresentEquipment: () => this.canPresentEquipment(),
+        canOpenInventory: () => this.canOpenInventory(),
+        isInventoryOpen: () => this.inventoryOpen,
+        getInventoryHoveredId: () => this.ui?.inventoryItemAtCursor?.()
+          ?? this.inventory.snapshot().hoveredId
       });
       this.handTracking = handTracking;
       await handTracking.load({ signal: attempt.controller.signal });
@@ -441,7 +446,7 @@ export class DesktopApp {
     if (phase === "commit") {
       const hoveredId = this.ui?.inventoryItemAtCursor?.() ?? null;
       this.inventory.setHovered(hoveredId);
-      if (hoveredId) this.inventory.equip(hoveredId);
+      if (hoveredId && this.inventory.equip(hoveredId)) this.presentEquippedItem(hoveredId);
       this.closeInventory();
       return true;
     }
@@ -450,6 +455,32 @@ export class DesktopApp {
       return true;
     }
     return false;
+  }
+
+  handleTrackedInventoryGesture(event = {}) {
+    const phaseByType = {
+      open: "open",
+      move: "move",
+      commit: "commit",
+      cancel: "cancel",
+    };
+    const phase = phaseByType[event.type];
+    if (!phase) return false;
+    return this.handleInventoryPointer({
+      phase,
+      dx: event.dx,
+      dy: event.dy,
+      entryY: event.entryY,
+    });
+  }
+
+  presentEquippedItem(id) {
+    if (!id || this.inventory.snapshot().equippedId !== id) return false;
+    if (id === "spare-fuse") {
+      this.handTracking?.hand?.setHeldItem?.(this.experience?.objects?.heldFuse ?? null);
+    }
+    this.handTracking?.presentEquippedItem?.();
+    return true;
   }
 
   closeInventory() {

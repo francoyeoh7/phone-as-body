@@ -39,7 +39,7 @@ button {
   background: #070909;
 }
 
-.desktop-shell[data-clean-view="true"] > :not(.scene-host):not(.player-transcript) {
+.desktop-shell[data-clean-view="true"] > :not(.scene-host):not(.player-transcript):not(.knock-cinematic-video) {
   display: none !important;
 }
 
