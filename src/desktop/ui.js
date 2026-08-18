@@ -19,8 +19,8 @@ const DOOR_DEFENSE_STATUS = Object.freeze({
 
 export function createDesktopUI(root) {
   root.innerHTML = `
-    <main class="desktop-shell">
-      <div class="scene-host" id="scene-host" aria-label="Corridor 617 游戏画面">
+    <main class="desktop-shell" data-clean-view="false">
+      <div class="scene-host" id="scene-host" aria-label="杨弈的demo 游戏画面">
         <div class="scene-placeholder"></div>
       </div>
 
@@ -38,9 +38,11 @@ export function createDesktopUI(root) {
       <div class="reticle" id="reticle"><span></span></div>
       <div class="interaction-prompt" id="interaction-prompt" hidden><kbd>E</kbd><span></span></div>
       <div class="subtitle" id="subtitle" hidden></div>
+      <div class="player-transcript" id="player-transcript" role="status" aria-live="polite" hidden></div>
       <div class="voice-recording" id="voice-recording" role="status" aria-label="正在录音" hidden>
         <i data-lucide="mic"></i>
       </div>
+      <div class="npc-voice-status" id="npc-voice-status" role="status" aria-live="polite" hidden></div>
       <div class="door-defense" id="door-defense" hidden>
         <span id="door-defense-status">抵住门</span>
         <div class="door-defense-track" role="progressbar" aria-labelledby="door-defense-status" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -51,7 +53,7 @@ export function createDesktopUI(root) {
       <section class="pairing-overlay" id="pairing-overlay">
         <div class="pairing-copy">
           <p class="desktop-eyebrow">手机即手电筒</p>
-          <h1>Corridor 617</h1>
+          <h1>杨弈的demo</h1>
           <p>扫描二维码连接手机。整块屏幕按住拖动行走与转向，轻点进行交互。</p>
           <div class="pairing-status" id="pairing-status"><span></span>正在创建安全会话</div>
           <button class="start-button" id="start-button" hidden><i data-lucide="volume-2"></i>进入走廊</button>
@@ -78,6 +80,7 @@ export function createDesktopUI(root) {
   createIcons({ icons, attrs: { "stroke-width": 1.8 } });
 
   const elements = {
+    shell: root.querySelector(".desktop-shell"),
     sceneHost: root.querySelector("#scene-host"),
     pairing: root.querySelector("#pairing-overlay"),
     qr: root.querySelector("#pairing-qr"),
@@ -93,7 +96,9 @@ export function createDesktopUI(root) {
     prompt: root.querySelector("#interaction-prompt"),
     promptLabel: root.querySelector("#interaction-prompt span"),
     subtitle: root.querySelector("#subtitle"),
+    playerTranscript: root.querySelector("#player-transcript"),
     voiceRecording: root.querySelector("#voice-recording"),
+    npcVoiceStatus: root.querySelector("#npc-voice-status"),
     inventoryBar: root.querySelector("#inventory-bar"),
     inventoryItems: root.querySelector("#inventory-items"),
     inventoryCursor: root.querySelector("#inventory-cursor"),
@@ -105,6 +110,7 @@ export function createDesktopUI(root) {
     pause: root.querySelector("#pause-overlay"),
   };
   let inventoryItems = [];
+  let playerTranscriptTimer = null;
   let inventoryRects = [];
   const inventoryBounds = { width: INVENTORY_WIDTH, height: INVENTORY_HEIGHT };
   const inventoryCursor = { x: INVENTORY_WIDTH / 2, y: INVENTORY_HEIGHT / 2 };
@@ -140,6 +146,9 @@ export function createDesktopUI(root) {
 
   return {
     elements,
+    setCleanView(active) {
+      elements.shell.dataset.cleanView = String(Boolean(active));
+    },
     setRoom({ code, url, qrDataUrl }) {
       elements.roomCode.textContent = code;
       elements.qr.src = qrDataUrl;
@@ -176,8 +185,27 @@ export function createDesktopUI(root) {
       elements.subtitle.textContent = text;
       elements.subtitle.hidden = !visible || !text;
     },
+    setPlayerTranscript(text, visible = true, durationMs = 4_800) {
+      clearTimeout(playerTranscriptTimer);
+      playerTranscriptTimer = null;
+      const transcript = String(text ?? "").trim();
+      elements.playerTranscript.textContent = transcript;
+      elements.playerTranscript.hidden = !visible || !transcript;
+      if (!elements.playerTranscript.hidden && durationMs > 0) {
+        playerTranscriptTimer = setTimeout(() => {
+          elements.playerTranscript.hidden = true;
+          playerTranscriptTimer = null;
+        }, durationMs);
+      }
+    },
     setVoiceRecording(active) {
       elements.voiceRecording.hidden = !active;
+    },
+    setNpcVoiceStatus(status = null) {
+      const message = String(status?.message ?? "").trim();
+      elements.npcVoiceStatus.textContent = message;
+      elements.npcVoiceStatus.dataset.state = String(status?.state ?? "idle");
+      elements.npcVoiceStatus.hidden = !message;
     },
     setInventory(snapshot = {}, { entryEdge = "right", entryY = 0.5 } = {}) {
       elements.inventoryBar.hidden = false;

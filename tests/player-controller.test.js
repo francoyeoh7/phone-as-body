@@ -418,6 +418,15 @@ describe("player phone view deltas", () => {
     expect(player.cameraPitch).toBe(0.25);
   });
 
+  it("presents most of a phone gyro turn within one 60Hz display frame", () => {
+    const player = createPlayer();
+    player.cameraYaw = 1.8;
+
+    player.updateCameraPresentation(1 / 60);
+
+    expect(player.cameraRenderYaw).toBeGreaterThan(1.35);
+  });
+
   it("is frame-rate independent over equal elapsed time", () => {
     const fast = createPlayer();
     const slow = createPlayer();

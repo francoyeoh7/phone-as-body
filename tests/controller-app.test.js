@@ -12,11 +12,29 @@ describe("controller gameplay chrome", () => {
     expect(markup).not.toContain('id="connection-label"');
     expect(markup).not.toContain('class="room-code"');
   });
+
+  it("directs a controller without a six-digit room back to the desktop QR code", () => {
+    const { app } = createApp();
+    app.cancelTransientControls = vi.fn();
+
+    app.updateConnection("invalid-room");
+
+    expect(app.permissionPanel.hidden).toBe(false);
+    expect(app.permissionTitle.textContent).toBe("请扫描电脑端二维码");
+    expect(app.permissionCopy.textContent).toBe("请回到电脑端重新扫描二维码。");
+    expect(app.enableMotion.disabled).toBe(true);
+  });
 });
 
-function createApp({ motionEnabled = true } = {}) {
+function createApp({ motionEnabled = true, fetchImpl = vi.fn() } = {}) {
   const actions = vi.fn();
   const sendVoiceClip = vi.fn();
+  const sendVoiceFrame = vi.fn();
+  const voiceRecognizer = {
+    start: vi.fn(() => true),
+    stop: vi.fn(),
+    cancel: vi.fn(),
+  };
   const motion = {
     requestPermission: vi.fn(async () => ({ motionGranted: true })),
     engage: vi.fn(() => true),
@@ -62,6 +80,12 @@ function createApp({ motionEnabled = true } = {}) {
     pointerOwners: { cancelAll: vi.fn(), generation: 0 },
     inventoryOrb: { cancel: vi.fn() },
     voiceHold: { cancel: vi.fn(() => Promise.resolve()) },
+    voiceRecognizer,
+    fetchImpl,
+    voicePcmFrames: [],
+    voicePcmBytes: 0,
+    voicePcmTranscriptPromise: null,
+    voiceRegion: { dataset: {} },
     viewEngaged: false,
     playSurface: { dataset: {} },
     status: { dataset: {} },
@@ -70,6 +94,7 @@ function createApp({ motionEnabled = true } = {}) {
     socket: {
       sendAction: actions,
       sendVoiceClip,
+      sendVoiceFrame,
       markApplied: vi.fn(),
       clearPendingViewDelta: vi.fn(),
       setInput: vi.fn(),
@@ -84,7 +109,7 @@ function createApp({ motionEnabled = true } = {}) {
     ensureAudioContext: vi.fn(),
     destroy: vi.fn(),
   });
-  return { app, motion, cameraMotion, haptics: app.haptics, actions, sendVoiceClip };
+  return { app, motion, cameraMotion, haptics: app.haptics, actions, sendVoiceClip, sendVoiceFrame, voiceRecognizer, fetchImpl };
 }
 
 function deferred() {
@@ -204,7 +229,7 @@ describe("controller app lifecycle", () => {
   });
 
   it("forwards committed voice state and direct binary clips to the socket", () => {
-    const { app, actions, sendVoiceClip } = createApp();
+    const { app, actions, sendVoiceClip, sendVoiceFrame } = createApp();
     const clip = {
       version: 1,
       seq: 0,
@@ -216,12 +241,114 @@ describe("controller app lifecycle", () => {
     app.handleVoiceActive(true);
     app.handleVoiceActive(false);
     app.handleVoiceClip(clip);
+    const frame = new ArrayBuffer(32);
+    app.handleVoiceStreamFrame(frame);
 
     expect(actions.mock.calls).toEqual([
       ["voice-recording", { active: true }],
       ["voice-recording", { active: false }],
     ]);
     expect(sendVoiceClip).toHaveBeenCalledExactlyOnceWith(clip);
+    expect(sendVoiceFrame).toHaveBeenCalledExactlyOnceWith(frame);
+  });
+
+  it("starts browser recognition synchronously on press and does not duplicate it on recording", () => {
+    const { app, voiceRecognizer } = createApp();
+
+    app.handleVoicePressState("pressed");
+    app.handleVoiceActive(true);
+
+    expect(voiceRecognizer.start).toHaveBeenCalledOnce();
+  });
+
+  it("cancels recognition on voice errors and stops it on release", () => {
+    const { app, voiceRecognizer } = createApp();
+
+    app.handleVoicePressState("pressed");
+    app.handleVoicePressState("error");
+    expect(voiceRecognizer.cancel).toHaveBeenCalledOnce();
+
+    app.handleVoicePressState("pressed");
+    app.handleVoicePressState("idle");
+    expect(voiceRecognizer.stop).toHaveBeenCalledOnce();
+  });
+
+  it("uploads the phone recording directly for transcription and sends only the resulting text", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ transcript: "玛拉，你能听见吗？", confidence: 0.93, voiceLevel: 0.64 }),
+    }));
+    const { app, actions, sendVoiceClip } = createApp({ fetchImpl });
+    const clip = { mimeType: "audio/mp4", data: new ArrayBuffer(32) };
+
+    await app.handleVoiceClip(clip);
+
+    expect(fetchImpl).toHaveBeenCalledWith("/api/npc/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": "audio/mp4" },
+      body: clip.data,
+    });
+    expect(actions).toHaveBeenCalledWith("voice-transcript", {
+      transcript: "玛拉，你能听见吗？",
+      confidence: 0.93,
+      voiceLevel: 0.64,
+    });
+    expect(sendVoiceClip).not.toHaveBeenCalled();
+  });
+
+  it("keeps the binary voice channel as a fallback when direct transcription fails", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 503 }));
+    const { app, sendVoiceClip } = createApp({ fetchImpl });
+    const clip = { mimeType: "audio/webm", data: new ArrayBuffer(32) };
+
+    await app.handleVoiceClip(clip);
+
+    expect(sendVoiceClip).toHaveBeenCalledExactlyOnceWith(clip);
+  });
+
+  it("prefers the streamed PCM WAV and avoids a duplicate MediaRecorder upload", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ transcript: "我在门外", confidence: 0.88, voiceLevel: 0.59 }),
+    }));
+    const { app, actions, sendVoiceClip } = createApp({ fetchImpl });
+
+    app.handleVoiceStreamFrame({ type: "voice-start", sampleRate: 24_000, format: "pcm16" });
+    app.handleVoiceStreamFrame(new Int16Array([1, -2, 3]).buffer);
+    app.handleVoiceStreamFrame({ type: "voice-stop" });
+    await app.handleVoiceClip({ mimeType: "audio/mp4", data: new ArrayBuffer(48) });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [, request] = fetchImpl.mock.calls[0];
+    expect(request.headers).toEqual({ "Content-Type": "audio/wav" });
+    expect(String.fromCharCode(...new Uint8Array(request.body, 0, 4))).toBe("RIFF");
+    expect(actions).toHaveBeenCalledWith("voice-transcript", expect.objectContaining({ transcript: "我在门外" }));
+    expect(sendVoiceClip).not.toHaveBeenCalled();
+  });
+
+  it("falls back from failed PCM transcription to the MediaRecorder clip", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 502 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ transcript: "我在门外", confidence: 0.81, voiceLevel: 0.55 }),
+      });
+    const { app, actions, sendVoiceClip } = createApp({ fetchImpl });
+    const mediaClip = { mimeType: "audio/mp4", data: new ArrayBuffer(48) };
+
+    app.handleVoiceStreamFrame({ type: "voice-start", sampleRate: 24_000, format: "pcm16" });
+    app.handleVoiceStreamFrame(new Int16Array([1, -2, 3]).buffer);
+    app.handleVoiceStreamFrame({ type: "voice-stop" });
+    await app.handleVoiceClip(mediaClip);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0][1].headers).toEqual({ "Content-Type": "audio/wav" });
+    expect(fetchImpl.mock.calls[1][1]).toEqual(expect.objectContaining({
+      headers: { "Content-Type": "audio/mp4" },
+      body: mediaClip.data,
+    }));
+    expect(actions).toHaveBeenCalledWith("voice-transcript", expect.objectContaining({ transcript: "我在门外" }));
+    expect(sendVoiceClip).not.toHaveBeenCalled();
   });
 
   it.each(["disconnected", "replaced"])("discard-cancels voice when the controller is %s", (state) => {

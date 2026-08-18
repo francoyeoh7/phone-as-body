@@ -22,11 +22,14 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "resume",
   "settings",
   "voice-recording",
+  "voice-transcript",
   "inventory-pointer",
 ]);
 
 export const MAX_VOICE_DURATION_MS = 10_000;
-export const MAX_VOICE_CLIP_BYTES = 256 * 1024;
+export const MAX_VOICE_CLIP_BYTES = 1024 * 1024;
+export const VOICE_STREAM_SAMPLE_RATE = 24_000;
+export const MAX_VOICE_STREAM_FRAME_BYTES = 32 * 1024;
 export const INVENTORY_DELTA_LIMIT = 96;
 
 const isFiniteNumber = (value) => Number.isFinite(value);
@@ -98,6 +101,20 @@ function binaryByteLength(value) {
   if (value instanceof ArrayBuffer) return value.byteLength;
   if (ArrayBuffer.isView(value)) return value.byteLength;
   return 0;
+}
+
+export function isVoiceStreamFrame(value) {
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    const bytes = binaryByteLength(value);
+    return bytes > 0 && bytes <= MAX_VOICE_STREAM_FRAME_BYTES && bytes % 2 === 0;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (value.type === "voice-stop") return keys.length === 1;
+  return value.type === "voice-start"
+    && keys.length === 3
+    && value.sampleRate === VOICE_STREAM_SAMPLE_RATE
+    && value.format === "pcm16";
 }
 
 export function isVoiceClip(value) {
@@ -203,6 +220,7 @@ export function isControllerAction(value) {
     "task-hold": ["action", "sentAt", "context", "active"],
     "gesture-presence": ["action", "sentAt", "ready", "active", "context"],
     "voice-recording": ["action", "sentAt", "active"],
+    "voice-transcript": ["action", "sentAt", "transcript", "confidence", "voiceLevel"],
     "inventory-pointer": ["action", "sentAt", "phase", "dx", "dy", "entryY"],
   };
   if (Object.keys(value).some((key) => !allowedKeys[value.action].includes(key))) return false;
@@ -216,6 +234,11 @@ export function isControllerAction(value) {
       && ["door-defense", "found-phone"].includes(value.context);
   }
   if (value.action === "voice-recording") return typeof value.active === "boolean";
+  if (value.action === "voice-transcript") {
+    return typeof value.transcript === "string" && value.transcript.length > 0 && value.transcript.length <= 500
+      && isFiniteNumber(value.confidence) && value.confidence >= 0 && value.confidence <= 1
+      && isFiniteNumber(value.voiceLevel) && value.voiceLevel >= 0 && value.voiceLevel <= 1;
+  }
   if (value.action === "settings") return isControllerSettings(value.settings);
   if (value.action === "inventory-pointer") {
     if (!["open", "move", "commit", "cancel"].includes(value.phase)) return false;

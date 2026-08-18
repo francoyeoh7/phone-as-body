@@ -5,6 +5,7 @@ import { VillageDirector } from "./VillageDirector.js";
 import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
+import { KnockDoorDirector } from "./KnockDoorDirector.js";
 import { HandTrackingDirector } from "./HandTrackingDirector.js";
 import { RightHandFlashlight } from "./RightHandFlashlight.js";
 import { InventoryState } from "./InventoryState.js";
@@ -12,6 +13,7 @@ import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { EnvironmentLoadError } from "./environment/EnvironmentLoader.js";
 import { createDesktopUI } from "./ui.js";
+import { createDesktopNpcRuntime, transcribeVoiceClip } from "./npc/DesktopNpcRuntime.js";
 import "./styles.css";
 
 function isLocalVillageChunk(error) {
@@ -85,6 +87,10 @@ export class DesktopApp {
     this.foundPhone = null;
     this.doorDefense = null;
     this.shadowQuest = null;
+    this.knockDoor = null;
+    this.npcRuntime = null;
+    this.createNpcRuntime = createDesktopNpcRuntime;
+    this.fetchImpl = globalThis.fetch?.bind(globalThis) ?? null;
     this.handTracking = null;
     this.rightHandFlashlight = null;
     this.createRightHandFlashlight = (options) => new RightHandFlashlight(options);
@@ -117,6 +123,8 @@ export class DesktopApp {
     this.handlePhonePeer = this.handlePhonePeer.bind(this);
     this.handlePhoneActionEvent = this.handlePhoneActionEvent.bind(this);
     this.handlePhoneHand = this.handlePhoneHand.bind(this);
+    this.handlePhoneVoiceClip = this.handlePhoneVoiceClip.bind(this);
+    this.handlePhoneVoiceStream = this.handlePhoneVoiceStream.bind(this);
   }
 
   mount() {
@@ -126,7 +134,15 @@ export class DesktopApp {
     this.phone.addEventListener("peer", this.handlePhonePeer);
     this.phone.addEventListener("action", this.handlePhoneActionEvent);
     this.phone.addEventListener("hand", this.handlePhoneHand);
+    this.phone.addEventListener("voice-clip", this.handlePhoneVoiceClip);
+    this.phone.addEventListener("voice-stream", this.handlePhoneVoiceStream);
     this.phone.start();
+
+    // Local visual verification can start the keyboard path without a manual
+    // click; the query is inert during normal pairing and has no UI impact.
+    if (new URLSearchParams(location.search).get("autostart") === "keyboard") {
+      queueMicrotask(() => this.startGame(true));
+    }
 
     this.ui.elements.startButton.addEventListener("click", this.handleStartClick);
     this.ui.elements.fallbackButton.addEventListener("click", this.handleFallbackClick);
@@ -207,6 +223,7 @@ export class DesktopApp {
     this.fallback = fallback;
     this.audio.start();
     this.ui.showSceneError?.(null);
+    this.ui.setCleanView?.(false);
     this.ui.showLoading(true);
     this.ui.showPairing(false);
     try {
@@ -232,6 +249,7 @@ export class DesktopApp {
         return;
       }
       handTracking.hand?.setHeldItem?.(this.experience.objects?.heldFuse ?? null);
+      this.experience.objects?.knockDoor?.setArmAsset?.(handTracking.hand?.presentationModel);
       const rightHandFlashlight = this.createRightHandFlashlight({ camera: this.experience.camera });
       this.rightHandFlashlight = rightHandFlashlight;
       await rightHandFlashlight.load({ signal: attempt.controller.signal });
@@ -259,6 +277,18 @@ export class DesktopApp {
         audio: this.audio,
         inventory: this.inventory,
       });
+      if (isVillage && this.experience.objects?.npcs) {
+        try {
+          this.npcRuntime = this.createNpcRuntime({
+            npcSystem: this.experience.objects.npcs,
+            camera: this.experience.camera,
+            ui: this.ui,
+            staticOccluderRoots: this.experience.staticOccluderRoots,
+          });
+        } catch (error) {
+          console.warn("NPC voice runtime unavailable; village movement remains active.", error);
+        }
+      }
       this.foundPhone = new FoundPhoneDirector({
         experience: this.experience,
         player: this.player,
@@ -280,6 +310,13 @@ export class DesktopApp {
           || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
         ),
       }) : null;
+      this.knockDoor = isVillage && this.experience.objects?.knockDoor ? new KnockDoorDirector({
+        experience: this.experience,
+        player: this.player,
+        audio: this.audio,
+        ui: this.ui,
+        handTracking: this.handTracking,
+      }) : null;
       this.shadowQuest = !isVillage && this.experience.objects?.shadowQuest ? new ShadowQuestDirector({
         experience: this.experience,
         player: this.player,
@@ -288,6 +325,7 @@ export class DesktopApp {
       }) : null;
       this.applyDebugStart();
       this.ui.showLoading(false);
+      this.ui.setCleanView?.(true);
       this.lastFrame = performance.now();
       this.frame = requestAnimationFrame((time) => this.tick(time));
       if (this.sceneStartAttempt === attempt) this.sceneStartAttempt = null;
@@ -305,6 +343,7 @@ export class DesktopApp {
         console.error("Failed to clean up scene startup:", cleanupError);
       } finally {
         this.started = false;
+        this.ui.setCleanView?.(false);
         this.ui.showLoading(false);
         if (presentation.code !== "aborted") this.ui.showPairing(true);
         if (presentation.code !== "aborted") this.ui.showSceneError?.(presentation);
@@ -336,7 +375,21 @@ export class DesktopApp {
       this.director?.setSettings(settings);
       this.ui.elements.reticle.hidden = settings?.reticle === false;
     }
-    if (action === "voice-recording") this.ui.setVoiceRecording(payload.active === true);
+    if (action === "voice-recording") {
+      const active = payload.active === true;
+      this.ui.setVoiceRecording(active);
+      if (active) this.npcRuntime?.beginCapture?.();
+    }
+    if (action === "voice-transcript") {
+      const result = {
+        transcript: payload.transcript,
+        confidence: payload.confidence,
+        voiceLevel: payload.voiceLevel,
+      };
+      const transcript = String(result.transcript ?? "").trim();
+      if (transcript) this.ui?.setPlayerTranscript?.(transcript, true);
+      return this.npcRuntime?.acceptTranscript?.(result) ?? Boolean(transcript);
+    }
     if (action === "pause") this.setPaused(true);
     if (action === "resume") this.setPaused(false);
   }
@@ -350,6 +403,7 @@ export class DesktopApp {
       && !this.destroyed
       && !this.inventoryOpen
       && !this.doorDefense?.isCinematic?.()
+      && !this.knockDoor?.isCinematic?.()
       && !this.foundPhone?.isInspecting?.()
       && !this.shadowQuest?.isCinematic?.()
       && !this.handTracking?.owner
@@ -364,6 +418,7 @@ export class DesktopApp {
       && !this.destroyed
       && !this.inventoryOpen
       && !this.doorDefense?.isCinematic?.()
+      && !this.knockDoor?.isCinematic?.()
       && !this.foundPhone?.isInspecting?.()
       && !this.shadowQuest?.isCinematic?.()
     );
@@ -443,6 +498,7 @@ export class DesktopApp {
     if (
       this.inventoryOpen
       || this.doorDefense?.isCinematic()
+      || this.knockDoor?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
@@ -467,9 +523,11 @@ export class DesktopApp {
       || event?.targetId !== this.currentTargetId
       || event?.targetEpoch !== this.currentTargetEpoch
       || this.doorDefense?.isCinematic()
+      || this.knockDoor?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
     ) return false;
+    if (this.currentTargetId === "knock-door") return false;
     this.player?.interact?.("hand");
     return true;
   }
@@ -514,6 +572,36 @@ export class DesktopApp {
     this.handTracking?.acceptFrame(detail);
   }
 
+  handlePhoneVoiceClip({ detail }) {
+    if (this.destroyed) return false;
+    if (this.npcRuntime?.acceptVoiceClip) {
+      return Promise.resolve()
+        .then(() => this.npcRuntime.acceptVoiceClip(detail))
+        .then((accepted) => Boolean(accepted))
+        .catch(() => false);
+    }
+    return this.transcribePhoneClip(detail);
+  }
+
+  async transcribePhoneClip(clip) {
+    try {
+      const result = await transcribeVoiceClip(clip, {
+        fetchImpl: this.fetchImpl ?? globalThis.fetch?.bind(globalThis),
+      });
+      const transcript = String(result?.transcript ?? "").trim();
+      if (!transcript || this.destroyed) return false;
+      this.ui?.setPlayerTranscript?.(transcript, true);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  handlePhoneVoiceStream({ detail }) {
+    if (this.destroyed) return false;
+    return this.npcRuntime?.acceptVoiceFrame?.(detail) ?? false;
+  }
+
   handlePeer(connected) {
     if (this.destroyed) return;
     if (connected) {
@@ -538,6 +626,7 @@ export class DesktopApp {
     if (this.started) {
       runDisconnectStep(() => this.foundPhone?.release?.());
       runDisconnectStep(() => this.doorDefense?.abort?.());
+      runDisconnectStep(() => this.knockDoor?.abort?.());
       runDisconnectStep(() => this.shadowQuest?.abort?.());
       if (!this.fallback) {
         this.paused = true;
@@ -564,6 +653,7 @@ export class DesktopApp {
       runPauseStep(() => this.handTracking?.setPaused(true));
       runPauseStep(() => this.foundPhone?.release?.());
       runPauseStep(() => this.doorDefense?.abort?.());
+      runPauseStep(() => this.knockDoor?.abort?.());
       runPauseStep(() => this.shadowQuest?.abort?.());
     }
     if (!paused) runPauseStep(() => this.handTracking?.setPaused(false));
@@ -601,17 +691,24 @@ export class DesktopApp {
         this.experience.world.step();
         this.player.syncAfterPhysics();
         this.experience.update(delta, this.elapsed);
+        this.npcRuntime?.update?.();
         this.foundPhone?.update(delta);
         const doorWasCinematic = this.doorDefense?.isCinematic?.() === true;
         if (!this.inventoryOpen) this.doorDefense?.update(delta);
         if (!doorWasCinematic && this.doorDefense?.isCinematic?.()) {
           this.clearTransientInteractionState("cinematic:door-defense");
         }
+        const knockWasCinematic = this.knockDoor?.isCinematic?.() === true;
+        if (!this.inventoryOpen) this.knockDoor?.update(delta, { focused: this.currentTargetId === "knock-door" });
+        if (!knockWasCinematic && this.knockDoor?.isCinematic?.()) {
+          this.clearTransientInteractionState("cinematic:knock-door");
+        }
         this.shadowQuest?.update(delta, this.elapsed);
         if (this.debugShadowAutoplay && !this.debugShadowTriggered && this.shadowQuest?.isAvailable()) {
           this.debugShadowTriggered = this.shadowQuest.handleInteraction("shadow-window");
         }
         const cinematicOwned = this.doorDefense?.isCinematic()
+          || this.knockDoor?.isCinematic()
           || this.foundPhone?.isInspecting()
           || this.shadowQuest?.isCinematic();
         if (!cinematicOwned) this.director?.update(delta, this.elapsed);
@@ -730,8 +827,10 @@ export class DesktopApp {
       }
     };
     runCleanup(() => this.clearTransientInteractionState("runtime-dispose"));
+    runCleanup(() => this.npcRuntime?.destroy?.());
     runCleanup(() => this.foundPhone?.destroy());
     runCleanup(() => this.doorDefense?.destroy());
+    runCleanup(() => this.knockDoor?.destroy());
     runCleanup(() => this.director?.destroy?.());
     runCleanup(() => this.rightHandFlashlight?.destroy?.());
     runCleanup(() => this.handTracking?.destroy());
@@ -739,7 +838,9 @@ export class DesktopApp {
     runCleanup(() => this.player?.destroy());
     runCleanup(() => this.disposeScene(this.experience));
     this.foundPhone = null;
+    this.npcRuntime = null;
     this.doorDefense = null;
+    this.knockDoor = null;
     this.handTracking = null;
     this.rightHandFlashlight = null;
     this.shadowQuest = null;
@@ -775,6 +876,8 @@ export class DesktopApp {
     runCleanup(() => phone?.removeEventListener?.("peer", this.handlePhonePeer));
     runCleanup(() => phone?.removeEventListener?.("action", this.handlePhoneActionEvent));
     runCleanup(() => phone?.removeEventListener?.("hand", this.handlePhoneHand));
+    runCleanup(() => phone?.removeEventListener?.("voice-clip", this.handlePhoneVoiceClip));
+    runCleanup(() => phone?.removeEventListener?.("voice-stream", this.handlePhoneVoiceStream));
     runCleanup(() => this.disposeRuntime());
     runCleanup(() => this.audio.dispose());
     runCleanup(() => phone?.destroy());

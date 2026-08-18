@@ -116,9 +116,11 @@ function createSceneStartHarness() {
     showLoading: vi.fn(),
     showPairing: vi.fn(),
     showSceneError: vi.fn(),
+    setCleanView: vi.fn(),
     setPrompt: vi.fn(),
     setObjective: vi.fn(),
     setSubtitle: vi.fn(),
+    setPlayerTranscript: vi.fn(),
     setVoiceRecording: vi.fn(),
   };
   app.audio = {
@@ -237,6 +239,7 @@ function createTickHarness({ owner = null } = {}) {
     doorDefense,
     director,
     audio: { update: vi.fn() },
+    npcRuntime: { update: vi.fn() },
     rightHandFlashlight: { update: vi.fn(), destroy: vi.fn() },
     sampleDebugPixels: vi.fn(),
   });
@@ -307,13 +310,80 @@ describe("desktop control feedback", () => {
     const app = Object.assign(Object.create(DesktopApp.prototype), {
       destroyed: false,
       ui: { setVoiceRecording: vi.fn() },
+      npcRuntime: { beginCapture: vi.fn() },
     });
 
     app.handlePhoneAction({ action: "voice-recording", active: true });
     app.handlePhoneAction({ action: "voice-recording", active: false });
 
     expect(app.ui.setVoiceRecording.mock.calls).toEqual([[true], [false]]);
+    expect(app.npcRuntime.beginCapture).toHaveBeenCalledOnce();
   });
+
+  it("forwards phone clips, PCM frames, and browser transcripts to the NPC runtime", async () => {
+    const npcRuntime = {
+      acceptVoiceClip: vi.fn(async () => true),
+      acceptVoiceFrame: vi.fn(() => true),
+      acceptTranscript: vi.fn(async () => true),
+    };
+    const app = Object.assign(Object.create(DesktopApp.prototype), { destroyed: false, npcRuntime });
+    const clip = { data: new ArrayBuffer(8), mimeType: "audio/webm" };
+    const frame = new ArrayBuffer(16);
+    const transcript = { transcript: "Mara", confidence: 0.9, voiceLevel: 0.5 };
+
+    await app.handlePhoneVoiceClip({ detail: clip });
+    app.handlePhoneVoiceStream({ detail: frame });
+    await app.handlePhoneAction({ action: "voice-transcript", ...transcript });
+
+    expect(npcRuntime.acceptVoiceClip).toHaveBeenCalledWith(clip);
+    expect(npcRuntime.acceptVoiceFrame).toHaveBeenCalledWith(frame);
+    expect(npcRuntime.acceptTranscript).toHaveBeenCalledWith(transcript);
+  });
+
+  it("shows a phone transcript even when the NPC runtime is unavailable", async () => {
+    const ui = { setPlayerTranscript: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      npcRuntime: null,
+      ui,
+    });
+
+    await app.handlePhoneAction({
+      action: "voice-transcript",
+      transcript: "我在门外",
+      confidence: 0.91,
+      voiceLevel: 0.55,
+    });
+
+    expect(ui.setPlayerTranscript).toHaveBeenCalledWith("我在门外", true);
+  });
+
+  it("transcribes a phone audio clip and shows a subtitle when NPC capture is unavailable", async () => {
+    const ui = { setPlayerTranscript: vi.fn() };
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ transcript: "我在门外", confidence: 0.92, voiceLevel: 0.61 }),
+    }));
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      npcRuntime: null,
+      ui,
+      fetchImpl,
+    });
+
+    const accepted = await app.handlePhoneVoiceClip({
+      detail: { mimeType: "audio/webm", data: new ArrayBuffer(8) },
+    });
+
+    expect(accepted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/npc/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": "audio/webm" },
+      body: expect.any(ArrayBuffer),
+    });
+    expect(ui.setPlayerTranscript).toHaveBeenCalledWith("我在门外", true);
+  });
+
 
   it("reports each applied input sequence and resulting camera angles once", () => {
     const app = Object.assign(Object.create(DesktopApp.prototype), {
@@ -1402,6 +1472,19 @@ describe("desktop village startup", () => {
     app.disposeRuntime();
     expect(rightHandFlashlight.destroy).toHaveBeenCalledOnce();
   });
+
+  it("switches the desktop to a canvas-only view after scene startup", async () => {
+    const { app } = createSceneStartHarness();
+    const scene = createStartableScene();
+    createSceneMock.mockResolvedValueOnce(scene);
+    vi.spyOn(HandTrackingDirector.prototype, "load").mockResolvedValue(true);
+
+    await app.startGame(false);
+
+    expect(app.ui.setCleanView).toHaveBeenNthCalledWith(1, false);
+    expect(app.ui.setCleanView).toHaveBeenLastCalledWith(true);
+  });
+
   it("constructs the village director and leaves corridor defense inactive for ElderBoom", async () => {
     const { app } = createSceneStartHarness();
     const scene = createStartableScene();
@@ -1465,6 +1548,27 @@ describe("scene startup error classification", () => {
 });
 
 describe("desktop door-defense UI", () => {
+  it("keeps runtime UI endpoints available behind a canvas-only clean view", () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const shell = elements.get(".desktop-shell");
+
+    ui.setCleanView(true);
+    ui.setSubtitle("hidden dialogue", true);
+    ui.setPlayerTranscript("visible player speech", true);
+    ui.setPrompt("hidden prompt");
+
+    expect(ui.elements.shell).toBe(shell);
+    expect(shell.dataset.cleanView).toBe("true");
+    expect(ui.elements.subtitle.hidden).toBe(false);
+    expect(ui.elements.playerTranscript.hidden).toBe(false);
+    expect(ui.elements.playerTranscript.textContent).toBe("visible player speech");
+    expect(ui.elements.prompt.hidden).toBe(false);
+
+    ui.setCleanView(false);
+    expect(shell.dataset.cleanView).toBe("false");
+  });
+
   it("renders one Lucide retry command and presents concise scene errors", () => {
     const { root, elements } = createRoot();
     const ui = createDesktopUI(root);
@@ -1532,6 +1636,24 @@ describe("desktop door-defense UI", () => {
     expect(voiceRecording.hidden).toBe(false);
     ui.setVoiceRecording(false);
     expect(voiceRecording.hidden).toBe(true);
+  });
+
+  it("shows speech-recognition status separately from dialogue subtitles", () => {
+    const { root, elements } = createRoot();
+    const ui = createDesktopUI(root);
+    const voiceStatus = elements.get("#npc-voice-status");
+
+    expect(root.innerHTML).toContain('id="npc-voice-status"');
+    expect(ui.elements.npcVoiceStatus).toBe(voiceStatus);
+
+    ui.setNpcVoiceStatus({ message: "正在识别", state: "capturing" });
+    expect(voiceStatus.textContent).toBe("正在识别");
+    expect(voiceStatus.dataset.state).toBe("capturing");
+    expect(voiceStatus.hidden).toBe(false);
+
+    ui.setNpcVoiceStatus(null);
+    expect(voiceStatus.textContent).toBe("");
+    expect(voiceStatus.hidden).toBe(true);
   });
 
   it("clamps progress into aria percent and a stable scale transform with Chinese status", () => {

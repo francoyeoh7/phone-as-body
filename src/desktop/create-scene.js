@@ -1,5 +1,6 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { createExitDoor } from "./ExitDoor.js";
 import { createFoundPhoneProp } from "./FoundPhoneProp.js";
 import { createWashbasinState } from "./Washbasin.js";
@@ -7,6 +8,7 @@ import { createCorridorLayout } from "./CorridorLayout.js";
 import { loadEnvironment as loadVillageEnvironment } from "./environment/EnvironmentLoader.js";
 import { createEnvironmentColliders as createVillageColliders } from "./environment/colliders.js";
 import { disposeEnvironmentResources } from "./environment/resources.js";
+import { VillageNpcSystem } from "./npc/VillageNpcSystem.js";
 
 function seededRandom(seed) {
   let value = seed;
@@ -156,9 +158,291 @@ function addInteractable(scene, id, label, position, geometry, surface) {
   return { id, label, root, mesh, halo, enabled: true };
 }
 
+function loadPbrTexture(url, { color = false, repeat = [1, 1] } = {}) {
+  // TextureLoader needs a real browser image element; scene unit tests use a
+  // minimal document shim, so keep the material path deterministic there.
+  if (typeof window === "undefined" || typeof document?.createElementNS !== "function") return null;
+  const texture = new THREE.TextureLoader().load(url, undefined, undefined, () => {});
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(...repeat);
+  if (color) texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function applyVillageGroundTexture(environmentRoot) {
+  if (!environmentRoot?.traverse) return;
+  const diffuse = loadPbrTexture("/assets/materials/polyhaven/forest-ground-01/diffuse.jpg", { color: true, repeat: [5, 5] });
+  const normal = loadPbrTexture("/assets/materials/polyhaven/forest-ground-01/normal.jpg", { repeat: [5, 5] });
+  const roughness = loadPbrTexture("/assets/materials/polyhaven/forest-ground-01/roughness.jpg", { repeat: [5, 5] });
+  if (!diffuse && !normal && !roughness) return;
+  environmentRoot.traverse((object) => {
+    if (!object.isMesh || !/landscape/i.test(`${object.name} ${object.geometry?.name ?? ""}`)) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    const replacements = materials.map((source) => {
+      const next = source?.clone?.() ?? new THREE.MeshStandardMaterial();
+      next.color?.set?.(0xffffff);
+      next.map = diffuse;
+      next.normalMap = normal;
+      next.roughnessMap = roughness;
+      next.roughness = 0.96;
+      next.metalness = 0;
+      next.normalScale?.set?.(0.42, 0.42);
+      next.needsUpdate = true;
+      return next;
+    });
+    object.material = Array.isArray(object.material) ? replacements : replacements[0];
+    object.receiveShadow = true;
+  });
+}
+
+function createKnockDoorProp(scene, position, rotationY = 0) {
+  const root = new THREE.Group();
+  root.name = "knock-door";
+  root.position.set(...position);
+  root.rotation.y = rotationY;
+  root.userData.interactableId = "knock-door";
+
+  const pineDiffuse = "/assets/materials/polyhaven/rough-pine-door/diffuse.jpg";
+  const pineNormal = "/assets/materials/polyhaven/rough-pine-door/normal.jpg";
+  const pineRoughness = "/assets/materials/polyhaven/rough-pine-door/roughness.jpg";
+  const wood = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.88,
+    metalness: 0.03,
+    map: loadPbrTexture(pineDiffuse, { color: true, repeat: [1.2, 1] }),
+    normalMap: loadPbrTexture(pineNormal, { repeat: [1.2, 1] }),
+    roughnessMap: loadPbrTexture(pineRoughness, { repeat: [1.2, 1] }),
+    bumpScale: 0.14,
+  });
+  const trim = new THREE.MeshStandardMaterial({
+    color: 0x5b3b28,
+    roughness: 0.8,
+    map: loadPbrTexture(pineDiffuse, { color: true, repeat: [0.5, 1.8] }),
+    normalMap: loadPbrTexture(pineNormal, { repeat: [0.5, 1.8] }),
+    roughnessMap: loadPbrTexture(pineRoughness, { repeat: [0.5, 1.8] }),
+  });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x010204, side: THREE.DoubleSide, depthTest: true, depthWrite: false });
+  const skin = new THREE.MeshStandardMaterial({ color: 0x9c5d48, roughness: 0.58 });
+  const blood = new THREE.MeshBasicMaterial({
+    color: 0x5a090d,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    side: THREE.DoubleSide,
+  });
+
+  const frame = new THREE.Group();
+  const jambLeft = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.45, 0.32), trim);
+  const jambRight = jambLeft.clone();
+  jambLeft.position.set(-0.72, 1.22, 0);
+  jambRight.position.set(0.72, 1.22, 0);
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.58, 0.18, 0.32), trim);
+  lintel.position.set(0, 2.4, 0);
+  frame.add(jambLeft, jambRight, lintel);
+  root.add(frame);
+
+  const gapLight = new THREE.Mesh(new THREE.PlaneGeometry(0.19, 1.95), dark);
+  gapLight.position.set(0, 1.15, 0.13);
+  gapLight.renderOrder = 5;
+  gapLight.visible = false;
+  root.add(gapLight);
+
+  const leafPivot = new THREE.Group();
+  const rightLeafPivot = new THREE.Group();
+  leafPivot.name = "knock-door-left-leaf";
+  rightLeafPivot.name = "knock-door-right-leaf";
+  leafPivot.position.set(-0.61, 0, 0.02);
+  rightLeafPivot.position.set(0.61, 0, 0.02);
+  const addLeaf = (pivot, side) => {
+    const centerX = side * 0.305;
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.605, 2.25, 0.14), wood.clone());
+    leaf.position.set(centerX, 1.12, 0);
+    const inset = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.74, 0.026), wood.clone());
+    inset.position.set(centerX, 1.12, 0.083);
+    const brace = new THREE.Mesh(new THREE.BoxGeometry(0.065, 1.82, 0.05), trim);
+    brace.position.set(centerX, 1.12, 0.105);
+    brace.rotation.z = side * -0.32;
+    pivot.add(leaf, inset, brace);
+  };
+  addLeaf(leafPivot, 1);
+  addLeaf(rightLeafPivot, -1);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.28, 12), new THREE.MeshStandardMaterial({ color: 0xb38e5b, metalness: 0.72, roughness: 0.28 }));
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(-0.48, 1.15, 0.11);
+  rightLeafPivot.add(handle);
+  root.add(leafPivot, rightLeafPivot);
+
+  const grabArm = new THREE.Group();
+  grabArm.name = "door-grab-arm";
+  // The player is on the +Z side of this door. The arm starts behind the
+  // crack and reaches toward +Z so the hand is visible before it grabs.
+  grabArm.position.set(-0.28, 1.12, -0.42);
+  grabArm.userData.restPosition = grabArm.position.clone();
+  const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.9, 12), skin);
+  forearm.rotation.x = Math.PI / 2;
+  forearm.position.z = 0.03;
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), skin);
+  palm.scale.set(1.1, 0.82, 0.7);
+  palm.position.z = 0.54;
+  grabArm.add(forearm, palm);
+  for (let index = 0; index < 4; index += 1) {
+    const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.027, 0.17, 4, 8), skin);
+    finger.rotation.x = Math.PI / 2;
+    finger.position.set(-0.105 + index * 0.07, 0.025 - Math.abs(index - 1.5) * 0.015, 0.73);
+    grabArm.add(finger);
+  }
+  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.03, 0.18, 4, 8), skin);
+  thumb.rotation.set(0.25, 0.16, -0.85);
+  thumb.position.set(-0.16, -0.08, 0.66);
+  grabArm.add(thumb);
+  grabArm.visible = false;
+  root.add(grabArm);
+  let realGrabArm = null;
+
+  const bloodMark = new THREE.Group();
+  bloodMark.name = "wrist-blood-smears";
+  const stainGeometry = new THREE.CircleGeometry(0.035, 10);
+  const stainOffsets = [[0, 0, 0.01], [0.035, 0.018, 0.012], [-0.026, -0.018, 0.014], [0.012, -0.04, 0.01]];
+  for (const [x, y, z] of stainOffsets) {
+    const stain = new THREE.Mesh(stainGeometry, blood);
+    stain.position.set(x, y, z);
+    stain.rotation.set(0.15, 0.1, (x + y) * 2.4);
+    stain.scale.set(1.2, 0.7, 1);
+    bloodMark.add(stain);
+  }
+  bloodMark.visible = false;
+
+  root.traverse((object) => {
+    if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; }
+  });
+  scene.add(root);
+  const result = {
+    id: "knock-door",
+    label: "敲门",
+    root,
+    leafPivot,
+    rightLeafPivot,
+    gapLight,
+    grabArm,
+    realGrabArm,
+    setArmAsset(source) {
+      if (!source) return null;
+      realGrabArm?.removeFromParent?.();
+      const clone = SkeletonUtils.clone(source);
+      clone.name = "door-grab-realistic-arm";
+      clone.renderOrder = 6;
+      clone.animations = source.animations ?? [];
+      // The authored left arm runs along local +X. Aim that axis through the
+      // door's +Z opening; the shoulder cut stays behind the leaf while the
+      // wrist crosses the narrow gap beside its free edge.
+      clone.position.set(0, 0.1, -0.9);
+      clone.rotation.set(0, -Math.PI / 2, 0);
+      clone.scale.setScalar(0.9);
+      clone.userData.restPosition = clone.position.clone();
+      clone.userData.restRotation = clone.rotation.clone();
+      clone.userData.restBoneRotations = new Map();
+      clone.userData.restBoneQuaternions = new Map();
+      clone.visible = false;
+      const grabClip = THREE.AnimationClip.findByName(clone.animations, "grab.L");
+      const hiddenShoulder = clone.getObjectByName("shoulderR");
+      if (hiddenShoulder) hiddenShoulder.scale.setScalar(0.00001);
+      root.updateMatrixWorld(true);
+      const clippingNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion())).normalize();
+      const clippingPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        clippingNormal,
+        root.getWorldPosition(new THREE.Vector3()),
+      );
+      clone.traverse((object) => {
+        if (object.isBone) {
+          clone.userData.restBoneRotations.set(object, object.rotation.clone());
+          clone.userData.restBoneQuaternions.set(object, object.quaternion.clone());
+        }
+        if (!object.isMesh) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        const replacements = materials.map((material) => {
+          const replacement = material.clone();
+          replacement.transparent = false;
+          replacement.opacity = 1;
+          replacement.depthWrite = true;
+          replacement.clippingPlanes = [clippingPlane];
+          replacement.clipShadows = true;
+          return replacement;
+        });
+        object.material = Array.isArray(object.material) ? replacements : replacements[0];
+        object.castShadow = true;
+        object.receiveShadow = true;
+      });
+      clone.userData.grabFingerPoses = [];
+      if (grabClip) {
+        for (const bone of clone.userData.restBoneQuaternions.keys()) {
+          if (!bone.name.endsWith("L") || !/^(thumb|f_(index|middle|ring|pinky))/.test(bone.name)) continue;
+          const track = grabClip.tracks.find((entry) => entry.name === `${bone.name}.quaternion`);
+          if (!track) continue;
+          const value = track.createInterpolant(new Float32Array(4)).evaluate(grabClip.duration);
+          clone.userData.grabFingerPoses.push({
+            bone,
+            open: bone.quaternion.clone(),
+            closed: new THREE.Quaternion(value[0], value[1], value[2], value[3]).normalize(),
+          });
+        }
+      }
+      const sleeve = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.12, 0.105, 1.05, 18, 1, true),
+        new THREE.MeshStandardMaterial({
+          color: 0x101216,
+          roughness: 0.96,
+          metalness: 0,
+          clippingPlanes: [clippingPlane],
+          clipShadows: true,
+        }),
+      );
+      sleeve.name = "door-grab-sleeve";
+      sleeve.rotation.z = -Math.PI / 2;
+      sleeve.position.set(0.02, 1.54, 0.025);
+      sleeve.castShadow = true;
+      sleeve.receiveShadow = true;
+      clone.add(sleeve);
+      root.add(clone);
+      realGrabArm = clone;
+      result.realGrabArm = clone;
+      grabArm.visible = false;
+      return clone;
+    },
+    resetArmPose() {
+      if (!realGrabArm) return;
+      realGrabArm.position.copy(realGrabArm.userData.restPosition);
+      realGrabArm.rotation.copy(realGrabArm.userData.restRotation);
+      for (const [bone, rotation] of realGrabArm.userData.restBoneRotations ?? []) {
+        bone.rotation.copy(rotation);
+      }
+      for (const [bone, quaternion] of realGrabArm.userData.restBoneQuaternions ?? []) {
+        bone.quaternion.copy(quaternion);
+      }
+    },
+    bloodMark,
+    enabled: true,
+    interaction: {
+      anchor: root,
+      contactRadius: 0.22,
+      maxUseDistance: 2.25,
+      approachDirection: new THREE.Vector3(0, 0, 1),
+      contactNormal: new THREE.Vector3(0, 0, 1),
+    },
+  };
+  return result;
+}
+
 export function createRenderOnlyFuseModel() {
   const root = new THREE.Group();
   root.name = "spare-fuse-model";
+  root.userData.handGrip = {
+    position: [0, -0.012, -0.018],
+    rotation: [0, 0, 0],
+    scale: 0.72,
+  };
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(0.16, 0.34, 0.16),
     new THREE.MeshStandardMaterial({
@@ -458,6 +742,10 @@ export function createFlashlightRig(camera, target, { cookieFactory = makeFlashl
       side: THREE.BackSide,
     }),
   );
+  // The physical torch held by RightHandFlashlight is the only visible
+  // flashlight prop. Keep these meshes available for backwards-compatible
+  // lighting controls, but make the old camera-space beam invisible so it
+  // cannot read as a second floating torch in first person.
   outerBeam.visible = false;
   outerBeam.rotation.x = -Math.PI / 2;
   outerBeam.position.set(0, -0.05, -8.05);
@@ -630,7 +918,7 @@ async function createLegacyCorridorScene(host) {
   camera.rotation.order = "YXZ";
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -831,7 +1119,7 @@ async function createLegacyCorridorScene(host) {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   };
   window.addEventListener("resize", resize);
 
@@ -928,6 +1216,7 @@ export async function createScene(host, {
   rendererFactory = null,
   loadEnvironment = loadVillageEnvironment,
   createEnvironmentColliders = createVillageColliders,
+  createNpcSystem = ({ scene }) => new VillageNpcSystem({ scene }),
   manifestUrl = VILLAGE_MANIFEST_URL,
   signal,
   onEnvironmentProgress,
@@ -942,12 +1231,13 @@ export async function createScene(host, {
   const renderer = rendererFactory
     ? rendererFactory({ antialias: true, powerPreference: "high-performance" })
     : new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.localClippingEnabled = true;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.02;
+  renderer.toneMappingExposure = 0.88;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   host.replaceChildren(renderer.domElement);
 
@@ -959,6 +1249,7 @@ export async function createScene(host, {
   let environment = null;
   let environmentColliders = null;
   let flashlightRig = null;
+  let npcSystem = null;
   let disposed = false;
   let resizeAttached = false;
 
@@ -966,7 +1257,7 @@ export async function createScene(host, {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   };
 
   const dispose = ({ clearHost = true } = {}) => {
@@ -975,6 +1266,7 @@ export async function createScene(host, {
     if (resizeAttached) window.removeEventListener("resize", resize);
     environment?.dispose?.();
     environmentColliders?.dispose?.();
+    npcSystem?.destroy?.();
     disposeEnvironmentResources([gameplayRoot, camera], {
       environmentTextures: [flashlightRig?.core?.map],
     });
@@ -1005,14 +1297,21 @@ export async function createScene(host, {
       manifest.atmosphere.fog.near,
       manifest.atmosphere.fog.far,
     );
-    scene.add(new THREE.HemisphereLight(0xe4f5ff, 0x657451, 1.15));
+    // The environment manifest owns the moon and practical lights. Keep only
+    // a low fill here so night remains readable without washing out the beam.
+    scene.add(new THREE.HemisphereLight(0x35435f, 0x131712, 0.24));
 
     environmentColliders = createEnvironmentColliders({
       RAPIER: rapier,
       world,
       manifest,
+      environmentRoot: environment.root,
     });
+    applyVillageGroundTexture(environment.root);
     scene.add(...environmentColliders.occluderRoots);
+
+    npcSystem = createNpcSystem({ scene });
+    Promise.resolve(npcSystem?.load?.()).catch(() => null);
 
     camera.position.set(
       manifest.spawn.position[0],
@@ -1058,13 +1357,21 @@ export async function createScene(host, {
     ), washbasinDefinition);
     washbasin.root.rotation.y = washbasinDefinition.rotationY;
 
-    const interactables = [fuse, foundPhone, washbasin];
+    const knockDoorDefinition = manifest.tasks["exit-door"];
+    const knockDoor = createKnockDoorProp(
+      gameplayRoot,
+      knockDoorDefinition.position,
+      knockDoorDefinition.rotationY,
+    );
+
+    const interactables = [fuse, foundPhone, washbasin, knockDoor];
     const staticOccluderRoots = environmentColliders.occluderRoots;
     const compatibleLights = villageLightCompatibility(environment);
     const worldAnchors = {
       fuse: fuse.root,
       foundPhone: foundPhone.root,
       washbasin: washbasin.root,
+      knockDoor: knockDoor.root,
     };
 
     await renderer.compileAsync?.(scene, camera);
@@ -1091,6 +1398,8 @@ export async function createScene(host, {
         heldFuse,
         foundPhone,
         washbasin,
+        knockDoor,
+        npcs: npcSystem,
         corridor: {
           layout: null,
           anchors: environment.anchors,
@@ -1104,6 +1413,7 @@ export async function createScene(host, {
         updateFlashlightRig(flashlightRig, camera, delta);
         washbasin.update(delta, elapsed);
         foundPhone.update(delta);
+        npcSystem?.update?.(delta, elapsed, camera.position);
       },
       dispose,
     };

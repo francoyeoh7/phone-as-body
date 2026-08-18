@@ -32,7 +32,7 @@ function installBrowserHarness() {
   const fakeWindow = {
     innerWidth: 1440,
     innerHeight: 900,
-    devicePixelRatio: 1,
+    devicePixelRatio: 2,
     addEventListener: vi.fn((type, listener) => listeners.set(type, listener)),
     removeEventListener: vi.fn((type, listener) => {
       if (listeners.get(type) === listener) listeners.delete(type);
@@ -145,8 +145,8 @@ afterEach(() => {
 });
 
 describe("real village scene assembly", () => {
-  it("assembles the imported environment with only pickup props and the washbasin", async () => {
-    installBrowserHarness();
+  it("assembles the imported environment, gameplay props, and non-blocking village NPCs", async () => {
+    const { fakeWindow } = installBrowserHarness();
     const manifest = await trackedManifest();
     const { renderer, rendererFactory } = rendererHarness();
     const physics = physicsHarness();
@@ -157,6 +157,13 @@ describe("real village scene assembly", () => {
     );
     const colliders = { colliders: [], rigidBodies: [], occluderRoots: [occluder], dispose: vi.fn() };
     const createEnvironmentColliders = vi.fn(() => colliders);
+    const npcSystem = {
+      roster: new Map(),
+      load: vi.fn(() => new Promise(() => {})),
+      update: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const createNpcSystem = vi.fn(() => npcSystem);
     const host = { replaceChildren: vi.fn() };
 
     const experience = await createScene(host, {
@@ -164,6 +171,7 @@ describe("real village scene assembly", () => {
       rendererFactory,
       loadEnvironment,
       createEnvironmentColliders,
+      createNpcSystem,
     });
 
     expect(loadEnvironment).toHaveBeenCalledWith(expect.objectContaining({
@@ -176,6 +184,9 @@ describe("real village scene assembly", () => {
       manifest,
     }));
     expect(experience.objects.environment).toBe(environment);
+    expect(createNpcSystem).toHaveBeenCalledWith({ scene: experience.scene });
+    expect(npcSystem.load).toHaveBeenCalledOnce();
+    expect(experience.objects.npcs).toBe(npcSystem);
     expect(experience.scene.children).toContain(environment.root);
     expect(experience.staticOccluderRoots).toEqual([occluder]);
     expect(experience.objects.corridor.anchors).toBe(environment.anchors);
@@ -183,10 +194,13 @@ describe("real village scene assembly", () => {
       "fuse",
       "found-phone",
       "washbasin",
+      "knock-door",
     ]);
     expect(experience.objects.fuse.root.position.toArray()).toEqual(manifest.tasks.fuse.position);
     expect(experience.objects.foundPhone.root.position.toArray()).toEqual(manifest.tasks["found-phone"].position);
     expect(experience.objects.washbasin.root.position.toArray()).toEqual(manifest.tasks.washbasin.position);
+    expect(experience.objects.knockDoor.root.position.toArray()).toEqual(manifest.tasks["exit-door"].position);
+    expect(experience.objects.knockDoor.interaction.contactNormal.toArray()).toEqual([0, 0, 1]);
     expect(experience.objects.fuse.interaction.contactNormal.toArray()).toEqual([0, 1, 0]);
     expect(experience.objects.fuse.interaction.maxUseDistance).toBe(2.35);
     expect(experience.objects).not.toHaveProperty("panel");
@@ -204,7 +218,14 @@ describe("real village scene assembly", () => {
     expect(experience.camera.position.toArray()).toEqual([6.5, 1.6, -2]);
     expect(experience.camera.rotation.y).toBeCloseTo(0, 8);
     expect(host.replaceChildren).toHaveBeenCalledWith(renderer.domElement);
+    expect(renderer.setPixelRatio).toHaveBeenCalledWith(1.25);
+    const resize = fakeWindow.addEventListener.mock.calls.find(([type]) => type === "resize")[1];
+    resize();
+    expect(renderer.setPixelRatio).toHaveBeenLastCalledWith(1.25);
     const flashlightCookieDispose = vi.spyOn(experience.objects.flashlightCore.map, "dispose");
+
+    experience.update(0.25, 2);
+    expect(npcSystem.update).toHaveBeenCalledWith(0.25, 2, experience.camera.position);
 
     experience.dispose();
     experience.dispose();
@@ -213,6 +234,7 @@ describe("real village scene assembly", () => {
     expect(renderer.dispose).toHaveBeenCalledOnce();
     expect(physics.worlds[0].free).toHaveBeenCalledOnce();
     expect(flashlightCookieDispose).toHaveBeenCalledOnce();
+    expect(npcSystem.destroy).toHaveBeenCalledOnce();
   });
 
   it("rolls back renderer and Rapier ownership when environment loading fails", async () => {

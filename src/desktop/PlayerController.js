@@ -185,7 +185,7 @@ export class PlayerController {
       this.cameraRenderYaw = this.cameraYaw;
       this.cameraRenderPitch = this.cameraPitch;
     } else {
-      const timeConstant = 0.018 + smoothing * 0.102;
+      const timeConstant = 0.008 + smoothing * 0.052;
       const alpha = 1 - Math.exp(-delta / timeConstant);
       this.cameraRenderYaw += (this.cameraYaw - this.cameraRenderYaw) * alpha;
       this.cameraRenderPitch += (this.cameraPitch - this.cameraRenderPitch) * alpha;

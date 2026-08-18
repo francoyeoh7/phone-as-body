@@ -8,7 +8,7 @@ import {
   Settings,
   X,
 } from "lucide";
-import { isRoomCode } from "../shared/protocol.js";
+import { MAX_VOICE_CLIP_BYTES, isRoomCode } from "../shared/protocol.js";
 import { BraceHaptics } from "./BraceHaptics.js";
 import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { MediaPipeHandTracker } from "./MediaPipeHandTracker.js";
@@ -18,8 +18,10 @@ import { InventoryEdgeController } from "./InventoryEdgeController.js";
 import { MotionController } from "./MotionController.js";
 import { MotionDiagnostics } from "./MotionDiagnostics.js";
 import { PointerOwnership } from "./PointerOwnership.js";
+import { pcm16FramesToWav } from "./PcmVoiceStreamer.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
 import { VoiceHoldController } from "./VoiceHoldController.js";
+import { BrowserVoiceRecognizer } from "./BrowserVoiceRecognizer.js";
 import "./styles.css";
 
 const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, RotateCcw, Settings, X };
@@ -84,7 +86,7 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
 
       <div class="permission-panel" id="permission-panel">
         <div class="permission-mark"><i data-lucide="rotate-ccw"></i></div>
-        <p class="eyebrow">CORRIDOR 617</p>
+        <p class="eyebrow">杨弈的demo</p>
         <h1 id="permission-title">连接电脑</h1>
         <p id="permission-copy">请从电脑屏幕扫描二维码进入。</p>
         <button class="primary-button" id="enable-motion" disabled>允许并开始</button>
@@ -144,6 +146,12 @@ export class ControllerApp {
     this.handTaskContext = null;
     this.handTrackingState = "idle";
     this.doorFallbackHolding = false;
+    this.voiceRecognizer = null;
+    this.voiceRecognitionStarted = false;
+    this.fetchImpl = globalThis.fetch?.bind(globalThis) ?? null;
+    this.voicePcmFrames = [];
+    this.voicePcmBytes = 0;
+    this.voicePcmTranscriptPromise = null;
     this.pointerOwners = new PointerOwnership();
     this.gameplayClaimGeneration = null;
     this.cameraMotion = null;
@@ -238,6 +246,11 @@ export class ControllerApp {
       onActive: (active) => this.handleVoiceActive(active),
       onPressState: (state) => this.handleVoicePressState(state),
       onClip: (clip) => this.handleVoiceClip(clip),
+      onStreamFrame: (frame) => this.handleVoiceStreamFrame(frame),
+    });
+    this.voiceRecognizer = new BrowserVoiceRecognizer({
+      onResult: (result) => this.socket?.sendAction("voice-transcript", result),
+      onError: (error) => this.handleVoiceRecognitionError(error),
     });
     this.voicePointerHandlers = {
       pointerdown: (event) => this.voiceHold.pointerDown(event),
@@ -308,7 +321,7 @@ export class ControllerApp {
       "join-failed": "连接失败",
       replaced: "控制器已被替换",
       "session-ended": "电脑端已关闭",
-      "invalid-room": "房间码无效",
+      "invalid-room": "请扫描电脑端二维码",
     };
     this.connectionState = state;
     if (this.status) this.status.dataset.status = state;
@@ -646,17 +659,122 @@ export class ControllerApp {
   handleVoiceActive(active) {
     if (this.voiceRegion) this.voiceRegion.dataset.active = String(Boolean(active));
     this.socket?.sendAction("voice-recording", { active: Boolean(active) });
+    if (active) this.startVoiceRecognition();
+    else this.stopVoiceRecognition();
   }
 
   handleVoicePressState(state) {
+    if (state === "pressed") {
+      // Keep this call inside pointerdown's user-activation task. iOS Safari
+      // rejects SpeechRecognition.start() when it is delayed until permission
+      // or the recording dwell promise resolves.
+      this.startVoiceRecognition();
+      pulse(8);
+    } else if (state === "error") {
+      this.stopVoiceRecognition({ cancel: true });
+    } else if (state === "idle") {
+      this.stopVoiceRecognition();
+    }
     if (!this.voiceRegion) return;
     this.voiceRegion.dataset.state = state;
     if (state !== "recording") this.voiceRegion.dataset.active = "false";
-    if (state === "pressed") pulse(8);
   }
 
-  handleVoiceClip(clip) {
-    this.socket?.sendVoiceClip?.(clip);
+  startVoiceRecognition() {
+    if (this.voiceRecognitionStarted) return true;
+    const started = this.voiceRecognizer?.start?.() === true;
+    this.voiceRecognitionStarted = started;
+    return started;
+  }
+
+  stopVoiceRecognition({ cancel = false } = {}) {
+    if (!this.voiceRecognitionStarted) return false;
+    this.voiceRecognitionStarted = false;
+    return cancel
+      ? this.voiceRecognizer?.cancel?.() === true
+      : this.voiceRecognizer?.stop?.() === true;
+  }
+
+  handleVoiceRecognitionError(error) {
+    this.stopVoiceRecognition({ cancel: true });
+    if (this.voiceRegion) {
+      this.voiceRegion.dataset.recognition = "error";
+      this.voiceRegion.dataset.error = String(error?.error ?? error?.message ?? "recognition-error");
+    }
+  }
+
+  async handleVoiceClip(clip) {
+    const pcmTranscript = this.voicePcmTranscriptPromise;
+    this.voicePcmTranscriptPromise = null;
+    if (pcmTranscript && await pcmTranscript) return true;
+    return this.submitVoiceClip(clip);
+  }
+
+  async submitVoiceClip(clip, { fallbackToSocket = true } = {}) {
+    const fallback = () => {
+      if (fallbackToSocket) this.socket?.sendVoiceClip?.(clip);
+      return false;
+    };
+    let request;
+    try {
+      request = this.fetchImpl?.("/api/npc/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": clip?.mimeType || "audio/webm" },
+        body: clip?.data,
+      });
+    } catch {
+      return fallback();
+    }
+    if (!request || typeof request.then !== "function") return fallback();
+    try {
+      if (this.voiceRegion) this.voiceRegion.dataset.recognition = "transcribing";
+      const response = await request;
+      if (!response?.ok) return fallback();
+      const result = await response.json();
+      const transcript = String(result?.transcript ?? "").trim();
+      if (!transcript) return fallback();
+      const payload = {
+        transcript,
+        confidence: Number.isFinite(result?.confidence) ? result.confidence : 0.9,
+        voiceLevel: Number.isFinite(result?.voiceLevel) ? result.voiceLevel : 0.6,
+      };
+      this.socket?.sendAction("voice-transcript", payload);
+      if (this.voiceRegion) this.voiceRegion.dataset.recognition = "complete";
+      return true;
+    } catch {
+      if (this.voiceRegion) this.voiceRegion.dataset.recognition = "fallback";
+      return fallback();
+    }
+  }
+
+  handleVoiceStreamFrame(frame) {
+    this.socket?.sendVoiceFrame?.(frame);
+    if (frame?.type === "voice-start") {
+      this.voicePcmFrames = [];
+      this.voicePcmBytes = 0;
+      this.voicePcmTranscriptPromise = null;
+      return;
+    }
+    if (frame instanceof ArrayBuffer || ArrayBuffer.isView(frame)) {
+      const bytes = frame instanceof ArrayBuffer
+        ? new Uint8Array(frame)
+        : new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength);
+      if (bytes.byteLength > 0 && bytes.byteLength % 2 === 0
+        && this.voicePcmBytes + bytes.byteLength <= MAX_VOICE_CLIP_BYTES - 44) {
+        const copy = bytes.slice().buffer;
+        this.voicePcmFrames.push(copy);
+        this.voicePcmBytes += bytes.byteLength;
+      }
+      return;
+    }
+    if (frame?.type === "voice-stop" && this.voicePcmBytes > 0) {
+      const wav = pcm16FramesToWav(this.voicePcmFrames, 24_000);
+      this.voicePcmFrames = [];
+      this.voicePcmBytes = 0;
+      this.voicePcmTranscriptPromise = this.submitVoiceClip({ mimeType: "audio/wav", data: wav }, {
+        fallbackToSocket: false,
+      });
+    }
   }
 
   isBottomPoint({ y }) {
