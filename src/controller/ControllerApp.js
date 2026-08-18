@@ -292,7 +292,7 @@ export class ControllerApp {
       pointermove: (event) => this.inventoryEdge.pointerMove(event),
       pointerup: (event) => this.inventoryEdge.pointerUp(event),
       pointercancel: (event) => this.inventoryEdge.pointerCancel(event),
-      lostpointercapture: (event) => this.inventoryEdge.pointerCancel(event),
+      lostpointercapture: (event) => this.inventoryEdge.pointerCaptureLost(event),
     };
     for (const [type, handler] of Object.entries(this.inventoryPointerHandlers)) {
       this.inventoryRegion.addEventListener(type, handler);

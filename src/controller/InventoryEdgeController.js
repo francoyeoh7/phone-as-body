@@ -4,6 +4,10 @@ const MOVE_INTERVAL_MS = 1000 / 30;
 const ACTIVATION_DISTANCE_PX = 44;
 const ACTIVATION_WINDOW_MS = 260;
 const HORIZONTAL_DOMINANCE = 1.25;
+// The desktop bar is capped at 360px and its 5px cursor radius leaves a
+// 350px usable horizontal span. Small phones need a proportional boost so a
+// full-width finger swipe still reaches that span.
+const INVENTORY_CURSOR_TRAVEL_PX = 350;
 
 function consumePointer(event) {
   event?.preventDefault?.();
@@ -13,6 +17,10 @@ function consumePointer(event) {
 function clampDelta(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(INVENTORY_DELTA_LIMIT, Math.max(-INVENTORY_DELTA_LIMIT, value));
+}
+
+function roundDelta(value) {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function clampUnit(value) {
@@ -57,11 +65,12 @@ export class InventoryEdgeController {
     if (displaced === null || displaced === false || displaced === undefined) return false;
 
     const target = event.currentTarget ?? this.element;
+    const startX = Number.isFinite(event.clientX) ? event.clientX : 0;
     this.session = {
       pointerId: event.pointerId,
       ownershipGeneration: this.ownership.generation,
       target,
-      startX: event.clientX,
+      startX,
       startY: event.clientY,
       startedAt: this.clock(),
       lastX: event.clientX,
@@ -71,8 +80,16 @@ export class InventoryEdgeController {
       lastFlushAt: this.clock(),
       timer: null,
       activated: false,
+      horizontalScale: startX > 0
+        ? Math.max(1, INVENTORY_CURSOR_TRAVEL_PX / startX)
+        : 1,
     };
-    target?.setPointerCapture?.(event.pointerId);
+    try {
+      target?.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture is optional on a few mobile WebKit versions. The
+      // session can still finish through pointerup/pointercancel.
+    }
     this.onClaim?.(displaced);
     return true;
   }
@@ -94,10 +111,10 @@ export class InventoryEdgeController {
         session.activated = true;
         const height = this.viewport()?.height;
         this.onOpen?.({ entryY: clampUnit(session.startY / (height > 0 ? height : 1)) });
-        this.onMove?.({
-          dx: clampDelta(nextX - session.startX),
-          dy: clampDelta(nextY - session.startY),
-        });
+        this.emitMovement(
+          (nextX - session.startX) * session.horizontalScale,
+          nextY - session.startY,
+        );
         session.lastFlushAt = this.clock();
       }
       session.lastX = nextX;
@@ -126,6 +143,14 @@ export class InventoryEdgeController {
     if (!this.currentSession(event?.pointerId)) return false;
     consumePointer(event);
     return this.cancel();
+  }
+
+  pointerCaptureLost(event) {
+    consumePointer(event);
+    if (!this.currentSession(event?.pointerId)) return false;
+    // Mobile browsers can transiently drop capture while a finger remains
+    // down. pointerup/pointercancel are the authoritative end signals.
+    return true;
   }
 
   cancel() {
@@ -180,13 +205,34 @@ export class InventoryEdgeController {
   }
 
   flush(session) {
-    const dx = clampDelta(session.pendingX);
-    const dy = clampDelta(session.pendingY);
+    const dx = session.pendingX * session.horizontalScale;
+    const dy = session.pendingY;
     session.pendingX = 0;
     session.pendingY = 0;
     session.lastFlushAt = this.clock();
-    if (dx === 0 && dy === 0) return false;
-    this.onMove?.({ dx, dy });
+    return this.emitMovement(dx, dy);
+  }
+
+  emitMovement(dx, dy) {
+    const safeX = roundDelta(Number.isFinite(dx) ? dx : 0);
+    const safeY = roundDelta(Number.isFinite(dy) ? dy : 0);
+    const largestAxis = Math.max(Math.abs(safeX), Math.abs(safeY));
+    if (largestAxis === 0) return false;
+
+    // Keep every wire packet within the protocol limit without discarding
+    // distance when a browser coalesces many pointer samples into one event.
+    const parts = Math.max(1, Math.ceil(largestAxis / INVENTORY_DELTA_LIMIT));
+    let sentX = 0;
+    let sentY = 0;
+    for (let index = 1; index <= parts; index += 1) {
+      const nextX = safeX * (index / parts);
+      const nextY = safeY * (index / parts);
+      const partX = clampDelta(nextX - sentX);
+      const partY = clampDelta(nextY - sentY);
+      sentX += partX;
+      sentY += partY;
+      if (partX !== 0 || partY !== 0) this.onMove?.({ dx: partX, dy: partY });
+    }
     return true;
   }
 
@@ -197,7 +243,11 @@ export class InventoryEdgeController {
     if (phase === "cancel") this.onCancel?.();
     this.ownership?.release?.("inventory", session.pointerId, session.ownershipGeneration);
     if (session.target?.hasPointerCapture?.(session.pointerId) !== false) {
-      session.target?.releasePointerCapture?.(session.pointerId);
+      try {
+        session.target?.releasePointerCapture?.(session.pointerId);
+      } catch {
+        // Capture may already have been released by the browser.
+      }
     }
     this.onRelease?.(phase);
     return true;

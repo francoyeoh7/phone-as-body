@@ -24,10 +24,10 @@ function createTimers() {
   };
 }
 
-function createElement() {
+function createElement(viewportWidth = 400) {
   const captured = new Set();
   return {
-    getBoundingClientRect: () => ({ left: 376, top: 0, width: 24, height: 800 }),
+    getBoundingClientRect: () => ({ left: viewportWidth - 24, top: 0, width: 24, height: 800 }),
     setPointerCapture: vi.fn((id) => captured.add(id)),
     hasPointerCapture: vi.fn((id) => captured.has(id)),
     releasePointerCapture: vi.fn((id) => captured.delete(id)),
@@ -45,10 +45,10 @@ function pointer(pointerId, x, y, currentTarget) {
   };
 }
 
-function createEdge(overrides = {}) {
+function createEdge({ viewportWidth = 400, ...overrides } = {}) {
   const timers = createTimers();
   const ownership = new PointerOwnership();
-  const element = createElement();
+  const element = createElement(viewportWidth);
   const callbacks = {
     onClaim: vi.fn(),
     onOpen: vi.fn(),
@@ -62,7 +62,7 @@ function createEdge(overrides = {}) {
     clock: timers.clock,
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
-    viewport: () => ({ width: 400, height: 800 }),
+    viewport: () => ({ width: viewportWidth, height: 800 }),
     canOpen: () => true,
     ...callbacks,
   });
@@ -109,5 +109,41 @@ describe("InventoryEdgeController", () => {
     expect(callbacks.onMove).toHaveBeenLastCalledWith({ dx: -20, dy: 10 });
     expect(callbacks.onCommit).toHaveBeenCalledOnce();
     expect(callbacks.onCancel).not.toHaveBeenCalled();
+  });
+
+  it("preserves the complete right-to-left travel when one event spans the whole edge", () => {
+    const { controller, element, callbacks } = createEdge();
+
+    controller.pointerDown(pointer(6, 390, 300, element));
+    controller.pointerMove(pointer(6, 0, 300, element));
+
+    const totalDx = callbacks.onMove.mock.calls.reduce((sum, [{ dx }]) => sum + dx, 0);
+    expect(callbacks.onOpen).toHaveBeenCalledExactlyOnceWith({ entryY: 0.375 });
+    expect(totalDx).toBe(-390);
+    expect(callbacks.onMove.mock.calls.every(([delta]) => Math.abs(delta.dx) <= 96)).toBe(true);
+  });
+
+  it("keeps an active swipe alive when the browser reports lost pointer capture", () => {
+    const { controller, element, callbacks } = createEdge();
+
+    controller.pointerDown(pointer(7, 390, 300, element));
+    controller.pointerMove(pointer(7, 330, 300, element));
+
+    expect(controller.pointerCaptureLost(pointer(7, 330, 300, element))).toBe(true);
+    controller.pointerMove(pointer(7, 120, 300, element));
+    controller.pointerUp(pointer(7, 0, 300, element));
+
+    expect(callbacks.onCancel).not.toHaveBeenCalled();
+    expect(callbacks.onCommit).toHaveBeenCalledOnce();
+    expect(callbacks.onMove.mock.calls.reduce((sum, [{ dx }]) => sum + dx, 0)).toBe(-390);
+  });
+
+  it("maps a narrow phone's full right-to-left travel to the complete desktop cursor span", () => {
+    const { controller, element, callbacks } = createEdge({ viewportWidth: 320 });
+
+    controller.pointerDown(pointer(8, 310, 300, element));
+    controller.pointerMove(pointer(8, 0, 300, element));
+
+    expect(callbacks.onMove.mock.calls.reduce((sum, [{ dx }]) => sum + dx, 0)).toBe(-350);
   });
 });
