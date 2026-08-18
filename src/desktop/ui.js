@@ -23,6 +23,7 @@ export function createDesktopUI(root) {
       <div class="scene-host" id="scene-host" aria-label="杨弈的demo 游戏画面">
         <div class="scene-placeholder"></div>
       </div>
+      <video class="knock-cinematic-video" id="knock-cinematic-video" playsinline preload="metadata" hidden aria-hidden="true"></video>
 
       <header class="game-header">
         <div class="location-mark"><strong>617</strong><span>东侧维护走廊</span></div>
@@ -82,6 +83,7 @@ export function createDesktopUI(root) {
   const elements = {
     shell: root.querySelector(".desktop-shell"),
     sceneHost: root.querySelector("#scene-host"),
+    knockVideo: root.querySelector("#knock-cinematic-video"),
     pairing: root.querySelector("#pairing-overlay"),
     qr: root.querySelector("#pairing-qr"),
     qrLoading: root.querySelector(".qr-loading"),
@@ -206,6 +208,39 @@ export function createDesktopUI(root) {
       elements.npcVoiceStatus.textContent = message;
       elements.npcVoiceStatus.dataset.state = String(status?.state ?? "idle");
       elements.npcVoiceStatus.hidden = !message;
+    },
+    prepareKnockVideo(source) {
+      const video = elements.knockVideo;
+      if (!video) return null;
+      video.pause?.();
+      video.hidden = true;
+      video.dataset.active = "false";
+      video.muted = false;
+      video.currentTime = 0;
+      video.src = source;
+      video.load?.();
+      return video;
+    },
+    playKnockVideo() {
+      const video = elements.knockVideo;
+      if (!video) return Promise.reject(new Error("Knock video element unavailable"));
+      video.hidden = false;
+      video.dataset.active = "true";
+      const playback = video.play?.();
+      return Promise.resolve(playback).catch((error) => {
+        video.muted = true;
+        return video.play?.() ?? Promise.reject(error);
+      });
+    },
+    releaseKnockVideo() {
+      const video = elements.knockVideo;
+      if (!video) return;
+      video.pause?.();
+      video.hidden = true;
+      video.dataset.active = "false";
+      video.currentTime = 0;
+      video.removeAttribute?.("src");
+      video.load?.();
     },
     setInventory(snapshot = {}, { entryEdge = "right", entryY = 0.5 } = {}) {
       elements.inventoryBar.hidden = false;

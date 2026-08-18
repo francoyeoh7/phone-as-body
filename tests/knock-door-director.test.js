@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { KnockDoorDirector } from "../src/desktop/KnockDoorDirector.js";
 
-function harness() {
+function harness({ video = null, playResult = Promise.resolve() } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(11.52, 1.6, -8.4);
   camera.rotation.order = "YXZ";
@@ -43,18 +43,85 @@ function harness() {
     },
   };
   handTracking.hand.root.add(handTracking.hand.presentationBones.handL);
+  const ui = {
+    setPrompt: vi.fn(),
+    setSubtitle: vi.fn(),
+    prepareKnockVideo: video ? vi.fn(() => video) : undefined,
+    playKnockVideo: video ? vi.fn(() => playResult) : undefined,
+    releaseKnockVideo: video ? vi.fn() : undefined,
+  };
   const director = new KnockDoorDirector({
     experience: { camera, objects: { knockDoor: door } },
     player,
     handTracking,
     audio: { cue: vi.fn() },
-    ui: { setPrompt: vi.fn(), setSubtitle: vi.fn() },
+    ui,
     now: () => 0,
   });
-  return { director, player, door, handTracking, camera };
+  return { director, player, door, handTracking, camera, ui, video };
 }
 
 describe("KnockDoorDirector", () => {
+  it("aligns from an arbitrary player pose before playing the supplied five-second clip", () => {
+    const video = new EventTarget();
+    const h = harness({ video });
+    const savedPose = h.player.snapshotPose();
+
+    expect(h.director.startFromKnock()).toBe(true);
+    expect(h.ui.prepareKnockVideo).toHaveBeenCalledWith(
+      "/assets/cinematics/village-knock-grab-v1.mp4",
+    );
+
+    h.director.update(0.21);
+    const halfway = h.player.setCinematicCamera.mock.calls.at(-1)[0];
+    expect(halfway.distanceTo(new THREE.Vector3(
+      savedPose.camera.x,
+      savedPose.camera.y,
+      savedPose.camera.z,
+    ))).toBeGreaterThan(0.05);
+    expect(halfway.distanceTo(h.director.alignedPosition)).toBeGreaterThan(0.05);
+    expect(h.ui.playKnockVideo).not.toHaveBeenCalled();
+
+    h.director.update(0.22);
+    expect(h.director.phase).toBe("video");
+    expect(h.ui.playKnockVideo).toHaveBeenCalledOnce();
+    expect(h.player.setCinematicCamera.mock.calls.at(-1)[0]
+      .distanceTo(h.director.alignedPosition)).toBeLessThan(0.001);
+
+    video.dispatchEvent(new Event("ended"));
+    expect(h.director.phase).toBe("complete");
+    expect(h.player.restorePose).toHaveBeenCalledWith(savedPose);
+    expect(h.ui.releaseKnockVideo).toHaveBeenCalledOnce();
+  });
+
+  it("releases the video and restores the exact pose when a video cinematic is aborted", () => {
+    const video = new EventTarget();
+    const h = harness({ video });
+    const savedPose = h.player.snapshotPose();
+    h.director.startFromKnock();
+    h.director.update(0.43);
+
+    expect(h.director.abort()).toBe(true);
+    expect(h.ui.releaseKnockVideo).toHaveBeenCalledOnce();
+    expect(h.player.restorePose).toHaveBeenCalledWith(savedPose);
+    video.dispatchEvent(new Event("ended"));
+    expect(h.player.restorePose).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the procedural sequence when video playback is rejected", async () => {
+    const video = new EventTarget();
+    const h = harness({ video, playResult: Promise.reject(new Error("blocked")) });
+    h.director.startFromKnock();
+    h.director.update(0.43);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(h.director.presentation).toBe("procedural");
+    expect(h.ui.releaseKnockVideo).toHaveBeenCalledOnce();
+    h.director.update(1.7);
+    expect(h.door.grabArm.visible).toBe(true);
+  });
+
   it("aligns at the door and reaches the grab hand toward the player", () => {
     const h = harness();
     expect(h.director.startFromKnock()).toBe(true);

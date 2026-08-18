@@ -3,6 +3,8 @@ import { KnockGestureDetector } from "./KnockGestureDetector.js";
 
 const PHASES = Object.freeze({
   idle: "idle",
+  align: "align",
+  video: "video",
   hold: "hold",
   crack: "crack",
   grab: "grab",
@@ -17,6 +19,9 @@ const GRAB_AT = 2.0;
 const FALL_AT = 6.2;
 const SLAM_AT = 7.15;
 const COMPLETE_AT = 8.05;
+const ALIGN_AT = 0.42;
+const VIDEO_MAX_SECONDS = 6.3;
+const KNOCK_VIDEO_URL = "/assets/cinematics/village-knock-grab-v1.mp4";
 const DOOR_OPEN = THREE.MathUtils.degToRad(18);
 const clamp01 = (value) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 const smoothstep = (value) => {
@@ -68,6 +73,11 @@ export class KnockDoorDirector {
     this.pullTarget = new THREE.Vector3();
     this.restGrabPosition = new THREE.Vector3();
     this.pulse = new THREE.Vector3();
+    this.presentation = "procedural";
+    this.videoElement = null;
+    this.videoStartedAt = 0;
+    this.videoEndedHandler = null;
+    this.videoErrorHandler = null;
     this.resetVisuals();
   }
 
@@ -114,7 +124,23 @@ export class KnockDoorDirector {
     );
     this.attachBloodMark();
     this.elapsed = 0;
-    this.phase = PHASES.hold;
+    this.presentation = "procedural";
+    this.videoElement = null;
+    try {
+      this.videoElement = this.ui?.prepareKnockVideo?.(KNOCK_VIDEO_URL) ?? null;
+    } catch {
+      this.videoElement = null;
+    }
+    if (this.videoElement?.addEventListener) {
+      this.presentation = "video-pending";
+      this.videoEndedHandler = () => {
+        if (this.cinematic && this.presentation === "video") this.finish();
+      };
+      this.videoErrorHandler = () => this.useProceduralFallback();
+      this.videoElement.addEventListener("ended", this.videoEndedHandler);
+      this.videoElement.addEventListener("error", this.videoErrorHandler);
+    }
+    this.phase = this.presentation === "video-pending" ? PHASES.align : PHASES.hold;
     this.cinematic = true;
     this.resetVisuals();
     this.player.beginCinematic?.();
@@ -127,6 +153,24 @@ export class KnockDoorDirector {
 
   updateCinematic(delta = 0) {
     this.elapsed += Math.max(0, Number(delta) || 0);
+    if (this.presentation === "video-pending" || this.presentation === "video") {
+      if (this.presentation === "video-pending") {
+        this.phase = PHASES.align;
+        if (this.elapsed < ALIGN_AT) {
+          this.applyAlignmentCamera(this.elapsed);
+          return;
+        }
+        this.beginVideoPlayback();
+      }
+      if (this.presentation === "video") {
+        this.phase = PHASES.video;
+        this.cameraPosition.copy(this.alignedPosition);
+        this.cameraTarget.copy(this.alignedTarget);
+        this.player.setCinematicCamera?.(this.cameraPosition, this.cameraTarget);
+        if (this.elapsed - this.videoStartedAt >= VIDEO_MAX_SECONDS) this.finish();
+      }
+      return;
+    }
     const time = this.elapsed;
     if (time < HOLD_AT) this.phase = PHASES.hold;
     else if (time < CRACK_AT) this.phase = PHASES.crack;
@@ -139,6 +183,50 @@ export class KnockDoorDirector {
     this.applyGrabArm(time);
     this.applyPlayerHand(time);
     this.applyCamera(time);
+  }
+
+  applyAlignmentCamera(time) {
+    const progress = smoothstep(time / ALIGN_AT);
+    this.cameraPosition.lerpVectors(this.originalPosition, this.alignedPosition, progress);
+    this.cameraTarget.lerpVectors(this.originalTarget, this.alignedTarget, progress);
+    this.player.setCinematicCamera?.(this.cameraPosition, this.cameraTarget);
+  }
+
+  beginVideoPlayback() {
+    if (this.presentation !== "video-pending") return false;
+    this.presentation = "video";
+    this.phase = PHASES.video;
+    this.videoStartedAt = this.elapsed;
+    let playback;
+    try {
+      playback = this.ui?.playKnockVideo?.();
+    } catch {
+      this.useProceduralFallback();
+      return false;
+    }
+    Promise.resolve(playback).catch(() => this.useProceduralFallback());
+    return true;
+  }
+
+  useProceduralFallback() {
+    if (!this.cinematic) return false;
+    this.releaseVideo();
+    this.presentation = "procedural";
+    this.elapsed = CRACK_AT;
+    this.phase = PHASES.crack;
+    return true;
+  }
+
+  releaseVideo() {
+    const video = this.videoElement;
+    if (video?.removeEventListener) {
+      if (this.videoEndedHandler) video.removeEventListener("ended", this.videoEndedHandler);
+      if (this.videoErrorHandler) video.removeEventListener("error", this.videoErrorHandler);
+    }
+    this.videoEndedHandler = null;
+    this.videoErrorHandler = null;
+    if (video) this.ui?.releaseKnockVideo?.();
+    this.videoElement = null;
   }
 
   applyDoor(time) {
@@ -264,6 +352,7 @@ export class KnockDoorDirector {
     if (!this.cinematic) return false;
     this.cinematic = false;
     this.phase = PHASES.complete;
+    this.releaseVideo();
     this.resetVisuals({ keepBlood: true });
     if (this.bloodMark) this.bloodMark.visible = true;
     this.handTracking?.clearCinematicPose?.();
@@ -287,6 +376,7 @@ export class KnockDoorDirector {
     this.cinematic = false;
     this.phase = PHASES.idle;
     this.elapsed = 0;
+    this.releaseVideo();
     this.handTracking?.clearCinematicPose?.();
     this.resetVisuals();
     this.player.restorePose?.(this.savedPose);
@@ -328,4 +418,4 @@ export class KnockDoorDirector {
   }
 }
 
-export { PHASES as KNOCK_PHASES };
+export { PHASES as KNOCK_PHASES, KNOCK_VIDEO_URL };
