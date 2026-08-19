@@ -91,7 +91,7 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
 
       <div class="permission-panel" id="permission-panel">
         <div class="permission-mark"><i data-lucide="rotate-ccw"></i></div>
-        <p class="eyebrow">杨弈的demo</p>
+        <p class="eyebrow">手机即身体</p>
         <h1 id="permission-title">连接电脑</h1>
         <p id="permission-copy">请从电脑屏幕扫描二维码进入。</p>
         <button class="primary-button" id="enable-motion" disabled>允许并开始</button>

@@ -37,7 +37,7 @@ function runPowerShell(inputPath) {
 export async function transcribeWithWindowsSpeech(bytes, mimeType) {
   if (process.platform !== "win32" || mimeType !== "audio/wav" || !Buffer.isBuffer(bytes) || bytes.length === 0) return null;
   const tempRoot = path.resolve(tmpdir());
-  const directory = await mkdtemp(path.join(tempRoot, "corridor-617-speech-"));
+  const directory = await mkdtemp(path.join(tempRoot, "phone-as-body-speech-"));
   const inputPath = path.join(directory, "voice.wav");
   try {
     await writeFile(inputPath, bytes);

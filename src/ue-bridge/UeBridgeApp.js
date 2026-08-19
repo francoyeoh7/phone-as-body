@@ -23,7 +23,7 @@ export class UeBridgeApp {
           <div class="bridge-heading">
             <i data-lucide="radio-tower"></i>
             <div>
-              <p>杨弈的demo</p>
+              <p>手机即身体</p>
               <h1>UE 手机控制桥</h1>
             </div>
           </div>

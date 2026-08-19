@@ -206,5 +206,5 @@ if (process.env.NODE_ENV === "production") {
 }
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`Corridor 617 is running at http://localhost:${port}`);
+  console.log(`Phone as Body is running at http://localhost:${port}`);
 });

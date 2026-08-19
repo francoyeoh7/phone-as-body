@@ -9,10 +9,11 @@ const playerFacingFiles = [
 ];
 
 describe("player-visible product name", () => {
-  it.each(playerFacingFiles)("uses 杨弈的demo in %s", (file) => {
+  it.each(playerFacingFiles)("uses 手机即身体 in %s", (file) => {
     const content = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
-    expect(content).toContain("杨弈的demo");
+    expect(content).toContain("手机即身体");
+    expect(content).not.toContain("杨弈的demo");
     expect(content).not.toMatch(/corridor 617/i);
   });
 });

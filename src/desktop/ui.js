@@ -34,7 +34,7 @@ const DOOR_DEFENSE_STATUS = Object.freeze({
 export function createDesktopUI(root) {
   root.innerHTML = `
     <main class="desktop-shell" data-clean-view="false">
-      <div class="scene-host" id="scene-host" aria-label="杨弈的demo 游戏画面">
+      <div class="scene-host" id="scene-host" aria-label="手机即身体 游戏画面">
         <div class="scene-placeholder"></div>
       </div>
       <video class="knock-cinematic-video" id="knock-cinematic-video" playsinline preload="auto" hidden aria-hidden="true"></video>
@@ -82,7 +82,7 @@ export function createDesktopUI(root) {
       <section class="pairing-overlay" id="pairing-overlay">
         <div class="pairing-copy">
           <p class="desktop-eyebrow">手机即手电筒</p>
-          <h1>杨弈的demo</h1>
+          <h1>手机即身体</h1>
           <p>扫描二维码连接手机。整块屏幕按住拖动行走与转向，轻点进行交互。</p>
           <div class="pairing-status" id="pairing-status"><span></span>正在创建安全会话</div>
           <button class="start-button" id="start-button" hidden><i data-lucide="volume-2"></i>进入走廊</button>
