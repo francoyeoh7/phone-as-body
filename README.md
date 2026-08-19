@@ -72,6 +72,44 @@ NODE_ENV=development node server/index.js
 
 电脑打开 [http://localhost:4174](http://localhost:4174)。本机键鼠测试可以使用 HTTP；手机真机连接应使用 HTTPS 域名，并设置 `PUBLIC_CONTROLLER_ORIGIN`，使电脑端二维码指向该安全地址。
 
+### 固定域名 HTTPS
+
+服务本身监听 HTTP，由反向代理负责 TLS。已有域名时可用 Caddy 自动申请并续期证书：
+
+```text
+game.example.com {
+  reverse_proxy 127.0.0.1:4174
+}
+```
+
+启动服务时把二维码地址设成同一个域名：
+
+```powershell
+$env:NODE_ENV = "production"
+$env:PUBLIC_CONTROLLER_ORIGIN = "https://game.example.com"
+npm run build
+node server/index.js
+```
+
+Cloudflare Tunnel、Nginx 或其他 HTTPS 反代也可以使用同样的结构；关键是域名必须稳定、代理转发到 `127.0.0.1:4174`，并将 `PUBLIC_CONTROLLER_ORIGIN` 设置为浏览器实际访问的 HTTPS 根地址。
+
+## 手机操作
+
+1. 电脑端创建房间后，用手机相机扫描二维码，在 Safari 或 Chrome 中直接打开。
+2. 点击“允许并开始”，允许动作/方向传感器、后置摄像头和麦克风；首次授权或切回后台后按页面提示重新校准。
+3. 在游戏控制面上长按并拖动：拖动方向控制移动，转动手机控制视角；短按是当前目标的后备交互。
+4. 从右侧边缘向左滑动打开道具栏，继续向左移动选择道具，松手提交；从左向右滑动或取消会放弃本次选择。
+5. 到 NPC 附近时按住底部“按住说话”按钮，松开后发送语音；设置中可以调整体感灵敏度、转向平滑度和重新校准方向。
+
+后置摄像头的手部识别和剧情动作只使用本机低分辨率帧。摄像头不可用时，游戏会保留短按等后备交互；陀螺仪未授权时不会进入体感游戏。
+
+## 语音与隐私
+
+- 浏览器原生语音识别只作为低延迟字幕辅助，具体处理方式由当前浏览器供应商决定。
+- 按住说话产生的短音频片段会通过当前游戏服务的 `/api/npc/transcribe` 转写；服务不把音频写入项目目录或持久化存储。
+- 配置 `OPENAI_API_KEY` 时，服务端会将该片段转发到 OpenAI 的音频转写接口，并可能使用 `/api/npc/perform` 或 `/api/npc/realtime` 生成 NPC 回应。未配置时不会调用 OpenAI；Windows WAV 可回退到本机 Windows Speech，临时文件处理后删除。
+- 如不希望发送语音，不要按住“按住说话”；关闭麦克风权限不影响移动、视角、道具栏和键鼠后备。
+
 ## 可选 AI 配置
 
 NPC 的实时语音与生成式对话需要 OpenAI API；没有密钥时，主体游戏、手机控制、手势和预置 NPC 语音仍可运行。
@@ -91,6 +129,17 @@ npm run verify:village
 ```
 
 当前发布基线包含 75 个测试文件，856 项测试通过，1 项按环境跳过。村庄资源另有尺寸与 SHA-256 完整性校验。
+
+## 桌面键鼠后备
+
+- `W` / `A` / `S` / `D`：移动
+- `C` 或 `Ctrl`：蹲下
+- 鼠标：点击画面锁定指针后控制视线，`Escape` 可退出指针锁定
+- `E`：交互
+- `F`：开关手电筒
+- `R`：重新校准方向
+- `Space`：守门阶段的按住/松开后备输入
+- `Escape`：暂停或继续游戏
 
 ## 项目状态
 
