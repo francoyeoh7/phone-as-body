@@ -8,8 +8,8 @@
       "url": "/assets/environment/elderboom-v1/chunks/western-core.glb",
       "required": true,
       "artifact": {
-        "bytes": 67236796,
-        "sha256": "B2EEC61841721CCA59B42391D2994F523A7AF41E0C5DAADC65CC3323F45F3DA4"
+        "bytes": 51208376,
+        "sha256": "B438374E635B74842984663BE98A1E06EBAC5CC6A3185903C7BCBF8D0F1D3A84"
       },
       "bounds": {
         "min": [
@@ -24,10 +24,13 @@
         ]
       },
       "castShadowNamePrefixes": [
-        "SM_Building",
-        "SM_House",
-        "SM_Roof",
-        "SM_Tree"
+        "S_Medieval_Modular_",
+        "Wall_",
+        "S_Mossy_Stone_Wall_",
+        "S_Modular_Fence_",
+        "SM_BlackAlder_",
+        "S_Japanese_Wooden_Well_Roof_",
+        "S_Old_Stone_Well_"
       ]
     }
   ],
@@ -70,11 +73,11 @@
     ]
   },
   "atmosphere": {
-    "background": "#8ab5ca",
+    "background": "#080d16",
     "fog": {
-      "color": "#b9d5df",
-      "near": 38,
-      "far": 140
+      "color": "#121b2a",
+      "near": 30,
+      "far": 118
     }
   },
   "colliders": [
@@ -430,16 +433,16 @@
       "id": "night-hemi",
       "role": "moon",
       "type": "hemisphere",
-      "intensity": 1.4,
-      "skyColor": "#d9efff",
-      "groundColor": "#5a6747"
+      "intensity": 0.28,
+      "skyColor": "#33435f",
+      "groundColor": "#0b100c"
     },
     {
       "id": "moon-key",
       "role": "moon",
       "type": "directional",
-      "intensity": 2.2,
-      "color": "#fff3d2",
+      "intensity": 0.5,
+      "color": "#a6bce0",
       "position": [
         14,
         28,
@@ -549,7 +552,7 @@
       "id": "practical-porch",
       "role": "practical",
       "type": "point",
-      "intensity": 0.34,
+      "intensity": 0.62,
       "color": "#e0b478",
       "position": [
         8.2,
@@ -564,7 +567,7 @@
       "id": "practical-yard",
       "role": "practical",
       "type": "point",
-      "intensity": 0.28,
+      "intensity": 0.48,
       "color": "#c98a58",
       "position": [
         -4.2,

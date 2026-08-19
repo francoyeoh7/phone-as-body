@@ -152,7 +152,7 @@ button {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: clamp(18px, 4vw, 52px);
+  padding: clamp(6px, 1vw, 14px);
   background: rgba(3, 5, 5, 0.94);
   pointer-events: auto;
 }
@@ -160,8 +160,8 @@ button {
 .presentation-stage {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(1180px, 100%);
-  height: min(92vh, 860px);
+  width: min(calc(100vw - 12px), 1800px);
+  height: calc(100vh - 12px);
   min-height: 0;
   border: 1px solid rgba(210, 173, 99, 0.36);
   background: #0b0e0d;
@@ -194,7 +194,7 @@ button {
   display: grid;
   min-height: 0;
   place-items: center;
-  padding: 12px;
+  padding: 4px;
   background: #050706;
 }
 

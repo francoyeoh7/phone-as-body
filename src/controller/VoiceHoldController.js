@@ -1,7 +1,8 @@
 import { MAX_VOICE_CLIP_BYTES, MAX_VOICE_DURATION_MS } from "../shared/protocol.js";
+import { PcmVoiceStreamer } from "./PcmVoiceStreamer.js";
 
-const VOICE_DWELL_MS = 420;
-const VOICE_SLOP_PX = 14;
+const VOICE_DWELL_MS = 180;
+const VOICE_SLOP_PX = 28;
 const RECORDER_TIMESLICE_MS = 250;
 
 function stopStream(stream) {
@@ -26,6 +27,8 @@ export class VoiceHoldController {
     onActive,
     onPressState,
     onClip,
+    pcmStreamerFactory = ({ onFrame }) => new PcmVoiceStreamer({ onFrame }),
+    onStreamFrame,
   }) {
     this.clock = clock;
     this.setTimeout = setTimeout;
@@ -38,6 +41,8 @@ export class VoiceHoldController {
     this.onActive = onActive;
     this.onPressState = onPressState;
     this.onClip = onClip;
+    this.pcmStreamerFactory = pcmStreamerFactory;
+    this.onStreamFrame = onStreamFrame;
     this.attempt = null;
     this.generation = 0;
     this.clipSequence = 0;
@@ -57,6 +62,7 @@ export class VoiceHoldController {
       startX: event.clientX,
       startY: event.clientY,
       captureTarget: event.currentTarget ?? null,
+      captureEstablished: false,
       dwellReady: false,
       dwellTimer: null,
       stopTimer: null,
@@ -74,13 +80,23 @@ export class VoiceHoldController {
       durationMs: 0,
       completion: null,
       resolveCompletion: null,
+      pcmStreamer: this.pcmStreamerFactory?.({ onFrame: this.onStreamFrame }) ?? null,
+      pcmStopRequested: false,
     };
     attempt.completion = new Promise((resolve) => {
       attempt.resolveCompletion = resolve;
     });
     this.attempt = attempt;
-    attempt.captureTarget?.setPointerCapture?.(event.pointerId);
+    try {
+      attempt.captureTarget?.setPointerCapture?.(event.pointerId);
+      attempt.captureEstablished = Boolean(attempt.captureTarget?.setPointerCapture);
+    } catch {
+      // iOS and synthetic browser input can reject pointer capture even for a
+      // valid press. Voice ownership still keeps other controls excluded.
+      attempt.captureTarget = null;
+    }
     this.onPressState?.("pressed");
+    attempt.pcmStreamer?.prime?.();
     attempt.dwellTimer = this.setTimeout(() => {
       attempt.dwellTimer = null;
       attempt.dwellReady = true;
@@ -104,7 +120,7 @@ export class VoiceHoldController {
     const attempt = this.currentAttempt(event?.pointerId);
     if (!attempt) return false;
     const distance = Math.hypot(event.clientX - attempt.startX, event.clientY - attempt.startY);
-    if (!this.isInRegion?.(event) || (!attempt.active && distance > VOICE_SLOP_PX)) {
+    if (!attempt.active && (!this.isInRegion?.(event) || distance > VOICE_SLOP_PX)) {
       this.cancel({ discard: true });
       return false;
     }
@@ -113,7 +129,9 @@ export class VoiceHoldController {
 
   pointerLeave(event) {
     consumePointer(event);
-    if (!this.currentAttempt(event?.pointerId)) return false;
+    const attempt = this.currentAttempt(event?.pointerId);
+    if (!attempt) return false;
+    if (attempt.active || attempt.captureTarget?.hasPointerCapture?.(attempt.pointerId) === true) return true;
     this.cancel({ discard: true });
     return true;
   }
@@ -122,7 +140,8 @@ export class VoiceHoldController {
     consumePointer(event);
     const attempt = this.currentAttempt(event?.pointerId);
     if (!attempt) return Promise.resolve(false);
-    if (!this.isInRegion?.(event)) return this.cancel({ discard: true });
+    const captured = attempt.captureEstablished;
+    if (!this.isInRegion?.(event) && !captured) return this.cancel({ discard: true });
     return attempt.active
       ? this.stopRecording(attempt, { discard: false })
       : this.cancel({ discard: true });
@@ -134,6 +153,15 @@ export class VoiceHoldController {
     return this.cancel({ discard: true });
   }
 
+  pointerCaptureLost(event) {
+    consumePointer(event);
+    const attempt = this.currentAttempt(event?.pointerId);
+    if (!attempt) return false;
+    // Some mobile browsers drop pointer capture while the finger is still
+    // down. pointerup/pointercancel remain the authoritative end signals.
+    return true;
+  }
+
   cancel({ discard = true } = {}) {
     const attempt = this.attempt;
     if (!attempt) return Promise.resolve(false);
@@ -141,6 +169,7 @@ export class VoiceHoldController {
     if (attempt.active) return this.stopRecording(attempt, { discard });
 
     attempt.discard = true;
+    this.stopPcm(attempt);
     this.detachAttempt(attempt);
     this.stopTracks(attempt);
     attempt.resolveCompletion(false);
@@ -207,6 +236,9 @@ export class VoiceHoldController {
       recorder.onstop = () => this.finalizeRecording(attempt);
       recorder.onerror = () => this.stopRecording(attempt, { discard: true });
       recorder.start(RECORDER_TIMESLICE_MS);
+      if (attempt.pcmStreamer?.start) {
+        Promise.resolve(attempt.pcmStreamer.start(attempt.stream)).catch(() => {});
+      }
       attempt.active = true;
       attempt.startedAt = this.clock();
       attempt.stopTimer = this.setTimeout(() => {
@@ -229,6 +261,10 @@ export class VoiceHoldController {
     attempt.durationMs = Math.min(MAX_VOICE_DURATION_MS, Math.max(1, this.clock() - attempt.startedAt));
     this.releaseAttempt(attempt);
     this.notifyInactive(attempt);
+    if (attempt.pcmStreamer && !attempt.pcmStopRequested) {
+      attempt.pcmStopRequested = true;
+      Promise.resolve(attempt.pcmStreamer.stop?.()).catch(() => {});
+    }
     this.pendingRecording = attempt.completion;
     try {
       if (attempt.recorder?.state === "inactive") {
@@ -277,6 +313,7 @@ export class VoiceHoldController {
   failAttempt(attempt) {
     attempt.discard = true;
     this.onPressState?.("error");
+    this.stopPcm(attempt);
     this.detachAttempt(attempt, { notifyIdle: false });
     this.stopTracks(attempt);
     attempt.resolveCompletion(false);
@@ -314,9 +351,11 @@ export class VoiceHoldController {
     if (attempt.released) return;
     attempt.released = true;
     this.ownership?.release?.("voice", attempt.pointerId, attempt.ownershipGeneration);
-    if (attempt.captureTarget?.hasPointerCapture?.(attempt.pointerId) !== false) {
-      attempt.captureTarget?.releasePointerCapture?.(attempt.pointerId);
-    }
+    try {
+      if (attempt.captureTarget?.hasPointerCapture?.(attempt.pointerId) !== false) {
+        attempt.captureTarget?.releasePointerCapture?.(attempt.pointerId);
+      }
+    } catch { /* capture was already lost */ }
   }
 
   notifyInactive(attempt) {
@@ -330,5 +369,11 @@ export class VoiceHoldController {
     if (!attempt.stream || attempt.tracksStopped) return;
     attempt.tracksStopped = true;
     stopStream(attempt.stream);
+  }
+
+  stopPcm(attempt) {
+    if (!attempt?.pcmStreamer || attempt.pcmStopRequested) return;
+    attempt.pcmStopRequested = true;
+    Promise.resolve(attempt.pcmStreamer.stop?.()).catch(() => {});
   }
 }

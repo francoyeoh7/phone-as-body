@@ -361,6 +361,32 @@ describe("desktop control feedback", () => {
     expect(ui.setPlayerTranscript).toHaveBeenCalledWith("我在门外", true);
   });
 
+  it("shows interim speech immediately and can trigger the PPT paper without NPC semantics", async () => {
+    const presentation = { isOpen: vi.fn(() => false), showPaper: vi.fn() };
+    const npcRuntime = { acceptTranscript: vi.fn() };
+    const ui = { setPlayerTranscript: vi.fn(), setPrompt: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      currentTargetId: "knock-door",
+      presentation,
+      npcRuntime,
+      ui,
+    });
+
+    await app.handlePhoneAction({
+      action: "voice-transcript",
+      transcript: "有人看到我的PPT",
+      confidence: 0.63,
+      voiceLevel: 0.5,
+      interim: true,
+    });
+
+    expect(ui.setPlayerTranscript).toHaveBeenCalledWith("有人看到我的PPT", true, 0);
+    expect(presentation.showPaper).toHaveBeenCalledOnce();
+    expect(ui.setPrompt).toHaveBeenCalledWith("抓取 PPT");
+    expect(npcRuntime.acceptTranscript).not.toHaveBeenCalled();
+  });
+
   it("transcribes a phone audio clip and shows a subtitle when NPC capture is unavailable", async () => {
     const ui = { setPlayerTranscript: vi.fn() };
     const fetchImpl = vi.fn(async () => ({
@@ -403,6 +429,32 @@ describe("desktop control feedback", () => {
     expect(app.tryPresentationVoiceTrigger("PPT")).toBe(true);
     expect(presentation.showPaper).toHaveBeenCalledOnce();
     expect(app.tryPresentationVoiceTrigger("hello")).toBe(false);
+  });
+
+  it("shows the phone transcript and reveals the PPT paper through the same action", async () => {
+    const presentation = {
+      isOpen: vi.fn(() => false),
+      showPaper: vi.fn(() => true),
+    };
+    const ui = { setPlayerTranscript: vi.fn(), setPrompt: vi.fn() };
+    const app = Object.assign(Object.create(DesktopApp.prototype), {
+      destroyed: false,
+      npcRuntime: null,
+      currentTargetId: "knock-door",
+      presentation,
+      ui,
+    });
+
+    await app.handlePhoneAction({
+      action: "voice-transcript",
+      transcript: "有人看到我的PPT吗",
+      confidence: 0.96,
+      voiceLevel: 0.62,
+    });
+
+    expect(ui.setPlayerTranscript).toHaveBeenCalledWith("有人看到我的PPT吗", true);
+    expect(presentation.showPaper).toHaveBeenCalledOnce();
+    expect(ui.setPrompt).toHaveBeenCalledWith("抓取 PPT");
   });
 
   it("opens the deck when the tracked hand grabs the visible paper", () => {
@@ -610,7 +662,6 @@ describe("desktop inventory routing", () => {
     ["during door cinematic", { doorDefense: { isCinematic: () => true } }],
     ["during found-phone cinematic", { foundPhone: { isInspecting: () => true } }],
     ["during shadow cinematic", { shadowQuest: { isCinematic: () => true } }],
-    ["during semantic hand task", { handTracking: { owner: "door-defense" } }],
   ])("rejects opening %s", (_label, override) => {
     const { app, ui } = createInventoryApp(override);
 

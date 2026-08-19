@@ -57,6 +57,21 @@ function rendererHarness() {
   return { renderer, rendererFactory: vi.fn(() => renderer) };
 }
 
+function softwareRendererHarness() {
+  const { renderer, rendererFactory } = rendererHarness();
+  const debugInfo = { UNMASKED_RENDERER_WEBGL: 0x9246 };
+  const context = {
+    RENDERER: 0x1f01,
+    getExtension: vi.fn(() => debugInfo),
+    getParameter: vi.fn((parameter) => parameter === debugInfo.UNMASKED_RENDERER_WEBGL
+      ? "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11)"
+      : "Microsoft Basic Render Driver"),
+  };
+  renderer.getContext = vi.fn(() => context);
+  renderer.compileAsync = vi.fn(async () => {});
+  return { renderer, rendererFactory };
+}
+
 function ownedHost() {
   return {
     current: null,
@@ -195,6 +210,7 @@ describe("real village scene assembly", () => {
       "found-phone",
       "washbasin",
       "knock-door",
+      "presentation-paper",
     ]);
     expect(experience.objects.fuse.root.position.toArray()).toEqual(manifest.tasks.fuse.position);
     expect(experience.objects.foundPhone.root.position.toArray()).toEqual(manifest.tasks["found-phone"].position);
@@ -218,10 +234,11 @@ describe("real village scene assembly", () => {
     expect(experience.camera.position.toArray()).toEqual([6.5, 1.6, -2]);
     expect(experience.camera.rotation.y).toBeCloseTo(0, 8);
     expect(host.replaceChildren).toHaveBeenCalledWith(renderer.domElement);
-    expect(renderer.setPixelRatio).toHaveBeenCalledWith(1.25);
+    expect(experience.renderProfile).toEqual(expect.objectContaining({ kind: "unknown", pixelRatioCap: 0.9 }));
+    expect(renderer.setPixelRatio).toHaveBeenCalledWith(0.9);
     const resize = fakeWindow.addEventListener.mock.calls.find(([type]) => type === "resize")[1];
     resize();
-    expect(renderer.setPixelRatio).toHaveBeenLastCalledWith(1.25);
+    expect(renderer.setPixelRatio).toHaveBeenLastCalledWith(0.9);
     const flashlightCookieDispose = vi.spyOn(experience.objects.flashlightCore.map, "dispose");
 
     experience.update(0.25, 2);
@@ -235,6 +252,29 @@ describe("real village scene assembly", () => {
     expect(physics.worlds[0].free).toHaveBeenCalledOnce();
     expect(flashlightCookieDispose).toHaveBeenCalledOnce();
     expect(npcSystem.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("automatically enters a low-cost profile for software WebGL without blocking scene startup", async () => {
+    installBrowserHarness();
+    const manifest = await trackedManifest();
+    const { renderer, rendererFactory } = softwareRendererHarness();
+    const physics = physicsHarness();
+    const { environment, loadEnvironment } = environmentHarness(manifest);
+    const colliders = { colliders: [], rigidBodies: [], occluderRoots: [], dispose: vi.fn() };
+    const npcSystem = { load: vi.fn(() => new Promise(() => {})), update: vi.fn(), destroy: vi.fn() };
+    const experience = await createScene({ replaceChildren: vi.fn() }, {
+      RAPIER: physics.RAPIER,
+      rendererFactory,
+      loadEnvironment,
+      createEnvironmentColliders: vi.fn(() => colliders),
+      createNpcSystem: () => npcSystem,
+    });
+
+    expect(experience.renderProfile).toEqual(expect.objectContaining({ kind: "software", pixelRatioCap: 0.75 }));
+    expect(renderer.setPixelRatio).toHaveBeenCalledWith(0.75);
+    expect(renderer.shadowMap.enabled).toBe(false);
+    expect(renderer.compileAsync).not.toHaveBeenCalled();
+    experience.dispose();
   });
 
   it("rolls back renderer and Rapier ownership when environment loading fails", async () => {

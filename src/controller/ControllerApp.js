@@ -83,6 +83,10 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
 
       <button class="voice-hold" id="voice-hold" type="button" aria-label="按住录音" data-active="false" data-state="idle">
         <i data-lucide="mic"></i>
+        <span class="voice-copy">
+          <strong id="voice-label">按住说话</strong>
+          <small id="voice-status" aria-live="polite">松开发送</small>
+        </span>
       </button>
 
       <div class="permission-panel" id="permission-panel">
@@ -206,6 +210,8 @@ export class ControllerApp {
     this.playSurface = this.root.querySelector(".play-surface");
     this.inventoryRegion = this.root.querySelector("#inventory-edge");
     this.voiceRegion = this.root.querySelector("#voice-hold");
+    this.voiceLabel = this.root.querySelector("#voice-label");
+    this.voiceStatus = this.root.querySelector("#voice-status");
     this.presentationControls = this.root.querySelector("#presentation-controls");
     this.presentationPage = this.root.querySelector("#presentation-controller-page");
     this.presentationPrevious = this.root.querySelector("#presentation-prev");
@@ -264,7 +270,7 @@ export class ControllerApp {
       onStreamFrame: (frame) => this.handleVoiceStreamFrame(frame),
     });
     this.voiceRecognizer = new BrowserVoiceRecognizer({
-      onResult: (result) => this.socket?.sendAction("voice-transcript", result),
+      onResult: (result) => this.handleBrowserVoiceResult(result),
       onError: (error) => this.handleVoiceRecognitionError(error),
     });
     this.voicePointerHandlers = {
@@ -273,7 +279,7 @@ export class ControllerApp {
       pointerleave: (event) => this.voiceHold.pointerLeave(event),
       pointerup: (event) => this.voiceHold.pointerUp(event),
       pointercancel: (event) => this.voiceHold.pointerCancel(event),
-      lostpointercapture: (event) => this.voiceHold.pointerCancel(event),
+      lostpointercapture: (event) => this.voiceHold.pointerCaptureLost(event),
     };
     for (const [type, handler] of Object.entries(this.voicePointerHandlers)) {
       this.voiceRegion.addEventListener(type, handler);
@@ -286,17 +292,9 @@ export class ControllerApp {
       onMove: (delta) => this.sendInventoryPointer("move", delta),
       onCommit: () => this.sendInventoryPointer("commit"),
       onCancel: () => this.sendInventoryPointer("cancel"),
+      onRelease: () => this.handleInventoryRelease(),
     });
-    this.inventoryPointerHandlers = {
-      pointerdown: (event) => this.inventoryEdge.pointerDown(event),
-      pointermove: (event) => this.inventoryEdge.pointerMove(event),
-      pointerup: (event) => this.inventoryEdge.pointerUp(event),
-      pointercancel: (event) => this.inventoryEdge.pointerCancel(event),
-      lostpointercapture: (event) => this.inventoryEdge.pointerCaptureLost(event),
-    };
-    for (const [type, handler] of Object.entries(this.inventoryPointerHandlers)) {
-      this.inventoryRegion.addEventListener(type, handler);
-    }
+    this.bindInventoryPointerCapture();
 
     this.enableMotion.addEventListener("click", () => this.enableSensors());
     this.root.querySelector("#recenter").addEventListener("click", () => {
@@ -329,6 +327,19 @@ export class ControllerApp {
     document.addEventListener("visibilitychange", this.handleVisibility);
     window.addEventListener("pagehide", this.handlePageHide);
     window.addEventListener("pageshow", this.handlePageShow);
+  }
+
+  bindInventoryPointerCapture() {
+    this.inventoryPointerHandlers = {
+      pointerdown: (event) => this.inventoryEdge.pointerDown(event),
+      pointermove: (event) => this.inventoryEdge.pointerMove(event),
+      pointerup: (event) => this.inventoryEdge.pointerUp(event),
+      pointercancel: (event) => this.inventoryEdge.pointerCancel(event),
+      lostpointercapture: (event) => this.inventoryEdge.pointerCaptureLost(event),
+    };
+    for (const [type, handler] of Object.entries(this.inventoryPointerHandlers)) {
+      this.root.addEventListener(type, handler, true);
+    }
   }
 
   connect() {
@@ -652,7 +663,6 @@ export class ControllerApp {
       && !this.requiresContinue
       && !this.destroyed
       && this.connectionState === "joined"
-      && !this.handTaskContext
       && this.foundPhoneUI?.element?.hidden !== false
     );
   }
@@ -666,10 +676,17 @@ export class ControllerApp {
     this.viewEngaged = false;
     this.socket?.clearPendingViewDelta?.();
     this.motion?.disengage?.();
+    this.handTracker?.suspend?.();
     this.joystick?.reset();
     this.diagnostics?.updateEngagement(false);
     if (this.playSurface) this.playSurface.dataset.clutch = "off";
     this.sendInput({ includeViewDelta: true, immediate: true });
+  }
+
+  handleInventoryRelease() {
+    if (!this.destroyed && this.foreground && !this.paused && this.cameraEnabled) {
+      this.handTracker?.resume?.();
+    }
   }
 
   sendInventoryPointer(phase, delta = {}) {
@@ -712,6 +729,15 @@ export class ControllerApp {
     if (!this.voiceRegion) return;
     this.voiceRegion.dataset.state = state;
     if (state !== "recording") this.voiceRegion.dataset.active = "false";
+    const labels = {
+      idle: ["按住说话", "松开发送"],
+      pressed: ["继续按住", "正在准备麦克风"],
+      recording: ["正在录音", "说完后松开"],
+      error: ["麦克风不可用", "检查浏览器权限"],
+    };
+    const [label, status] = labels[state] ?? labels.idle;
+    if (this.voiceLabel) this.voiceLabel.textContent = label;
+    if (this.voiceStatus) this.voiceStatus.textContent = status;
   }
 
   startVoiceRecognition() {
@@ -719,6 +745,20 @@ export class ControllerApp {
     const started = this.voiceRecognizer?.start?.() === true;
     this.voiceRecognitionStarted = started;
     return started;
+  }
+
+  handleBrowserVoiceResult(result) {
+    const transcript = String(result?.transcript ?? "").trim();
+    if (!transcript) return false;
+    const payload = {
+      transcript,
+      confidence: Number.isFinite(result.confidence) ? result.confidence : 0.5,
+      voiceLevel: Number.isFinite(result.voiceLevel) ? result.voiceLevel : 0.7,
+      interim: result.interim === true,
+    };
+    this.socket?.sendAction("voice-transcript", payload);
+    if (this.voiceStatus) this.voiceStatus.textContent = payload.interim ? "实时识别中" : "已识别";
+    return true;
   }
 
   stopVoiceRecognition({ cancel = false } = {}) {
@@ -732,7 +772,11 @@ export class ControllerApp {
   handleVoiceRecognitionError(error) {
     this.stopVoiceRecognition({ cancel: true });
     if (this.voiceRegion) {
-      this.voiceRegion.dataset.recognition = "error";
+      // Browser speech recognition is only a low-latency helper. The held
+      // MediaRecorder clip remains authoritative and is transcribed by the
+      // server after release, so a Safari/Chrome recognition error must not
+      // turn the microphone control into a failed state.
+      this.voiceRegion.dataset.recognition = "fallback";
       this.voiceRegion.dataset.error = String(error?.error ?? error?.message ?? "recognition-error");
     }
   }
@@ -762,6 +806,7 @@ export class ControllerApp {
     if (!request || typeof request.then !== "function") return fallback();
     try {
       if (this.voiceRegion) this.voiceRegion.dataset.recognition = "transcribing";
+      if (this.voiceStatus) this.voiceStatus.textContent = "正在识别";
       const response = await request;
       if (!response?.ok) return fallback();
       const result = await response.json();
@@ -774,9 +819,11 @@ export class ControllerApp {
       };
       this.socket?.sendAction("voice-transcript", payload);
       if (this.voiceRegion) this.voiceRegion.dataset.recognition = "complete";
+      if (this.voiceStatus) this.voiceStatus.textContent = "已发送";
       return true;
     } catch {
       if (this.voiceRegion) this.voiceRegion.dataset.recognition = "fallback";
+      if (this.voiceStatus) this.voiceStatus.textContent = "识别失败，请重试";
       return fallback();
     }
   }
@@ -902,8 +949,9 @@ export class ControllerApp {
     const count = Math.max(1, Number(total) || 1);
     const page = Math.min(count - 1, Math.max(0, Number(index) || 0));
     this.presentationPage.textContent = `${page + 1} / ${count}`;
-    this.presentationPrevious.disabled = page <= 0;
-    this.presentationNext.disabled = page >= count - 1;
+    const canCycle = count > 1;
+    this.presentationPrevious.disabled = !canCycle;
+    this.presentationNext.disabled = !canCycle;
   }
 
   handleDesktopEvent(event) {
@@ -998,7 +1046,7 @@ export class ControllerApp {
       this.voiceRegion?.removeEventListener?.(type, handler);
     }
     for (const [type, handler] of Object.entries(this.inventoryPointerHandlers ?? {})) {
-      this.inventoryRegion?.removeEventListener?.(type, handler);
+      this.root?.removeEventListener?.(type, handler, true);
     }
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("pagehide", this.handlePageHide);

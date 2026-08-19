@@ -290,8 +290,9 @@ export function createDesktopUI(root) {
         const absolute = typeof location === "undefined" ? src : new URL(src, location.href).href;
         if (elements.presentationSlide.src !== absolute) elements.presentationSlide.src = src;
       }
-      elements.presentationPrevious.disabled = index <= 0;
-      elements.presentationNext.disabled = index >= total - 1;
+      const canCycle = total > 1;
+      elements.presentationPrevious.disabled = !canCycle;
+      elements.presentationNext.disabled = !canCycle;
     },
     setInventory(snapshot = {}, { entryEdge = "right", entryY = 0.5 } = {}) {
       elements.inventoryBar.hidden = false;

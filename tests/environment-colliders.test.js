@@ -122,4 +122,101 @@ describe("environment collision proxies", () => {
       world.free();
     }
   });
+
+  it("derives structure and trunk proxies from the imported village meshes", () => {
+    const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    const environmentRoot = new THREE.Group();
+    const wall = new THREE.Mesh(
+      new THREE.BoxGeometry(4, 2.4, 0.35),
+      new THREE.MeshBasicMaterial(),
+    );
+    wall.name = "instance-001-mesh-65";
+    wall.geometry.name = "S_Medieval_Modular_Wall_ueoqbdhdw_lod3_Var1";
+    wall.position.set(3, 1.2, -2);
+    const tree = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45, 0.5, 6, 8),
+      new THREE.MeshBasicMaterial(),
+    );
+    tree.name = "SM_BlackAlder_Forest_05_PP";
+    tree.position.set(-3, 3, 1);
+    const treeCanopy = new THREE.Mesh(
+      new THREE.SphereGeometry(2, 8, 6),
+      new THREE.MeshBasicMaterial(),
+    );
+    treeCanopy.name = "SM_BlackAlder_Forest_05_PP_TwoSided";
+    treeCanopy.position.set(-3, 5.5, 1);
+    environmentRoot.add(wall, tree, treeCanopy);
+    try {
+      const instance = createEnvironmentColliders({ RAPIER, world, manifest: rotatedManifest(), environmentRoot });
+      expect(instance.colliders).toHaveLength(4);
+      expect(instance.colliders.filter((entry) => entry.userData?.environmentColliderSource !== "manifest")).toHaveLength(2);
+      expect(instance.colliders.some((entry) => entry.userData?.environmentColliderId.startsWith("auto-tree-"))).toBe(true);
+      expect(instance.colliders.some((entry) => entry.userData?.environmentColliderId.startsWith("auto-structure-"))).toBe(true);
+    } finally {
+      world.free();
+    }
+  });
+
+  it("does not turn a merged building mesh into a village-sized invisible wall", () => {
+    const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    const environmentRoot = new THREE.Group();
+    const merged = new THREE.Mesh(
+      new THREE.BoxGeometry(24, 3, 19),
+      new THREE.MeshBasicMaterial(),
+    );
+    merged.name = "instance-000-mesh-64";
+    merged.geometry.name = "S_Medieval_Modular_Wall_cluster";
+    environmentRoot.add(merged);
+    try {
+      const instance = createEnvironmentColliders({ RAPIER, world, manifest: rotatedManifest(), environmentRoot });
+      expect(instance.colliders).toHaveLength(2);
+      expect(instance.colliders.every((entry) => entry.userData?.environmentColliderSource === "manifest")).toBe(true);
+    } finally {
+      world.free();
+    }
+  });
+
+  it("creates one small structure proxy for each exported wall instance", () => {
+    const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    const geometry = new THREE.BoxGeometry(3, 2, 0.2);
+    geometry.name = "S_Medieval_Modular_Wall";
+    const walls = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial(), 2);
+    walls.name = "instance-wall";
+    walls.setMatrixAt(0, new THREE.Matrix4().makeTranslation(-4, 1, 0));
+    walls.setMatrixAt(1, new THREE.Matrix4().makeTranslation(4, 1, 0));
+    const environmentRoot = new THREE.Group();
+    environmentRoot.add(walls);
+    try {
+      const instance = createEnvironmentColliders({ RAPIER, world, manifest: rotatedManifest(), environmentRoot });
+      const generated = instance.colliders.filter((entry) => entry.userData?.environmentColliderSource !== "manifest");
+      expect(generated).toHaveLength(2);
+      expect(generated.map((entry) => entry.translation().x)).toEqual([-4, 4]);
+      expect(generated.every((entry) => entry.halfExtents().z < 0.2)).toBe(true);
+    } finally {
+      world.free();
+    }
+  });
+
+  it("caps generated collider proxies at 48 while retaining curated manifest colliders", () => {
+    const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    const geometry = new THREE.BoxGeometry(3, 2, 0.2);
+    geometry.name = "S_Medieval_Modular_Wall";
+    const walls = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial(), 80);
+    walls.name = "instance-wall-budget";
+    for (let index = 0; index < 80; index += 1) {
+      walls.setMatrixAt(index, new THREE.Matrix4().makeTranslation(index * 4, 1, 0));
+    }
+    const environmentRoot = new THREE.Group();
+    environmentRoot.add(walls);
+    try {
+      const instance = createEnvironmentColliders({ RAPIER, world, manifest: rotatedManifest(), environmentRoot });
+      const generated = instance.colliders.filter((entry) => entry.userData?.environmentColliderSource !== "manifest");
+      const curated = instance.colliders.filter((entry) => entry.userData?.environmentColliderSource === "manifest");
+      expect(generated).toHaveLength(48);
+      expect(curated).toHaveLength(rotatedManifest().colliders.length);
+      expect(instance.colliders).toHaveLength(48 + rotatedManifest().colliders.length);
+    } finally {
+      world.free();
+    }
+  });
 });

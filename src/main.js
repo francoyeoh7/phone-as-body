@@ -21,7 +21,9 @@ if (import.meta.env.DEV && location.pathname === "/visual-test") {
 } else {
   import("./desktop/DesktopApp.js").then(({ DesktopApp }) => {
     const app = new DesktopApp(root);
-    if (import.meta.env.DEV) window.__corridor617 = app;
+    if (import.meta.env.DEV || new URLSearchParams(location.search).has("autostart")) {
+      window.__corridor617 = app;
+    }
     app.mount();
   });
 }

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import express from "express";
@@ -7,24 +7,42 @@ import { Server as SocketIOServer } from "socket.io";
 import { createSessionRegistry } from "./session-registry.js";
 import { createUeBridge } from "./ue-bridge.js";
 import { shouldServeSpaShell } from "./spa-fallback.js";
-import { EVENTS, isDesktopEvent, isRoomCode } from "../src/shared/protocol.js";
+import { EVENTS, MAX_VOICE_CLIP_BYTES, isDesktopEvent, isRoomCode } from "../src/shared/protocol.js";
+import { createNpcAi } from "./npc-ai.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+try {
+  process.loadEnvFile?.(path.join(root, ".env.local"));
+} catch {
+  try {
+    const localEnv = readFileSync(path.join(root, ".env.local"), "utf8");
+    for (const line of localEnv.split(/\r?\n/)) {
+      const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, "");
+    }
+  } catch { /* optional local config */ }
+}
 const app = express();
 const server = createServer(app);
-const io = new SocketIOServer(server, { serveClient: false, maxHttpBufferSize: 384 * 1024 });
+const io = new SocketIOServer(server, { serveClient: false, maxHttpBufferSize: MAX_VOICE_CLIP_BYTES + 64 * 1024 });
 const sessions = createSessionRegistry();
 const port = Number(process.env.PORT) || 4174;
 const publicControllerOrigin = process.env.PUBLIC_CONTROLLER_ORIGIN || null;
 const publicControllerHost = publicControllerOrigin ? new URL(publicControllerOrigin).hostname : null;
 const ueBridge = createUeBridge();
+const npcAi = createNpcAi();
 let latestRuntimeDiagnostic = null;
 
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/api/config", (_request, response) => {
-  response.json({ controllerOrigin: publicControllerOrigin });
+  response.json({ controllerOrigin: publicControllerOrigin, aiConfigured: Boolean(process.env.OPENAI_API_KEY) });
 });
+
+app.get("/api/npc/config", npcAi.config);
+app.post("/api/npc/transcribe", express.raw({ type: ["audio/webm", "audio/ogg", "audio/mp4", "audio/wav", "audio/x-wav"], limit: MAX_VOICE_CLIP_BYTES }), npcAi.transcribe);
+app.post("/api/npc/perform", npcAi.perform);
+app.post("/api/npc/realtime", express.text({ type: "application/sdp", limit: "64kb" }), npcAi.realtime);
 
 app.get("/api/ue-bridge/config", (_request, response) => {
   response.json({ target: ueBridge.target });

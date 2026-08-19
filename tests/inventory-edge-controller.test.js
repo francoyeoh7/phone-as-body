@@ -24,31 +24,40 @@ function createTimers() {
   };
 }
 
-function createElement(viewportWidth = 400) {
+function createElement(viewportWidth = 400, edgeBounds = {}) {
   const captured = new Set();
   return {
-    getBoundingClientRect: () => ({ left: viewportWidth - 24, top: 0, width: 24, height: 800 }),
+    getBoundingClientRect: () => ({
+      left: viewportWidth - 24,
+      right: viewportWidth,
+      top: 0,
+      bottom: 800,
+      width: 24,
+      height: 800,
+      ...edgeBounds,
+    }),
     setPointerCapture: vi.fn((id) => captured.add(id)),
     hasPointerCapture: vi.fn((id) => captured.has(id)),
     releasePointerCapture: vi.fn((id) => captured.delete(id)),
   };
 }
 
-function pointer(pointerId, x, y, currentTarget) {
+function pointer(pointerId, x, y, currentTarget, target = currentTarget) {
   return {
     pointerId,
     clientX: x,
     clientY: y,
     currentTarget,
+    target,
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
   };
 }
 
-function createEdge({ viewportWidth = 400, ...overrides } = {}) {
+function createEdge({ viewportWidth = 400, edgeBounds, ...overrides } = {}) {
   const timers = createTimers();
   const ownership = new PointerOwnership();
-  const element = createElement(viewportWidth);
+  const element = createElement(viewportWidth, edgeBounds);
   const callbacks = {
     onClaim: vi.fn(),
     onOpen: vi.fn(),
@@ -82,7 +91,34 @@ describe("InventoryEdgeController", () => {
     expect(callbacks.onMove).toHaveBeenCalledExactlyOnceWith({ dx: -45, dy: 10 });
   });
 
-  it("does not open on a short, slow, or diagonal edge movement", () => {
+  it("accepts a swipe that starts inside the expanded edge capture band", () => {
+    const { controller, element, callbacks } = createEdge();
+    controller.pointerDown(pointer(9, 320, 220, element));
+    controller.pointerMove(pointer(9, 260, 220, element));
+
+    expect(callbacks.onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("accepts the real lower-right screen edge outside the shorter visual strip", () => {
+    const { controller, element, callbacks } = createEdge({
+      edgeBounds: { top: 76, bottom: 680, height: 604 },
+    });
+
+    expect(controller.pointerDown(pointer(10, 398, 760, element))).toBe(true);
+    controller.pointerMove(pointer(10, 340, 760, element));
+
+    expect(callbacks.onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("does not steal a right-edge press from an interactive control", () => {
+    const { controller, element, callbacks } = createEdge();
+    const button = { closest: vi.fn(() => button) };
+
+    expect(controller.pointerDown(pointer(11, 398, 220, element, button))).toBe(false);
+    expect(callbacks.onClaim).not.toHaveBeenCalled();
+  });
+
+  it("does not open on a short or diagonal edge movement, but accepts a slow swipe", () => {
     const short = createEdge();
     short.controller.pointerDown(pointer(1, 390, 200, short.element));
     short.controller.pointerMove(pointer(1, 350, 245, short.element));
@@ -92,7 +128,7 @@ describe("InventoryEdgeController", () => {
     slow.controller.pointerDown(pointer(2, 390, 200, slow.element));
     slow.timers.advance(261);
     slow.controller.pointerMove(pointer(2, 330, 200, slow.element));
-    expect(slow.callbacks.onOpen).not.toHaveBeenCalled();
+    expect(slow.callbacks.onOpen).toHaveBeenCalledOnce();
 
     const diagonal = createEdge();
     diagonal.controller.pointerDown(pointer(3, 390, 200, diagonal.element));

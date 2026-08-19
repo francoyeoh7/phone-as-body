@@ -67,7 +67,7 @@ function createGesture(options = {}) {
 describe("full-surface touch gesture", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    vi.stubGlobal("window", { innerWidth: 390, addEventListener: vi.fn(), removeEventListener: vi.fn() });
     vi.stubGlobal("document", {
       hidden: false,
       addEventListener: vi.fn(),
@@ -288,7 +288,7 @@ describe("full-surface touch gesture", () => {
     gesture.gesture.destroy();
   });
 
-  it("keeps crouch after the entry pointer is released and exits on a fast upward flick", () => {
+  it("keeps crouch after entry and exits on a quick upper-right arc that reaches the right edge", () => {
     let crouching = false;
     const onCrouchChange = vi.fn((active) => { crouching = active; });
     const gesture = createGesture({
@@ -304,9 +304,31 @@ describe("full-surface touch gesture", () => {
     gesture.dispatch("pointerup", { pointerId: 1, clientX: 122, clientY: 190, now: 120 });
     expect(gesture.onCrouchChange).toHaveBeenLastCalledWith(true);
 
-    gesture.dispatch("pointerdown", { pointerId: 2, clientX: 120, clientY: 190, now: 500 });
-    gesture.dispatch("pointerup", { pointerId: 2, clientX: 122, clientY: 110, now: 650 });
+    gesture.dispatch("pointerdown", { pointerId: 2, clientX: 286, clientY: 190, now: 500 });
+    gesture.dispatch("pointermove", { pointerId: 2, clientX: 318, clientY: 176, now: 610 });
+    gesture.dispatch("pointermove", { pointerId: 2, clientX: 344, clientY: 145, now: 720 });
+    gesture.dispatch("pointerup", { pointerId: 2, clientX: 366, clientY: 132, now: 810 });
     expect(gesture.onCrouchChange).toHaveBeenLastCalledWith(false);
+    gesture.gesture.destroy();
+  });
+
+  it.each([
+    ["is a vertical forward flick", { x: 288, y: 110, now: 180 }],
+    ["does not reach the right edge", { x: 344, y: 142, now: 180 }],
+    ["is too slow", { x: 368, y: 132, now: 521 }],
+    ["does not rise enough", { x: 368, y: 160, now: 180 }],
+  ])("does not stand when the crouched gesture %s", (_name, end) => {
+    let crouching = true;
+    const onCrouchChange = vi.fn((active) => { crouching = active; });
+    const gesture = createGesture({
+      isCrouching: () => crouching,
+      onCrouchChange,
+    });
+    gesture.dispatch("pointerdown", { pointerId: 2, clientX: 286, clientY: 190, now: 0 });
+    gesture.dispatch("pointermove", { pointerId: 2, clientX: (286 + end.x) / 2, clientY: (190 + end.y) / 2, now: Math.min(120, end.now / 2) });
+    gesture.dispatch("pointerup", { pointerId: 2, clientX: end.x, clientY: end.y, now: end.now });
+
+    expect(onCrouchChange).not.toHaveBeenCalledWith(false);
     gesture.gesture.destroy();
   });
 

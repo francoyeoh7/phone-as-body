@@ -424,7 +424,8 @@ describe("player phone view deltas", () => {
 
     player.updateCameraPresentation(1 / 60);
 
-    expect(player.cameraRenderYaw).toBeGreaterThan(1.35);
+    expect(player.cameraRenderYaw).toBeGreaterThan(1.55);
+    expect(player.cameraRenderYaw).toBeLessThan(1.8);
   });
 
   it("is frame-rate independent over equal elapsed time", () => {
@@ -458,6 +459,15 @@ describe("player phone view deltas", () => {
 });
 
 describe("player crouch presentation", () => {
+  it("responds to fresh movement input within the first 60Hz frame", () => {
+    const player = createCrouchPlayer();
+    player.phoneInput.move = { x: 0, y: 1 };
+
+    player.update(1 / 60);
+
+    expect(Math.hypot(player.velocity.x, player.velocity.z)).toBeGreaterThan(1.25);
+  });
+
   it.each([30, 60, 120])("approaches the crouched pose monotonically at %ifps", (fps) => {
     const player = createCrouchPlayer();
     player.setCrouching(true);

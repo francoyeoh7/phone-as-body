@@ -1,6 +1,6 @@
 import QRCode from "qrcode";
 import { io } from "socket.io-client";
-import { EVENTS, isControllerInput, isHandFrame, isVoiceClip } from "../shared/protocol.js";
+import { EVENTS, isControllerInput, isHandFrame, isVoiceClip, isVoiceStreamFrame } from "../shared/protocol.js";
 
 const stoppedInput = () => ({
   seq: -1,
@@ -22,6 +22,7 @@ export class PhoneSession extends EventTarget {
     this.peerConnection = null;
     this.dataChannel = null;
     this.handChannel = null;
+    this.voiceChannel = null;
     this.handSeq = -1;
     this.handEpoch = 0;
     this.pendingCandidates = [];
@@ -153,15 +154,31 @@ export class PhoneSession extends EventTarget {
   attachDataChannel(channel) {
     const isControls = !channel?.label || channel.label === "controls";
     const isHand = channel?.label === "hand";
-    if (!isControls && !isHand) return;
+    const isVoice = channel?.label === "voice";
+    if (!isControls && !isHand && !isVoice) return;
     if (isHand) this.handChannel = channel;
+    else if (isVoice) this.voiceChannel = channel;
     else this.dataChannel = channel;
     channel.onclose = () => {
       if (isHand) {
         if (this.handChannel === channel) this.handChannel = null;
+      } else if (isVoice) {
+        if (this.voiceChannel === channel) this.voiceChannel = null;
       } else if (this.dataChannel === channel) this.dataChannel = null;
     };
     channel.onmessage = ({ data }) => {
+      if (isVoice) {
+        let frame = data;
+        if (typeof data === "string") {
+          try {
+            frame = JSON.parse(data);
+          } catch {
+            return;
+          }
+        }
+        if (isVoiceStreamFrame(frame)) this.dispatchEvent(new CustomEvent("voice-stream", { detail: frame }));
+        return;
+      }
       try {
         const message = JSON.parse(data);
         if (isControls) {
@@ -179,8 +196,12 @@ export class PhoneSession extends EventTarget {
     const peer = this.createPeerConnection();
     if (!peer) return;
     try {
-      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false }));
+      // Movement and view packets are disposable state snapshots. Dropping a
+      // late packet is preferable to retransmitting it and making controls
+      // feel delayed after a brief network hiccup.
+      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false, maxRetransmits: 0 }));
       this.attachDataChannel(peer.createDataChannel("hand", { ordered: false, maxRetransmits: 0 }));
+      this.attachDataChannel(peer.createDataChannel("voice", { ordered: true }));
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       this.socket?.emit(EVENTS.rtcSignal, { description: peer.localDescription });
@@ -208,11 +229,14 @@ export class PhoneSession extends EventTarget {
   closePeerConnection() {
     const controls = this.dataChannel;
     const hand = this.handChannel;
+    const voice = this.voiceChannel;
     controls?.close?.();
     if (hand && hand !== controls) hand.close?.();
+    if (voice && voice !== controls && voice !== hand) voice.close?.();
     this.peerConnection?.close?.();
     this.dataChannel = null;
     this.handChannel = null;
+    this.voiceChannel = null;
     this.peerConnection = null;
     this.pendingCandidates = [];
     this.resetHandOrdering();

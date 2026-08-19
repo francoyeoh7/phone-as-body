@@ -23,8 +23,11 @@ export const ELDERBOOM_V1_CONFIG = deepFreeze({
     denseNamePatterns: [
       /^FoliageInstancedStaticMeshComponent_\d+:/,
     ],
-    cellSize: 4,
-    maxInstancesPerMeshPerCell: 4,
+    cellSize: 5,
+    maxInstancesPerMeshPerCell: 2,
+    maxInstancesPerMesh: 120,
+    highPolyTriangleThreshold: 100_000,
+    maxHighPolyInstancesPerMesh: 0,
   },
   outputs: {
     directory: "public/assets/environment/elderboom-v1/chunks",

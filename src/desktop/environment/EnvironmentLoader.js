@@ -1,7 +1,10 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { validateEnvironmentManifest } from "./manifest.js";
-import { disposeEnvironmentResources } from "./resources.js";
+import {
+  disposeEnvironmentResources,
+  ENVIRONMENT_TEXTURE_SLOTS,
+} from "./resources.js";
 
 const ERROR_CODES = new Set([
   "manifest-fetch",
@@ -10,6 +13,8 @@ const ERROR_CODES = new Set([
   "chunk-invalid",
 ]);
 const FALLBACK_ORIGIN = "http://localhost/";
+const ENVIRONMENT_ANISOTROPY = 2;
+const MOON_SHADOW_EXTENT = 22;
 
 export class EnvironmentLoadError extends Error {
   constructor(code, message, { cause, chunkId, url, status, phase } = {}) {
@@ -132,9 +137,36 @@ function prepareChunkRoot(root, prefixes, chunkId) {
   root.traverse((object) => {
     if (!object.isMesh) return;
     object.receiveShadow = true;
-    object.castShadow = prefixes.some((prefix) => object.name.startsWith(prefix));
+    const semanticNames = [object.name, object.geometry?.name, object.parent?.name]
+      .filter((name) => typeof name === "string" && name.length > 0);
+    object.castShadow = prefixes.some((prefix) => (
+      semanticNames.some((name) => name.startsWith(prefix))
+    ));
+
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      for (const slot of ENVIRONMENT_TEXTURE_SLOTS) {
+        const texture = material?.[slot];
+        if (texture?.isTexture) texture.anisotropy = Math.min(texture.anisotropy || 1, ENVIRONMENT_ANISOTROPY);
+      }
+    }
   });
   return root;
+}
+
+function configureDirectionalShadow(light) {
+  light.shadow.mapSize.set(1024, 1024);
+  const camera = light.shadow.camera;
+  camera.left = -MOON_SHADOW_EXTENT;
+  camera.right = MOON_SHADOW_EXTENT;
+  camera.top = MOON_SHADOW_EXTENT;
+  camera.bottom = -MOON_SHADOW_EXTENT;
+  camera.near = 0.5;
+  camera.far = 90;
+  camera.updateProjectionMatrix();
+  light.shadow.bias = -0.0002;
+  light.shadow.normalBias = 0.035;
+  light.shadow.radius = 2;
 }
 
 function createLightRegistry(definitions) {
@@ -157,6 +189,7 @@ function createLightRegistry(definitions) {
       light.position.fromArray(definition.position);
       light.target.position.fromArray(definition.target);
       light.castShadow = definition.castShadow;
+      if (light.castShadow) configureDirectionalShadow(light);
       light.target.name = `${definition.id}-target`;
       root.add(light.target);
     } else {

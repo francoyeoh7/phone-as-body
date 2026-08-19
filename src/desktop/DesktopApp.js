@@ -411,7 +411,9 @@ export class DesktopApp {
         confidence: payload.confidence,
         voiceLevel: payload.voiceLevel,
       };
+      if (payload.interim !== undefined) result.interim = payload.interim === true;
       const transcript = this.handleRecognizedTranscript(result);
+      if (result.interim) return Boolean(transcript);
       return this.npcRuntime?.acceptTranscript?.(result) ?? Boolean(transcript);
     }
     if (action === "pause") this.setPaused(true);
@@ -421,7 +423,11 @@ export class DesktopApp {
   handleRecognizedTranscript(result = {}) {
     const transcript = String(result.transcript ?? "").trim();
     if (!transcript) return "";
-    this.ui?.setPlayerTranscript?.(transcript, true);
+    const interim = result.interim === true;
+    if (interim) this.ui?.setPlayerTranscript?.(transcript, true, 0);
+    else this.ui?.setPlayerTranscript?.(transcript, true);
+    // A PPT keyword is intentionally actionable as soon as an interim
+    // hypothesis contains it; NPC dialogue still waits for the final result.
     this.tryPresentationVoiceTrigger(transcript);
     return transcript;
   }
@@ -455,7 +461,6 @@ export class DesktopApp {
       && !this.knockDoor?.isCinematic?.()
       && !this.foundPhone?.isInspecting?.()
       && !this.shadowQuest?.isCinematic?.()
-      && !this.handTracking?.owner
     );
   }
 
@@ -478,6 +483,7 @@ export class DesktopApp {
     if (phase === "open") {
       if (!this.canOpenInventory()) return false;
       this.inventoryOpen = true;
+      this.handTracking?.setPaused?.(true);
       this.ui?.setInventory?.(this.inventory.snapshot(), { entryEdge: "right", entryY });
       this.inventory.setHovered(this.ui?.inventoryItemAtCursor?.() ?? null);
       return true;
@@ -531,6 +537,7 @@ export class DesktopApp {
   closeInventory() {
     if (!this.inventoryOpen) return false;
     this.inventoryOpen = false;
+    this.handTracking?.setPaused?.(false);
     this.inventory.setHovered(null);
     this.ui?.closeInventory?.();
     return true;

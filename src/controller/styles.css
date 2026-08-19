@@ -75,22 +75,45 @@ button {
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
   left: max(14px, env(safe-area-inset-left));
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   width: auto;
   height: clamp(68px, 12dvh, 96px);
-  padding: 0;
+  padding: 0 20px;
   border: 1px solid rgba(171, 177, 168, 0.3);
   border-radius: 4px;
   color: #d6d8d0;
   background: rgba(15, 18, 17, 0.9);
   touch-action: none;
+  -webkit-touch-callout: none;
   transition: color 100ms ease, border-color 100ms ease, background 100ms ease, transform 100ms ease, box-shadow 100ms ease;
 }
 
 .voice-hold svg {
+  flex: 0 0 auto;
   width: 27px;
   height: 27px;
+}
+
+.voice-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  text-align: left;
+  pointer-events: none;
+}
+
+.voice-copy strong {
+  font-size: 15px;
+  line-height: 1.1;
+}
+
+.voice-copy small {
+  color: #9da39a;
+  font-size: 12px;
+  line-height: 1.1;
 }
 
 .voice-hold[data-state="pressed"],
@@ -127,7 +150,7 @@ button {
   top: calc(max(14px, env(safe-area-inset-top)) + 62px);
   right: 0;
   bottom: calc(max(14px, env(safe-area-inset-bottom)) + clamp(68px, 12dvh, 96px) + 10px);
-  width: clamp(32px, 8vw, 56px);
+  width: clamp(72px, 18vw, 128px);
   touch-action: none;
 }
 

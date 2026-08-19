@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { PresentationDirector } from "../src/desktop/PresentationDirector.js";
 
@@ -48,15 +49,14 @@ describe("PresentationDirector", () => {
     });
   });
 
-  it("bounds phone page controls and exits on both screens", async () => {
+  it("cycles the phone page controls across the first and last slides", async () => {
     const { director, ui, phone } = createHarness();
     await director.open({ source: "settings" });
 
-    expect(director.previous()).toBe(false);
-    expect(director.next()).toBe(true);
-    expect(director.next()).toBe(true);
-    expect(director.next()).toBe(false);
+    expect(director.previous()).toBe(true);
     expect(director.index).toBe(2);
+    expect(director.next()).toBe(true);
+    expect(director.index).toBe(0);
 
     expect(director.close()).toBe(true);
     expect(ui.setPresentation).toHaveBeenLastCalledWith({ active: false });
@@ -67,5 +67,12 @@ describe("PresentationDirector", () => {
       total: 3,
       source: null,
     });
+  });
+
+  it("uses nearly the full game viewport for the slide image", () => {
+    const styles = readFileSync(new URL("../src/desktop/styles.css", import.meta.url), "utf8");
+
+    expect(styles).toMatch(/\.presentation-overlay\s*\{[^}]*padding:\s*clamp\(6px,\s*1vw,\s*14px\)/s);
+    expect(styles).toMatch(/\.presentation-stage\s*\{[^}]*width:\s*min\(calc\(100vw - 12px\),\s*1800px\)[^}]*height:\s*calc\(100vh - 12px\)/s);
   });
 });

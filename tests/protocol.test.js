@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ControllerSocket } from "../src/controller/ControllerSocket.js";
 import { PhoneSession } from "../src/desktop/PhoneSession.js";
+import { MediaPipeHandTracker } from "../src/controller/MediaPipeHandTracker.js";
 import * as protocol from "../src/shared/protocol.js";
 
 const { socketIoMock } = vi.hoisted(() => ({ socketIoMock: vi.fn() }));
@@ -49,6 +50,23 @@ const handFrame = (overrides = {}) => ({
   ...overrides,
 });
 
+const trackerFrame = () => {
+  const points = Array.from({ length: 21 }, (_, index) => ({
+    x: (index % 5) / 5,
+    y: Math.floor(index / 5) / 5,
+    z: 0,
+  }));
+  let frame;
+  const tracker = new MediaPipeHandTracker({ inputMirrored: false, onFrame: (next) => { frame = next; } });
+  tracker.active = true;
+  tracker.modeEpoch = 1;
+  tracker.handleResult({
+    result: { landmarks: [points], worldLandmarks: [points], handedness: [[{ categoryName: "Right", score: 0.94 }]] },
+    capturedAt: 20,
+  });
+  return frame;
+};
+
 describe("view delta protocol", () => {
   it("accepts finite bounded view deltas in degrees", () => {
     expect(protocol.isViewDelta({ yaw: 42, pitch: -18 })).toBe(true);
@@ -75,6 +93,16 @@ describe("strict hand frame protocol", () => {
   it("accepts a complete tracked frame with exactly 21 finite points", () => {
     expect(protocol.EVENTS.controllerHand).toBe("controller:hand");
     expect(protocol.isHandFrame(handFrame())).toBe(true);
+  });
+
+  it("accepts the actual rear-camera tracker frame with a boolean mirror flag", () => {
+    const frame = trackerFrame();
+    expect(frame).toMatchObject({ state: "tracked", handedness: "left", inputMirrored: false });
+    expect(protocol.isHandFrame(frame)).toBe(true);
+  });
+
+  it.each([null, "false", 0, 1])( "rejects a non-boolean inputMirrored value: %p", (inputMirrored) => {
+    expect(protocol.isHandFrame(handFrame({ inputMirrored }))).toBe(false);
   });
 
   it("keeps legacy input valid while accepting only boolean crouch state", () => {
@@ -118,6 +146,15 @@ describe("strict hand frame protocol", () => {
 });
 
 describe("voice and inventory transient protocol", () => {
+  it("validates only bounded 24 kHz PCM16 voice stream frames", () => {
+    expect(protocol.isVoiceStreamFrame({ type: "voice-start", sampleRate: 24_000, format: "pcm16" })).toBe(true);
+    expect(protocol.isVoiceStreamFrame({ type: "voice-stop" })).toBe(true);
+    expect(protocol.isVoiceStreamFrame(new ArrayBuffer(640))).toBe(true);
+    expect(protocol.isVoiceStreamFrame(new ArrayBuffer(0))).toBe(false);
+    expect(protocol.isVoiceStreamFrame(new ArrayBuffer(32_769))).toBe(false);
+    expect(protocol.isVoiceStreamFrame({ type: "voice-start", sampleRate: 44_100, format: "pcm16" })).toBe(false);
+  });
+
   const voiceClip = (overrides = {}) => ({
     version: 1,
     seq: 0,
@@ -130,6 +167,8 @@ describe("voice and inventory transient protocol", () => {
   it("accepts bounded binary voice clips and exposes their event", () => {
     expect(protocol.EVENTS.controllerVoiceClip).toBe("controller:voice-clip");
     expect(protocol.isVoiceClip(voiceClip())).toBe(true);
+    expect(protocol.isVoiceClip(voiceClip({ data: new Uint8Array(768 * 1024) }))).toBe(true);
+    expect(protocol.isVoiceClip(voiceClip({ data: new Uint8Array(1024 * 1024 + 1) }))).toBe(false);
   });
 
   it.each([
@@ -146,6 +185,20 @@ describe("voice and inventory transient protocol", () => {
     expect(protocol.isControllerAction({ action: "voice-recording", active: true, sentAt: 10 })).toBe(true);
     expect(protocol.isControllerAction({ action: "voice-recording", active: true, data: "raw" })).toBe(false);
     expect(protocol.isControllerAction({ action: "voice-recording", active: true, dataUrl: "AQID" })).toBe(false);
+  });
+
+  it("accepts bounded interim voice transcripts without weakening the action shape", () => {
+    const transcript = {
+      action: "voice-transcript",
+      transcript: "有人看到我的PPT吗",
+      confidence: 0.8,
+      voiceLevel: 0.6,
+      interim: true,
+    };
+
+    expect(protocol.isControllerAction(transcript)).toBe(true);
+    expect(protocol.isControllerAction({ ...transcript, interim: "yes" })).toBe(false);
+    expect(protocol.isControllerAction({ ...transcript, rawAudio: "data" })).toBe(false);
   });
 
   it("bounds inventory pointer movement and rejects deltas for other phases", () => {
@@ -391,7 +444,7 @@ describe("controller snapshot flush", () => {
     expect(session.currentInput(10_000).viewDelta).toEqual({ yaw: 0, pitch: 0 });
   });
 
-  it("creates an ordered reliable WebRTC input channel", async () => {
+  it("creates independent controls, hand, and reliable voice WebRTC channels", async () => {
     class FakePeer {
       constructor() {
         this.connectionState = "new";
@@ -412,9 +465,11 @@ describe("controller snapshot flush", () => {
 
     await session.startRtcOffer();
 
-    expect(session.peerConnection.createDataChannel).toHaveBeenNthCalledWith(1, "controls", { ordered: false });
+    expect(session.peerConnection.createDataChannel).toHaveBeenNthCalledWith(1, "controls", { ordered: false, maxRetransmits: 0 });
     expect(session.peerConnection.createDataChannel).toHaveBeenNthCalledWith(2, "hand", { ordered: false, maxRetransmits: 0 });
+    expect(session.peerConnection.createDataChannel).toHaveBeenNthCalledWith(3, "voice", { ordered: true });
     expect(session.handChannel).toBeTruthy();
+    expect(session.voiceChannel).toBeTruthy();
     vi.unstubAllGlobals();
   });
 
@@ -437,7 +492,7 @@ describe("controller snapshot flush", () => {
     })).toBe(false);
   });
 
-  it("routes labeled channels independently and keeps controls feedback on controls", () => {
+  it("keeps controls on WebRTC while routing hand state through Socket.IO", () => {
     const socket = new ControllerSocket({ room: "617042" });
     const controls = { label: "controls", readyState: "open", send: vi.fn(), close: vi.fn() };
     const hand = { label: "hand", readyState: "open", bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
@@ -450,10 +505,63 @@ describe("controller snapshot flush", () => {
     socket.sendHandFrame(handFrame({ seq: 7 }));
 
     expect(controls.send).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(hand.send.mock.calls[0][0])).toMatchObject({ type: "hand", payload: { seq: 7 } });
+    expect(hand.send).not.toHaveBeenCalled();
+    expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.objectContaining({ seq: 7 }));
     hand.onclose();
     socket.setInput({ move: { x: 1, y: 0 } }, { immediate: true });
     expect(controls.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the Socket.IO fallback controller input at a responsive 30Hz cadence", () => {
+    const setInterval = vi.fn(() => 17);
+    socketIoMock.mockReturnValue({ on: vi.fn(), emit: vi.fn() });
+    const socket = new ControllerSocket({ room: "617042" });
+
+    vi.stubGlobal("window", { setInterval });
+    socket.connect();
+
+    expect(setInterval).toHaveBeenCalledWith(expect.any(Function), expect.closeTo(1000 / 30, 5));
+    vi.unstubAllGlobals();
+  });
+
+  it("sends bounded realtime voice controls and PCM chunks on the voice channel", () => {
+    const socket = new ControllerSocket({ room: "617042" });
+    const voice = { label: "voice", readyState: "open", bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    socket.attachDataChannel(voice);
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+
+    expect(socket.sendVoiceFrame({ type: "voice-start", sampleRate: 24_000, format: "pcm16" })).toBe(true);
+    expect(socket.sendVoiceFrame(new Int16Array([1, -1, 2]).buffer)).toBe(true);
+    expect(socket.sendVoiceFrame({ type: "voice-stop" })).toBe(true);
+    expect(JSON.parse(voice.send.mock.calls[0][0])).toEqual({ type: "voice-start", sampleRate: 24_000, format: "pcm16" });
+    expect(voice.send.mock.calls[1][0]).toBeInstanceOf(ArrayBuffer);
+  });
+
+  it("drops invalid or backpressured realtime voice frames", () => {
+    const socket = new ControllerSocket({ room: "617042" });
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+    socket.voiceChannel = { readyState: "open", bufferedAmount: 65_537, send: vi.fn() };
+    expect(socket.sendVoiceFrame(new ArrayBuffer(320))).toBe(false);
+    socket.voiceChannel.bufferedAmount = 0;
+    expect(socket.sendVoiceFrame(new ArrayBuffer(0))).toBe(false);
+    expect(socket.sendVoiceFrame({ type: "voice-start", sampleRate: 48_000, format: "pcm16" })).toBe(false);
+  });
+
+  it("dispatches realtime voice controls and binary chunks on desktop", () => {
+    const session = new PhoneSession();
+    const receive = vi.fn();
+    session.addEventListener("voice-stream", receive);
+    const channel = { label: "voice", onmessage: null, onclose: null };
+    session.attachDataChannel(channel);
+
+    channel.onmessage({ data: JSON.stringify({ type: "voice-start", sampleRate: 24_000, format: "pcm16" }) });
+    channel.onmessage({ data: new Int16Array([4, 5]).buffer });
+    channel.onmessage({ data: JSON.stringify({ type: "voice-stop" }) });
+
+    expect(receive).toHaveBeenCalledTimes(3);
+    expect(receive.mock.calls[1][0].detail).toBeInstanceOf(ArrayBuffer);
   });
 
   it.each([32768, 32769])("handles hand-channel high-water boundary %s", (bufferedAmount) => {
@@ -462,9 +570,8 @@ describe("controller snapshot flush", () => {
     socket.socket = { connected: true, emit: vi.fn() };
     socket.handChannel = { readyState: "open", bufferedAmount, send: vi.fn() };
     socket.sendHandFrame(handFrame());
-    if (bufferedAmount <= 32768) expect(socket.handChannel.send).toHaveBeenCalledOnce();
-    else expect(socket.handChannel.send).not.toHaveBeenCalled();
-    expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything(), expect.anything());
+    expect(socket.handChannel.send).not.toHaveBeenCalled();
+    expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
   });
 
   it("dispatches only newer hand frames with local receive time", () => {
@@ -495,16 +602,44 @@ describe("controller snapshot flush", () => {
     expect(hand.mock.calls[0][0].detail).toMatchObject({ seq: 8, modeEpoch: 2 });
   });
 
-  it("drops hand frames when bufferedAmount is non-finite or unreadable", () => {
+  it("delivers tracker frames through the reliable Socket.IO hand path", () => {
+    const frame = trackerFrame();
+    const socket = new ControllerSocket({ room: "617042" });
+    socket.joined = true;
+    socket.socket = { connected: true, emit: vi.fn() };
+    expect(socket.sendHandFrame(frame)).toBe(true);
+    expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerHand, frame);
+
+    socket.handChannel = { readyState: "open", bufferedAmount: 0, send: vi.fn() };
+    expect(socket.sendHandFrame(frame)).toBe(true);
+    expect(socket.handChannel.send).not.toHaveBeenCalled();
+    expect(socket.socket.emit).toHaveBeenLastCalledWith(protocol.EVENTS.controllerHand, frame);
+  });
+
+  it("accepts a tracker frame in a hand DataChannel envelope", () => {
+    const session = new PhoneSession();
+    const receive = vi.fn();
+    session.addEventListener("hand", receive);
+    const channel = { label: "hand", onmessage: null, onclose: null };
+    session.attachDataChannel(channel);
+
+    const frame = trackerFrame();
+    channel.onmessage({ data: JSON.stringify({ type: "hand", payload: frame }) });
+
+    expect(receive).toHaveBeenCalledOnce();
+    expect(receive.mock.calls[0][0].detail).toMatchObject({ inputMirrored: false, seq: frame.seq });
+  });
+
+  it("falls back to Socket.IO when hand-channel pressure is unreadable", () => {
     for (const bufferedAmount of [Number.NaN, Number.POSITIVE_INFINITY]) {
       const socket = new ControllerSocket({ room: "617042" });
       socket.joined = true;
       socket.socket = { connected: true, emit: vi.fn() };
       socket.handChannel = { readyState: "open", bufferedAmount, send: vi.fn() };
 
-      expect(socket.sendHandFrame(handFrame())).toBe(false);
+      expect(socket.sendHandFrame(handFrame())).toBe(true);
       expect(socket.handChannel.send).not.toHaveBeenCalled();
-      expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
+      expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
     }
 
     const socket = new ControllerSocket({ room: "617042" });
@@ -514,9 +649,9 @@ describe("controller snapshot flush", () => {
     Object.defineProperty(channel, "bufferedAmount", { get: () => { throw new Error("unreadable"); } });
     socket.handChannel = channel;
 
-    expect(socket.sendHandFrame(handFrame())).toBe(false);
+    expect(socket.sendHandFrame(handFrame())).toBe(true);
     expect(channel.send).not.toHaveBeenCalled();
-    expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
+    expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
   });
 
   it("clears stale tunnel RTT when WebRTC opens", () => {

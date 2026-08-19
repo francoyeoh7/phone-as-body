@@ -185,7 +185,7 @@ export class PlayerController {
       this.cameraRenderYaw = this.cameraYaw;
       this.cameraRenderPitch = this.cameraPitch;
     } else {
-      const timeConstant = 0.008 + smoothing * 0.052;
+      const timeConstant = 0.006 + smoothing * 0.03;
       const alpha = 1 - Math.exp(-delta / timeConstant);
       this.cameraRenderYaw += (this.cameraYaw - this.cameraRenderYaw) * alpha;
       this.cameraRenderPitch += (this.cameraPitch - this.cameraRenderPitch) * alpha;
@@ -249,7 +249,7 @@ export class PlayerController {
 
     const move = this.phoneConnected && !this.fallback ? this.phoneInput.move : this.keyboardVector();
     const target = cameraRelativeMovement(move, this.cameraRenderYaw);
-    this.velocity = dampVector(this.velocity, { x: target.x * this.movementSpeed, z: target.z * this.movementSpeed }, 18, delta);
+    this.velocity = dampVector(this.velocity, { x: target.x * this.movementSpeed, z: target.z * this.movementSpeed }, 30, delta);
     this.characterController.computeColliderMovement(this.collider, {
       x: this.velocity.x * delta,
       y: 0,

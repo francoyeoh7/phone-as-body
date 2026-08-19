@@ -1,0 +1,1 @@
+public/assets/environment/elderboom-v1/chunks/*.glb filter=lfs diff=lfs merge=lfs -text

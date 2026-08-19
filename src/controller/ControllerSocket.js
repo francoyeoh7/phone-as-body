@@ -1,5 +1,10 @@
 import { io } from "socket.io-client";
-import { EVENTS, isHandFrame, isVoiceClip } from "../shared/protocol.js";
+import { EVENTS, isHandFrame, isVoiceClip, isVoiceStreamFrame } from "../shared/protocol.js";
+
+// Controls are state snapshots, so stale packets are less useful than a
+// fresher packet. The WebSocket fallback uses the same responsive cadence as
+// the normal touch/motion path.
+const INPUT_SEND_HZ = 30;
 
 export class ControllerSocket {
   constructor({ room, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
@@ -31,6 +36,7 @@ export class ControllerSocket {
     this.peerConnection = null;
     this.dataChannel = null;
     this.handChannel = null;
+    this.voiceChannel = null;
     this.pendingCandidates = [];
   }
 
@@ -69,7 +75,7 @@ export class ControllerSocket {
     this.socket.on(EVENTS.desktopEvent, (event) => this.onEvent?.(event));
     this.socket.on(EVENTS.rtcSignal, (signal) => this.handleRtcSignal(signal));
 
-    this.timer = window.setInterval(() => this.flush(), 1000 / 15);
+    this.timer = window.setInterval(() => this.flush(), 1000 / INPUT_SEND_HZ);
   }
 
   setInput(input, { immediate = false } = {}) {
@@ -140,8 +146,10 @@ export class ControllerSocket {
   attachDataChannel(channel) {
     const isControls = !channel?.label || channel.label === "controls";
     const isHand = channel?.label === "hand";
-    if (!isControls && !isHand) return;
+    const isVoice = channel?.label === "voice";
+    if (!isControls && !isHand && !isVoice) return;
     if (isHand) this.handChannel = channel;
+    else if (isVoice) this.voiceChannel = channel;
     else this.dataChannel = channel;
     channel.onopen = () => {
       if (isControls) this.reportTelemetry({ transport: "webrtc", serverRttMs: null });
@@ -149,6 +157,8 @@ export class ControllerSocket {
     channel.onclose = () => {
       if (isHand) {
         if (this.handChannel === channel) this.handChannel = null;
+      } else if (isVoice) {
+        if (this.voiceChannel === channel) this.voiceChannel = null;
       } else {
         if (this.dataChannel === channel) this.dataChannel = null;
         this.reportTelemetry({ transport: this.socket?.io?.engine?.transport?.name ?? "unknown" });
@@ -180,6 +190,21 @@ export class ControllerSocket {
     return true;
   }
 
+  sendVoiceFrame(frame) {
+    if (!this.joined || !this.socket?.connected || !isVoiceStreamFrame(frame)) return false;
+    const channel = this.voiceChannel;
+    if (channel?.readyState !== "open") return false;
+    let bufferedAmount;
+    try {
+      bufferedAmount = channel.bufferedAmount;
+    } catch {
+      return false;
+    }
+    if (!Number.isFinite(bufferedAmount) || bufferedAmount > 65_536) return false;
+    channel.send(frame instanceof ArrayBuffer || ArrayBuffer.isView(frame) ? frame : JSON.stringify(frame));
+    return true;
+  }
+
   async handleRtcSignal(signal) {
     const peer = this.ensurePeerConnection();
     if (!peer) return;
@@ -204,11 +229,14 @@ export class ControllerSocket {
   closePeerConnection() {
     const controls = this.dataChannel;
     const hand = this.handChannel;
+    const voice = this.voiceChannel;
     controls?.close?.();
     if (hand && hand !== controls) hand.close?.();
+    if (voice && voice !== controls && voice !== hand) voice.close?.();
     this.peerConnection?.close?.();
     this.dataChannel = null;
     this.handChannel = null;
+    this.voiceChannel = null;
     this.peerConnection = null;
     this.pendingCandidates = [];
   }

@@ -2,12 +2,12 @@ import { INVENTORY_DELTA_LIMIT } from "../shared/protocol.js";
 
 const MOVE_INTERVAL_MS = 1000 / 30;
 const ACTIVATION_DISTANCE_PX = 44;
-const ACTIVATION_WINDOW_MS = 260;
 const HORIZONTAL_DOMINANCE = 1.25;
 // The desktop bar is capped at 360px and its 5px cursor radius leaves a
 // 350px usable horizontal span. Small phones need a proportional boost so a
 // full-width finger swipe still reaches that span.
 const INVENTORY_CURSOR_TRAVEL_PX = 350;
+const INTERACTIVE_TARGET_SELECTOR = "button, input, select, textarea, a, .pause-menu, .permission-panel, .found-phone-ui, .voice-hold, .presentation-controls";
 
 function consumePointer(event) {
   event?.preventDefault?.();
@@ -59,7 +59,7 @@ export class InventoryEdgeController {
   }
 
   pointerDown(event) {
-    if (this.session || !this.isInEdge(event) || !this.canOpen?.()) return false;
+    if (this.session || this.isInteractiveTarget(event?.target) || !this.isInEdge(event) || !this.canOpen?.()) return false;
     consumePointer(event);
     const displaced = this.ownership?.claimInventory?.(event.pointerId);
     if (displaced === null || displaced === false || displaced === undefined) return false;
@@ -104,9 +104,7 @@ export class InventoryEdgeController {
     if (!session.activated) {
       const leftward = session.startX - nextX;
       const vertical = Math.abs(nextY - session.startY);
-      const elapsed = this.clock() - session.startedAt;
-      if (elapsed <= ACTIVATION_WINDOW_MS
-        && leftward >= ACTIVATION_DISTANCE_PX
+      if (leftward >= ACTIVATION_DISTANCE_PX
         && leftward >= vertical * HORIZONTAL_DOMINANCE) {
         session.activated = true;
         const height = this.viewport()?.height;
@@ -163,10 +161,17 @@ export class InventoryEdgeController {
   }
 
   isInEdge(event) {
-    const bounds = this.element?.getBoundingClientRect?.();
-    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return false;
-    return event.clientX >= bounds.left && event.clientX <= bounds.left + bounds.width
-      && event.clientY >= bounds.top && event.clientY <= bounds.top + bounds.height;
+    const viewport = this.viewport?.() ?? {};
+    const viewportWidth = Number.isFinite(viewport.width) && viewport.width > 0
+      ? viewport.width
+      : window.innerWidth;
+    const edgeWidth = Math.max(72, Math.min(128, viewportWidth * 0.22));
+    return event.clientX >= viewportWidth - edgeWidth
+      && event.clientX <= viewportWidth;
+  }
+
+  isInteractiveTarget(target) {
+    return Boolean(target?.closest?.(INTERACTIVE_TARGET_SELECTOR));
   }
 
   currentSession(pointerId) {

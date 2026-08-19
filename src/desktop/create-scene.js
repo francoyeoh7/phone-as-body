@@ -960,6 +960,60 @@ export function disposePhysicsWorld(world) {
   world?.free?.();
 }
 
+const STANDARD_PIXEL_RATIO_CAP = 0.9;
+const SOFTWARE_PIXEL_RATIO_CAP = 0.75;
+const SOFTWARE_RENDERER_PATTERN = /microsoft basic render driver|swiftshader|llvmpipe|software rasterizer|warp-webgl/i;
+
+function readRendererName(renderer) {
+  try {
+    const context = renderer?.getContext?.();
+    if (!context) return "";
+    const debugInfo = context.getExtension?.("WEBGL_debug_renderer_info");
+    const unmasked = debugInfo?.UNMASKED_RENDERER_WEBGL;
+    const value = unmasked !== undefined
+      ? context.getParameter?.(unmasked)
+      : context.getParameter?.(context.RENDERER);
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+export function detectRenderProfile(renderer) {
+  const rendererName = readRendererName(renderer);
+  const isSoftware = SOFTWARE_RENDERER_PATTERN.test(rendererName);
+  return {
+    kind: isSoftware ? "software" : rendererName ? "hardware" : "unknown",
+    rendererName,
+    isSoftware,
+    pixelRatioCap: isSoftware ? SOFTWARE_PIXEL_RATIO_CAP : STANDARD_PIXEL_RATIO_CAP,
+  };
+}
+
+function applyRenderProfile(renderer, profile) {
+  const devicePixelRatio = Number(globalThis.window?.devicePixelRatio) || 1;
+  renderer.setPixelRatio(Math.min(devicePixelRatio, profile.pixelRatioCap));
+  if (profile.isSoftware && renderer.shadowMap) {
+    renderer.shadowMap.enabled = false;
+    renderer.shadowMap.autoUpdate = false;
+  }
+  if (renderer.domElement?.dataset) {
+    renderer.domElement.dataset.renderProfile = profile.kind;
+    if (profile.rendererName) renderer.domElement.dataset.rendererName = profile.rendererName;
+  }
+  return profile;
+}
+
+async function prepareRenderer(renderer, scene, camera, profile) {
+  if (profile.isSoftware || typeof renderer.compileAsync !== "function") return;
+  try {
+    await renderer.compileAsync(scene, camera);
+  } catch {
+    // Shader precompilation is an optimization. A browser-specific failure
+    // must not prevent the playable scene from starting.
+  }
+}
+
 async function createLegacyCorridorScene(host) {
   await RAPIER.init();
   const scene = new THREE.Scene();
@@ -971,13 +1025,13 @@ async function createLegacyCorridorScene(host) {
   camera.rotation.order = "YXZ";
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.02;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const renderProfile = applyRenderProfile(renderer, detectRenderProfile(renderer));
   host.replaceChildren(renderer.domElement);
 
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -1172,7 +1226,7 @@ async function createLegacyCorridorScene(host) {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    applyRenderProfile(renderer, renderProfile);
   };
   window.addEventListener("resize", resize);
 
@@ -1284,7 +1338,6 @@ export async function createScene(host, {
   const renderer = rendererFactory
     ? rendererFactory({ antialias: true, powerPreference: "high-performance" })
     : new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1292,6 +1345,7 @@ export async function createScene(host, {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.88;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const renderProfile = applyRenderProfile(renderer, detectRenderProfile(renderer));
   host.replaceChildren(renderer.domElement);
 
   const world = new rapier.World({ x: 0, y: -9.81, z: 0 });
@@ -1310,7 +1364,7 @@ export async function createScene(host, {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    applyRenderProfile(renderer, renderProfile);
   };
 
   const dispose = ({ clearHost = true } = {}) => {
@@ -1433,7 +1487,7 @@ export async function createScene(host, {
       presentationPaper: presentationPaper.root,
     };
 
-    await renderer.compileAsync?.(scene, camera);
+    await prepareRenderer(renderer, scene, camera, renderProfile);
     window.addEventListener("resize", resize);
     resizeAttached = true;
 
@@ -1442,6 +1496,7 @@ export async function createScene(host, {
       scene,
       camera,
       renderer,
+      renderProfile,
       world,
       spawn: manifest.spawn,
       interactables,

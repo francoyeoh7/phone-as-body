@@ -224,7 +224,7 @@ export function isControllerAction(value) {
     "task-hold": ["action", "sentAt", "context", "active"],
     "gesture-presence": ["action", "sentAt", "ready", "active", "context"],
     "voice-recording": ["action", "sentAt", "active"],
-    "voice-transcript": ["action", "sentAt", "transcript", "confidence", "voiceLevel"],
+    "voice-transcript": ["action", "sentAt", "transcript", "confidence", "voiceLevel", "interim"],
     "inventory-pointer": ["action", "sentAt", "phase", "dx", "dy", "entryY"],
     "presentation-open": ["action", "sentAt", "source"],
     "presentation-next": ["action", "sentAt"],
@@ -245,7 +245,8 @@ export function isControllerAction(value) {
   if (value.action === "voice-transcript") {
     return typeof value.transcript === "string" && value.transcript.length > 0 && value.transcript.length <= 500
       && isFiniteNumber(value.confidence) && value.confidence >= 0 && value.confidence <= 1
-      && isFiniteNumber(value.voiceLevel) && value.voiceLevel >= 0 && value.voiceLevel <= 1;
+      && isFiniteNumber(value.voiceLevel) && value.voiceLevel >= 0 && value.voiceLevel <= 1
+      && (value.interim === undefined || typeof value.interim === "boolean");
   }
   if (value.action === "settings") return isControllerSettings(value.settings);
   if (value.action === "presentation-open") {

@@ -19,8 +19,9 @@ const DATA_SLOTS = new Set([
   "sheenRoughnessTexture",
   "anisotropyTexture",
 ]);
+const RUNTIME_DIMENSION_SCALE = 0.8;
 
-export const VILLAGE_TEXTURE_LIMITS = Object.freeze({ color: 1024, data: 512 });
+export const VILLAGE_TEXTURE_LIMITS = Object.freeze({ color: 768, data: 384 });
 
 async function readAt(handle, position, length) {
   const buffer = Buffer.alloc(length);
@@ -73,8 +74,9 @@ async function encodeWebp(bytes, maxDimension, quality) {
   const width = metadata.width ?? 1;
   const height = metadata.height ?? 1;
   const max = Math.max(width, height);
-  const pipeline = max > maxDimension
-    ? source.resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true })
+  const effectiveMaxDimension = Math.max(1, Math.floor(maxDimension * RUNTIME_DIMENSION_SCALE));
+  const pipeline = max > effectiveMaxDimension
+    ? source.resize({ width: effectiveMaxDimension, height: effectiveMaxDimension, fit: "inside", withoutEnlargement: true })
     : source;
   const encoded = await pipeline.webp({ quality, effort: 4 }).toBuffer();
   const encodedMetadata = await sharp(encoded, { limitInputPixels: false }).metadata();
@@ -145,7 +147,7 @@ export async function optimizeVillageTextures({
   outputPath,
   colorMax = VILLAGE_TEXTURE_LIMITS.color,
   dataMax = VILLAGE_TEXTURE_LIMITS.data,
-  quality = 82,
+  quality = 60,
 } = {}) {
   const document = await readGlbDocument(inputPath);
   document.path = inputPath;

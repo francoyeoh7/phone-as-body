@@ -102,7 +102,7 @@ export class PresentationDirector {
     // Keep adjacent images warm without decoding the entire deck at once.
     if (typeof Image !== "undefined") {
       for (const offset of [-1, 1]) {
-        const next = this.slides[this.index + offset];
+        const next = this.slides[(this.index + offset + this.slides.length) % this.slides.length];
         if (next) {
           const image = new Image();
           image.src = next.src;
@@ -127,17 +127,15 @@ export class PresentationDirector {
 
   next() {
     if (!this.opened || this.slides.length === 0) return false;
-    const nextIndex = Math.min(this.slides.length - 1, this.index + 1);
-    if (nextIndex === this.index) return false;
-    this.index = nextIndex;
+    if (this.slides.length === 1) return false;
+    this.index = (this.index + 1) % this.slides.length;
     return this.render();
   }
 
   previous() {
     if (!this.opened || this.slides.length === 0) return false;
-    const previousIndex = Math.max(0, this.index - 1);
-    if (previousIndex === this.index) return false;
-    this.index = previousIndex;
+    if (this.slides.length === 1) return false;
+    this.index = (this.index - 1 + this.slides.length) % this.slides.length;
     return this.render();
   }
 

@@ -1,0 +1,80 @@
+{
+  "version": 2,
+  "downloadedAt": "2026-08-10",
+  "npcs": [
+    {
+      "id": "mara",
+      "url": "/assets/npcs/models/mara-innkeeper.glb",
+      "position": [9.3, 0, -7.7],
+      "rotation": [0, 0, 0],
+      "facingYaw": 2.8,
+      "targetHeight": 1.72,
+      "forceFallback": true,
+      "maxDepthRatio": 0.78,
+      "animation": ["ArmatureIdle1", "Idle1", "ArmatureIdle2", "Idle2"],
+      "artifact": {
+        "bytes": 1884472,
+        "sha256": "0D22B40D0B7AD3F64D7499DCB0DC7D5C6408657170AFE2B6F70F14D23FA28B26"
+      },
+      "source": {
+        "marketplace": "Fab",
+        "listing": "https://www.fab.com/listings/bf2bfa79-bc89-402b-b5e7-2c47f47c8401",
+        "title": "Free Animated Character with Suit",
+        "author": "Marko J",
+        "price": "Free",
+        "license": "CC BY 4.0",
+        "allowsAi": true,
+        "generatedWithAi": false
+      }
+    },
+    {
+      "id": "bram",
+      "url": "/assets/npcs/models/bram-blacksmith.glb",
+      "position": [-4.4, 0, 1.6],
+      "rotation": [0, 0, 0],
+      "facingYaw": 1.15,
+      "targetHeight": 1.78,
+      "forceFallback": true,
+      "maxDepthRatio": 0.82,
+      "animation": [],
+      "artifact": {
+        "bytes": 240264,
+        "sha256": "6535B74A9F406BC630938D7F4431088C0119ED33E7E5E2208B842B8640E9AEA4"
+      },
+      "source": {
+        "marketplace": "Fab",
+        "listing": "https://www.fab.com/listings/9a94d6ab-d51e-43c1-b203-1ddf91879229?lang=en",
+        "title": "Modular Humanoid Characters | Male (Free Demo)",
+        "author": "joaobaltieri",
+        "price": "Free",
+        "license": "CC BY 4.0",
+        "allowsAi": true,
+        "generatedWithAi": false
+      }
+    },
+    {
+      "id": "elowen",
+      "url": "/assets/npcs/models/elowen-herbalist.glb",
+      "position": [1.25, 0, 12.45],
+      "rotation": [0, 0, 0],
+      "facingYaw": -2.6,
+      "targetHeight": 1.68,
+      "maxDepthRatio": 0.62,
+      "animation": ["Scene"],
+      "artifact": {
+        "bytes": 1854592,
+        "sha256": "FB6B9B7FD8DC8D7CB46309EECFCA922990E2D1A977D1C24F36C8D5AF912BB635"
+      },
+      "source": {
+        "marketplace": "Fab",
+        "listing": "https://www.fab.com/listings/fd66628e-2b69-4293-be6c-f794b773d6a6",
+        "title": "Cartoon Old Woman",
+        "author": "Furkan Dogru",
+        "price": "Free",
+        "license": "CC BY 4.0",
+        "allowsAi": true,
+        "generatedWithAi": false
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ControllerApp, controllerShellMarkup } from "../src/controller/ControllerApp.js";
 
@@ -11,6 +12,51 @@ describe("controller gameplay chrome", () => {
     expect(markup).not.toContain('id="inventory-orb"');
     expect(markup).not.toContain('id="connection-label"');
     expect(markup).not.toContain('class="room-code"');
+  });
+
+  it("keeps both PPT directions enabled for a multi-page circular deck", () => {
+    const { app } = createApp();
+    Object.assign(app, {
+      presentationControls: { hidden: true },
+      presentationPage: { textContent: "" },
+      presentationPrevious: { disabled: true },
+      presentationNext: { disabled: true },
+    });
+
+    app.setPresentationControls({ active: true, index: 0, total: 13 });
+
+    expect(app.presentationPage.textContent).toBe("1 / 13");
+    expect(app.presentationPrevious.disabled).toBe(false);
+    expect(app.presentationNext.disabled).toBe(false);
+  });
+
+  it("routes interim browser recognition through the controller action channel", () => {
+    const { app, actions } = createApp();
+    app.handleBrowserVoiceResult({
+      transcript: "有人看到",
+      confidence: 0.6,
+      voiceLevel: 0.7,
+      interim: true,
+    });
+
+    expect(actions).toHaveBeenCalledWith("voice-transcript", {
+      transcript: "有人看到",
+      confidence: 0.6,
+      voiceLevel: 0.7,
+      interim: true,
+    });
+    expect(app.voiceStatus.textContent).toBe("实时识别中");
+  });
+
+  it("keeps a visible recording status inside the hold button", () => {
+    const markup = controllerShellMarkup("617042");
+    const styles = readFileSync(new URL("../src/controller/styles.css", import.meta.url), "utf8");
+
+    expect(markup).toContain('id="voice-label"');
+    expect(markup).toContain('id="voice-status"');
+    expect(markup).toContain("按住说话");
+    expect(styles).toMatch(/\.voice-hold\s*\{[^}]*-webkit-touch-callout:\s*none/s);
+    expect(styles).toMatch(/\.voice-copy\s*\{[^}]*display:\s*grid/s);
   });
 
   it("directs a controller without a six-digit room back to the desktop QR code", () => {
@@ -86,6 +132,8 @@ function createApp({ motionEnabled = true, fetchImpl = vi.fn() } = {}) {
     voicePcmBytes: 0,
     voicePcmTranscriptPromise: null,
     voiceRegion: { dataset: {} },
+    voiceLabel: { textContent: "" },
+    voiceStatus: { textContent: "" },
     viewEngaged: false,
     playSurface: { dataset: {} },
     status: { dataset: {} },
@@ -250,6 +298,69 @@ describe("controller app lifecycle", () => {
     ]);
     expect(sendVoiceClip).toHaveBeenCalledExactlyOnceWith(clip);
     expect(sendVoiceFrame).toHaveBeenCalledExactlyOnceWith(frame);
+  });
+
+  it("keeps recording active until release and then uploads the recorded clip", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ transcript: "有人看到我的PPT吗", confidence: 0.96, voiceLevel: 0.62 }),
+    }));
+    const { app, actions } = createApp({ fetchImpl });
+    const clip = {
+      version: 1,
+      seq: 0,
+      durationMs: 1600,
+      mimeType: "audio/webm",
+      data: new ArrayBuffer(64),
+    };
+
+    app.handleVoiceActive(true);
+    expect(actions).toHaveBeenCalledExactlyOnceWith("voice-recording", { active: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    app.handleVoiceActive(false);
+    await app.handleVoiceClip(clip);
+
+    expect(actions.mock.calls).toEqual([
+      ["voice-recording", { active: true }],
+      ["voice-recording", { active: false }],
+      ["voice-transcript", {
+        transcript: "有人看到我的PPT吗",
+        confidence: 0.96,
+        voiceLevel: 0.62,
+      }],
+    ]);
+  });
+
+  it("does not stop or cancel recording just because browser speech recognition errors", () => {
+    const { app, voiceRecognizer } = createApp();
+    app.voiceHold.cancel.mockClear();
+    app.voiceRecognitionStarted = true;
+
+    app.handleVoiceRecognitionError({ error: "network" });
+
+    expect(voiceRecognizer.cancel).toHaveBeenCalledOnce();
+    expect(app.voiceHold.cancel).not.toHaveBeenCalled();
+    expect(app.voiceRegion.dataset.recognition).toBe("fallback");
+  });
+
+  it("shows recording and transcription progress on the hold control", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ transcript: "有人看到我的PPT吗", confidence: 0.96, voiceLevel: 0.62 }),
+    }));
+    const { app } = createApp({ fetchImpl });
+
+    app.handleVoicePressState("pressed");
+    expect(app.voiceLabel.textContent).toBe("继续按住");
+    expect(app.voiceStatus.textContent).toBe("正在准备麦克风");
+
+    app.handleVoicePressState("recording");
+    expect(app.voiceLabel.textContent).toBe("正在录音");
+    expect(app.voiceStatus.textContent).toBe("说完后松开");
+
+    await app.submitVoiceClip({ mimeType: "audio/webm", data: new ArrayBuffer(32) });
+    expect(app.voiceStatus.textContent).toBe("已发送");
   });
 
   it("starts browser recognition synchronously on press and does not duplicate it on recording", () => {
@@ -901,7 +1012,24 @@ describe("controller app lifecycle", () => {
 });
 
 describe("controller inventory modal", () => {
-  it("opens only during active gameplay outside semantic tasks and phone inspection", () => {
+  it("binds inventory pointer capture to the viewport root instead of the inset play surface", () => {
+    const { app } = createApp();
+    app.root = { addEventListener: vi.fn() };
+    app.inventoryEdge = {
+      pointerDown: vi.fn(),
+      pointerMove: vi.fn(),
+      pointerUp: vi.fn(),
+      pointerCancel: vi.fn(),
+      pointerCaptureLost: vi.fn(),
+    };
+
+    app.bindInventoryPointerCapture();
+
+    expect(app.root.addEventListener).toHaveBeenCalledTimes(5);
+    for (const call of app.root.addEventListener.mock.calls) expect(call[2]).toBe(true);
+  });
+
+  it("opens during active gameplay and hand tasks, outside phone inspection", () => {
     const { app } = createApp();
 
     expect(app.canOpenInventory()).toBe(true);
@@ -913,7 +1041,6 @@ describe("controller inventory modal", () => {
       { requiresContinue: true },
       { destroyed: true },
       { connectionState: "disconnected" },
-      { handTaskContext: "door-defense" },
     ]) {
       const original = Object.fromEntries(Object.keys(blocked).map((key) => [key, app[key]]));
       Object.assign(app, blocked);

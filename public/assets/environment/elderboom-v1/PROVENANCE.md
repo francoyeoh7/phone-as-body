@@ -7,8 +7,10 @@
 - Source generator: Unreal Engine `5.5.4`
 - Deterministic extraction command: `npm run assets:village -- --source "D:\3d资产\ElderBoomHollow\source\elderbloom_hollow.glb"`
 
-The extractor retains selected mesh data, UVs, PBR assignments, texture dimensions, and embedded image bytes. It omits sectors outside the selected western-core bounds and deterministically thins only repeated foliage before grouping compatible repeats with `EXT_mesh_gpu_instancing`. It does not decimate retained architecture or props and does not resize retained textures.
+The extractor retains selected mesh data, UVs, PBR assignments, texture dimensions, and embedded image bytes. It omits sectors outside the selected western-core bounds and deterministically thins only repeated foliage before grouping compatible repeats with `EXT_mesh_gpu_instancing`. The runtime profile caps only repeated foliage, including one retained copy of each source mesh above 100,000 triangles; it does not decimate retained architecture or props and does not resize retained textures. The scripted knock-door house remains in the retained architecture set.
 
-Generated GLB chunks and build reports are local-only working artifacts ignored by Git. The complete source GLB remains outside this repository and must never be staged, served, or bundled.
+The complete 936 MB source GLB remains outside this repository and must never be staged, served, or bundled. The deterministic western-core subset is incorporated into the game and stored with Git LFS so a private clone remains runnable.
 
-No license tier is asserted here because no entitlement record is archived in this workspace. Publishing, uploading, releasing, tunneling publicly, or otherwise distributing the generated subset requires both an archived account-entitlement record for the listing and explicit user authorization.
+The project owner explicitly authorized acquisition, integration, public gameplay tunneling, and private GitHub storage of this asset on 2026-08-11. Fab's Standard License permits incorporating the asset into a project and sharing it through a private repository with project collaborators; it does not permit redistributing the asset on a standalone basis. This note records the owner's authorization and project-only use, but is not a substitute for the owner's Fab account records.
+
+- Fab Standard License: https://www.fab.com/eula

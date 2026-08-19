@@ -67,12 +67,27 @@ function renderRoot(name = "chunk-root") {
   const root = new THREE.Group();
   root.name = name;
 
+  const map = new THREE.Texture();
+  const normalMap = new THREE.Texture();
+  const roughnessMap = new THREE.Texture();
+  const material = new THREE.MeshStandardMaterial({ map, normalMap, roughnessMap });
   const selected = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    material,
+  );
+  selected.name = "instance-000-mesh-00";
+  selected.geometry.name = "S_Medieval_Modular_Wall_400x300";
+  selected.position.set(1, 2, 3);
+
+  const selectedByParent = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshStandardMaterial(),
   );
-  selected.name = "SM_House_Main";
-  selected.position.set(1, 2, 3);
+  selectedByParent.name = "instance-001-mesh-00";
+  selectedByParent.geometry.name = "mesh-001";
+  const semanticParent = new THREE.Group();
+  semanticParent.name = "SM_BlackAlder_01";
+  semanticParent.add(selectedByParent);
 
   const decorative = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -80,8 +95,8 @@ function renderRoot(name = "chunk-root") {
   );
   decorative.name = "VillageRock";
   decorative.castShadow = true;
-  root.add(selected, decorative);
-  return { root, selected, decorative };
+  root.add(selected, semanticParent, decorative);
+  return { root, selected, selectedByParent, decorative, textures: [map, normalMap, roughnessMap] };
 }
 
 function makeFetch(manifest, chunkResponses) {
@@ -99,7 +114,13 @@ describe("EnvironmentLoader", () => {
   it("validates, resolves, prepares, and atomically attaches the village environment", async () => {
     const bytes = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
     const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
-    const { root: chunkRoot, selected, decorative } = renderRoot();
+    const {
+      root: chunkRoot,
+      selected,
+      selectedByParent,
+      decorative,
+      textures,
+    } = renderRoot();
     const loader = { parseAsync: vi.fn(async () => ({ scene: chunkRoot })) };
     const { fetchImpl, calls } = makeFetch(manifest, [
       (url) => bufferResponse(bytes, url),
@@ -135,10 +156,21 @@ describe("EnvironmentLoader", () => {
     expect(selected.position.toArray()).toEqual([1, 2, 3]);
     expect(selected.receiveShadow).toBe(true);
     expect(selected.castShadow).toBe(true);
+    expect(selectedByParent.receiveShadow).toBe(true);
+    expect(selectedByParent.castShadow).toBe(true);
     expect(decorative.receiveShadow).toBe(true);
     expect(decorative.castShadow).toBe(false);
+    expect(textures.every((texture) => texture.anisotropy <= 2)).toBe(true);
     expect(instance.chunks.map(({ id }) => id)).toEqual(["western-core"]);
     expect(instance.lights.byId["moon-key"].isDirectionalLight).toBe(true);
+    expect(instance.lights.byId["moon-key"].shadow.mapSize.toArray()).toEqual([1024, 1024]);
+    expect(instance.lights.byId["moon-key"].shadow.camera.left).toBeLessThanOrEqual(-20);
+    expect(instance.lights.byId["moon-key"].shadow.camera.right).toBeGreaterThanOrEqual(20);
+    expect(instance.lights.byId["moon-key"].shadow.camera.top).toBeGreaterThanOrEqual(20);
+    expect(instance.lights.byId["moon-key"].shadow.camera.bottom).toBeLessThanOrEqual(-20);
+    expect(instance.lights.byId["moon-key"].shadow.camera.far).toBeGreaterThanOrEqual(80);
+    expect(instance.lights.byId["moon-key"].shadow.bias).toBeLessThan(0);
+    expect(instance.lights.byId["moon-key"].shadow.normalBias).toBeGreaterThan(0);
     expect(instance.lights.byRole.moon).toHaveLength(2);
     expect(instance.anchors.tasks.panel).toBe(instance.manifest.tasks.panel);
     expect(instance.anchors.story).toBe(instance.manifest.story);

@@ -84,14 +84,15 @@ describe("ElderBoom v1 intake contract", () => {
     expect(assertExpectedSourceHash(config.source.sha256.toLowerCase(), config)).toBe(true);
   });
 
-  it("keeps the high-quality local village density and texture limits", () => {
+  it("keeps the architecture detailed while capping dense runtime foliage", () => {
     expect(ELDERBOOM_V1_CONFIG.foliage).toMatchObject({
-      cellSize: 4,
-      maxInstancesPerMeshPerCell: 4,
+      cellSize: 5,
+      maxInstancesPerMeshPerCell: 2,
+      maxInstancesPerMesh: 120,
+      highPolyTriangleThreshold: 100_000,
+      maxHighPolyInstancesPerMesh: 0,
     });
-    expect(ELDERBOOM_V1_CONFIG.foliage).not.toHaveProperty("maxInstancesPerMesh");
-    expect(ELDERBOOM_V1_CONFIG.foliage).not.toHaveProperty("maxHighPolyInstancesPerMesh");
-    expect(VILLAGE_TEXTURE_LIMITS).toEqual({ color: 1024, data: 512 });
+    expect(VILLAGE_TEXTURE_LIMITS).toEqual({ color: 768, data: 384 });
   });
 
   it("repairs Unreal placeholder landscape, grass, and water materials", () => {
