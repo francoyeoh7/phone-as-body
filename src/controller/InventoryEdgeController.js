@@ -2,6 +2,7 @@ import { INVENTORY_DELTA_LIMIT } from "../shared/protocol.js";
 
 const MOVE_INTERVAL_MS = 1000 / 30;
 const ACTIVATION_DISTANCE_PX = 44;
+const MIN_VISIBLE_MS = 160;
 const HORIZONTAL_DOMINANCE = 1.25;
 // The desktop bar is capped at 360px and its 5px cursor radius leaves a
 // 350px usable horizontal span. Small phones need a proportional boost so a
@@ -56,10 +57,11 @@ export class InventoryEdgeController {
     this.setTimeout = setTimeout;
     this.clearTimeout = clearTimeout;
     this.session = null;
+    this.pendingCommitTimer = null;
   }
 
   pointerDown(event) {
-    if (this.session || this.isInteractiveTarget(event?.target) || !this.isInEdge(event) || !this.canOpen?.()) return false;
+    if (this.session || this.pendingCommitTimer !== null || this.isInteractiveTarget(event?.target) || !this.isInEdge(event) || !this.canOpen?.()) return false;
     consumePointer(event);
     const displaced = this.ownership?.claimInventory?.(event.pointerId);
     if (displaced === null || displaced === false || displaced === undefined) return false;
@@ -80,10 +82,12 @@ export class InventoryEdgeController {
       lastFlushAt: this.clock(),
       timer: null,
       activated: false,
+      activatedAt: null,
       horizontalScale: startX > 0
         ? Math.max(1, INVENTORY_CURSOR_TRAVEL_PX / startX)
         : 1,
     };
+    this.setVisualState("armed");
     try {
       target?.setPointerCapture?.(event.pointerId);
     } catch {
@@ -107,6 +111,8 @@ export class InventoryEdgeController {
       if (leftward >= ACTIVATION_DISTANCE_PX
         && leftward >= vertical * HORIZONTAL_DOMINANCE) {
         session.activated = true;
+        session.activatedAt = this.clock();
+        this.setVisualState("tracking");
         const height = this.viewport()?.height;
         this.onOpen?.({ entryY: clampUnit(session.startY / (height > 0 ? height : 1)) });
         this.emitMovement(
@@ -153,7 +159,13 @@ export class InventoryEdgeController {
 
   cancel() {
     const session = this.session;
-    if (!session) return false;
+    if (!session) {
+      if (this.pendingCommitTimer === null) return false;
+      this.clearTimeout(this.pendingCommitTimer);
+      this.pendingCommitTimer = null;
+      this.setVisualState("idle");
+      return true;
+    }
     this.clearFlushTimer(session);
     session.pendingX = 0;
     session.pendingY = 0;
@@ -244,7 +256,6 @@ export class InventoryEdgeController {
   finish(session, phase) {
     if (this.session !== session) return false;
     this.session = null;
-    if (phase === "commit") this.onCommit?.();
     if (phase === "cancel") this.onCancel?.();
     this.ownership?.release?.("inventory", session.pointerId, session.ownershipGeneration);
     if (session.target?.hasPointerCapture?.(session.pointerId) !== false) {
@@ -255,6 +266,21 @@ export class InventoryEdgeController {
       }
     }
     this.onRelease?.(phase);
+    this.setVisualState("idle");
+    if (phase === "commit") {
+      const elapsed = session.activatedAt === null ? MIN_VISIBLE_MS : this.clock() - session.activatedAt;
+      const delay = Math.max(0, MIN_VISIBLE_MS - elapsed);
+      const commit = () => {
+        this.pendingCommitTimer = null;
+        this.onCommit?.();
+      };
+      if (delay > 0) this.pendingCommitTimer = this.setTimeout(commit, delay);
+      else commit();
+    }
     return true;
+  }
+
+  setVisualState(state) {
+    if (this.element?.dataset) this.element.dataset.state = state;
   }
 }

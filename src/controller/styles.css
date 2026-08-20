@@ -154,6 +154,61 @@ button {
   touch-action: none;
 }
 
+.inventory-edge::before {
+  position: absolute;
+  top: 20%;
+  right: max(8px, env(safe-area-inset-right));
+  bottom: 20%;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(210, 173, 99, 0.52);
+  box-shadow: 0 0 12px rgba(210, 173, 99, 0.16);
+  content: "";
+  opacity: 0.46;
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+  pointer-events: none;
+}
+
+.inventory-edge-handle {
+  position: absolute;
+  top: 50%;
+  right: max(12px, env(safe-area-inset-right) + 4px);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 46px;
+  color: rgba(235, 231, 212, 0.72);
+  opacity: 0.62;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease, color 120ms ease, transform 120ms ease;
+  pointer-events: none;
+}
+
+.inventory-edge-handle svg {
+  width: 19px;
+  height: 19px;
+}
+
+.inventory-edge[data-state="armed"]::before,
+.inventory-edge[data-state="tracking"]::before {
+  opacity: 0.92;
+}
+
+.inventory-edge[data-state="tracking"]::before {
+  background: #d2ad63;
+  transform: scaleX(1.5);
+}
+
+.inventory-edge[data-state="armed"] .inventory-edge-handle,
+.inventory-edge[data-state="tracking"] .inventory-edge-handle {
+  color: #f0d99c;
+  opacity: 1;
+}
+
+.inventory-edge[data-state="tracking"] .inventory-edge-handle {
+  transform: translate(-5px, -50%);
+}
+
 .motion-diagnostics {
   position: absolute;
   z-index: 2;

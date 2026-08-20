@@ -8,6 +8,7 @@ describe("controller gameplay chrome", () => {
 
     expect(markup).toContain('id="settings"');
     expect(markup).toContain('id="inventory-edge"');
+    expect(markup).toContain('class="inventory-edge-handle"');
     expect(markup).not.toContain('class="controller-header"');
     expect(markup).not.toContain('id="inventory-orb"');
     expect(markup).not.toContain('id="connection-label"');

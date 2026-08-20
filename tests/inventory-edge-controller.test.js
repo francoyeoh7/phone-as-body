@@ -137,14 +137,32 @@ describe("InventoryEdgeController", () => {
   });
 
   it("flushes deltas and commits only after an opened gesture", () => {
-    const { controller, element, callbacks } = createEdge();
+    const { controller, element, callbacks, timers } = createEdge();
     controller.pointerDown(pointer(5, 390, 300, element));
     controller.pointerMove(pointer(5, 340, 300, element));
     controller.pointerUp(pointer(5, 320, 310, element));
+    timers.advance(160);
+    timers.runDue();
 
     expect(callbacks.onMove).toHaveBeenLastCalledWith({ dx: -20, dy: 10 });
     expect(callbacks.onCommit).toHaveBeenCalledOnce();
     expect(callbacks.onCancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps a quick release visible before committing the inventory choice", () => {
+    const { controller, element, callbacks, timers } = createEdge();
+
+    controller.pointerDown(pointer(12, 390, 300, element));
+    controller.pointerMove(pointer(12, 340, 300, element));
+    controller.pointerUp(pointer(12, 320, 300, element));
+
+    expect(callbacks.onCommit).not.toHaveBeenCalled();
+    timers.advance(159);
+    timers.runDue();
+    expect(callbacks.onCommit).not.toHaveBeenCalled();
+    timers.advance(1);
+    timers.runDue();
+    expect(callbacks.onCommit).toHaveBeenCalledOnce();
   });
 
   it("preserves the complete right-to-left travel when one event spans the whole edge", () => {
@@ -160,7 +178,7 @@ describe("InventoryEdgeController", () => {
   });
 
   it("keeps an active swipe alive when the browser reports lost pointer capture", () => {
-    const { controller, element, callbacks } = createEdge();
+    const { controller, element, callbacks, timers } = createEdge();
 
     controller.pointerDown(pointer(7, 390, 300, element));
     controller.pointerMove(pointer(7, 330, 300, element));
@@ -168,6 +186,8 @@ describe("InventoryEdgeController", () => {
     expect(controller.pointerCaptureLost(pointer(7, 330, 300, element))).toBe(true);
     controller.pointerMove(pointer(7, 120, 300, element));
     controller.pointerUp(pointer(7, 0, 300, element));
+    timers.advance(160);
+    timers.runDue();
 
     expect(callbacks.onCancel).not.toHaveBeenCalled();
     expect(callbacks.onCommit).toHaveBeenCalledOnce();

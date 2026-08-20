@@ -6,5 +6,7 @@ describe("inventory edge touch target", () => {
     const styles = readFileSync(new URL("../src/controller/styles.css", import.meta.url), "utf8");
 
     expect(styles).toMatch(/\.inventory-edge\s*\{[^}]*width:\s*clamp\(72px,\s*18vw,\s*128px\)/s);
+    expect(styles).toMatch(/\.inventory-edge-handle\s*\{[^}]*right:\s*[^;]+;/s);
+    expect(styles).toMatch(/\.inventory-edge\[data-state="tracking"\]/s);
   });
 });

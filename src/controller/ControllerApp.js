@@ -65,7 +65,9 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
           <button class="icon-button" id="settings" aria-label="设置"><i data-lucide="settings"></i></button>
         </div>
 
-        <div class="inventory-edge" id="inventory-edge" aria-hidden="true"></div>
+        <div class="inventory-edge" id="inventory-edge" aria-hidden="true">
+          <span class="inventory-edge-handle"><i data-lucide="chevron-left"></i></span>
+        </div>
 
         <aside class="motion-diagnostics" id="motion-diagnostics" aria-hidden="true" hidden>
           <div class="aim-plot" aria-hidden="true">
