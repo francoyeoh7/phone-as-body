@@ -9,7 +9,7 @@ import {
   Settings,
   X,
 } from "lucide";
-import { MAX_VOICE_CLIP_BYTES, isRoomCode } from "../shared/protocol.js";
+import { MAX_VOICE_CLIP_BYTES, isDeviceToken, isRoomCode } from "../shared/protocol.js";
 import { BraceHaptics } from "./BraceHaptics.js";
 import { CameraMotionDetector } from "./CameraMotionDetector.js";
 import { MediaPipeHandTracker } from "./MediaPipeHandTracker.js";
@@ -53,6 +53,19 @@ function pulse(pattern = 12) {
   navigator.vibrate?.(pattern);
 }
 
+export function ensureDeviceToken(storage) {
+  try {
+    let token = storage?.getItem?.("phone-as-body-device");
+    if (!token || !isDeviceToken(token)) {
+      token = crypto.randomUUID();
+      storage?.setItem?.("phone-as-body-device", token);
+    }
+    return token;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
 function zeroViewDelta() {
   return { yaw: 0, pitch: 0 };
 }
@@ -64,6 +77,8 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
         <div class="utility-controls">
           <button class="icon-button" id="settings" aria-label="设置"><i data-lucide="settings"></i></button>
         </div>
+
+        <div class="slot-badge" id="slot-badge" hidden aria-live="polite"></div>
 
         <div class="inventory-edge" id="inventory-edge" aria-hidden="true"></div>
 
@@ -146,6 +161,8 @@ export class ControllerApp {
     this.root = root;
     const parameters = new URLSearchParams(location.search);
     this.room = parameters.get("room") ?? "";
+    this.deviceToken = ensureDeviceToken(globalThis.localStorage);
+    this.slot = null;
     this.preview = import.meta.env.DEV && parameters.has("preview");
     this.move = { x: 0, y: 0 };
     this.crouching = false;
@@ -201,6 +218,7 @@ export class ControllerApp {
 
   cacheElements() {
     this.status = this.root.querySelector(".connection-state");
+    this.slotBadge = this.root.querySelector("#slot-badge");
     this.connectionLabel = this.root.querySelector("#connection-label");
     this.permissionPanel = this.root.querySelector("#permission-panel");
     this.permissionTitle = this.root.querySelector("#permission-title");
@@ -349,14 +367,21 @@ export class ControllerApp {
     }
     this.socket = new ControllerSocket({
       room: this.room,
-      onStatus: (status) => this.updateConnection(status),
+      deviceToken: this.deviceToken,
+      onStatus: (status, detail) => this.updateConnection(status, detail),
       onEvent: (event) => this.handleDesktopEvent(event),
       onTelemetry: (telemetry) => this.diagnostics.updateNetwork(telemetry),
     });
     this.socket.connect();
   }
 
-  updateConnection(state) {
+  updateConnection(state, detail = null) {
+    if (state === "joined" && Number.isInteger(detail?.slot)) {
+      this.slot = detail.slot;
+      this.showSlotBadge(detail.slot);
+    } else if (state !== "joined") {
+      this.hideSlotBadge();
+    }
     const labels = {
       connecting: "正在连接",
       joined: "已连接",
@@ -398,6 +423,17 @@ export class ControllerApp {
       this.permissionCopy.textContent = "请回到电脑端重新扫描二维码。";
       this.enableMotion.disabled = true;
     }
+  }
+
+  showSlotBadge(slot) {
+    if (!this.slotBadge) return;
+    this.slotBadge.textContent = `P${slot + 1}`;
+    this.slotBadge.hidden = false;
+  }
+
+  hideSlotBadge() {
+    if (!this.slotBadge) return;
+    this.slotBadge.hidden = true;
   }
 
   async enableSensors() {

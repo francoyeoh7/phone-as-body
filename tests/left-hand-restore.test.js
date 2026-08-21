@@ -89,7 +89,7 @@ describe("rewritten left-hand camera contract", () => {
     }));
   });
 
-  it("keeps tracked hand state on reliable Socket.IO even when an RTC hand channel is open", () => {
+  it("sends tracked hand state over the RTC hand channel with a socket fallback", () => {
     const { tracker, callbacks } = trackerSetup();
     const sample = openHand({ physicalHandedness: "left", inputMirrored: true });
     tracker.handleResult({
@@ -106,6 +106,13 @@ describe("rewritten left-hand camera contract", () => {
     socket.socket = { connected: true, emit: vi.fn() };
     socket.handChannel = { readyState: "open", bufferedAmount: 0, send: vi.fn() };
 
+    expect(socket.sendHandFrame(frame)).toBe(true);
+    expect(socket.handChannel.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(socket.handChannel.send.mock.calls[0][0]))
+      .toEqual(JSON.parse(JSON.stringify({ type: "hand", payload: frame })));
+    expect(socket.socket.emit).not.toHaveBeenCalledWith(EVENTS.controllerHand, frame);
+
+    socket.handChannel = { readyState: "open", bufferedAmount: 32_768, send: vi.fn() };
     expect(socket.sendHandFrame(frame)).toBe(true);
     expect(socket.handChannel.send).not.toHaveBeenCalled();
     expect(socket.socket.emit).toHaveBeenCalledWith(EVENTS.controllerHand, frame);

@@ -719,3 +719,25 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+.play-surface {
+  position: relative;
+}
+
+.slot-badge {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(241, 240, 232, 0.14);
+  color: #f1f0e8;
+  font: 600 12px/1 system-ui;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.slot-badge[hidden] {
+  display: none;
+}

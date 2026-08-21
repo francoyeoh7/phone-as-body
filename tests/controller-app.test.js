@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { ControllerApp, controllerShellMarkup } from "../src/controller/ControllerApp.js";
+import { ControllerApp, controllerShellMarkup, ensureDeviceToken } from "../src/controller/ControllerApp.js";
+import { isDeviceToken } from "../src/shared/protocol.js";
 
 describe("controller gameplay chrome", () => {
   it("keeps only settings visible at the top and replaces the inventory orb with an edge surface", () => {
@@ -1089,5 +1090,50 @@ describe("controller inventory modal", () => {
     app.cancelPointerOwnership();
 
     expect(order).toEqual(["inventory", "voice", "owners"]);
+  });
+});
+
+describe("controller device identity and slot badge", () => {
+  it("renders a slot badge surface for multiplayer joins", () => {
+    const markup = controllerShellMarkup("617042");
+    expect(markup).toContain('id="slot-badge"');
+  });
+
+  it("persists the device token across sessions", () => {
+    const storage = new Map();
+    const stub = {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+    };
+    const first = ensureDeviceToken(stub);
+    const second = ensureDeviceToken(stub);
+    expect(isDeviceToken(first)).toBe(true);
+    expect(second).toBe(first);
+  });
+
+  it("replaces garbage tokens found in storage", () => {
+    const storage = new Map([["phone-as-body-device", "bad token!"]]);
+    const stub = {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+    };
+    const token = ensureDeviceToken(stub);
+    expect(token).not.toBe("bad token!");
+    expect(isDeviceToken(token)).toBe(true);
+  });
+
+  it("survives storage-less environments", () => {
+    expect(isDeviceToken(ensureDeviceToken(undefined))).toBe(true);
+  });
+
+  it("shows the assigned slot as a player badge", () => {
+    const { app } = createApp();
+    app.cancelTransientControls = vi.fn();
+    app.slotBadge = { textContent: "", hidden: true };
+    app.updateConnection("joined", { slot: 1 });
+    expect(app.slotBadge.textContent).toBe("P2");
+    expect(app.slotBadge.hidden).toBe(false);
+    app.updateConnection("disconnected");
+    expect(app.slotBadge.hidden).toBe(true);
   });
 });

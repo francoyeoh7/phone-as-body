@@ -7,8 +7,10 @@ import { EVENTS, isHandFrame, isVoiceClip, isVoiceStreamFrame } from "../shared/
 const INPUT_SEND_HZ = 30;
 
 export class ControllerSocket {
-  constructor({ room, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
+  constructor({ room, deviceToken = null, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
     this.room = room;
+    this.deviceToken = deviceToken;
+    this.slot = null;
     this.onStatus = onStatus;
     this.onEvent = onEvent;
     this.onTelemetry = onTelemetry;
@@ -45,9 +47,10 @@ export class ControllerSocket {
     this.socket = io({ transports: ["websocket", "polling"] });
 
     this.socket.on("connect", () => {
-      this.socket.emit(EVENTS.controllerJoin, { room: this.room }, (result) => {
+      this.socket.emit(EVENTS.controllerJoin, { room: this.room, deviceToken: this.deviceToken }, (result) => {
         this.joined = Boolean(result?.ok);
-        this.onStatus?.(this.joined ? "joined" : result?.reason ?? "join-failed");
+        this.slot = Number.isInteger(result?.slot) ? result.slot : null;
+        this.onStatus?.(this.joined ? "joined" : result?.reason ?? "join-failed", { slot: this.slot });
       });
     });
     this.socket.on("disconnect", () => {
@@ -131,7 +134,9 @@ export class ControllerSocket {
 
   ensurePeerConnection() {
     if (this.peerConnection || typeof RTCPeerConnection === "undefined") return this.peerConnection;
-    const peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection({
+      iceServers: [{ urls: ["stun:stun.qq.com:3478", "stun.l.google.com:19302"] }],
+    });
     peer.onicecandidate = ({ candidate }) => {
       if (candidate) this.socket?.emit(EVENTS.rtcSignal, { candidate });
     };
@@ -177,9 +182,24 @@ export class ControllerSocket {
 
   sendHandFrame(frame) {
     if (!this.joined || !this.socket?.connected || !isHandFrame(frame)) return false;
-    // Hand tracking is a continuous state stream. Keep it on the reliable
-    // Socket.IO path so an unordered, no-retransmit RTC channel cannot leave
-    // the desktop with a single stale pose or reorder fallback frames.
+    // Prefer the peer-to-peer hand channel: through the cloud relay the
+    // socket path adds a full round trip. Frames carry seq/modeEpoch, and the
+    // desktop drops stale or reordered frames, so the unreliable channel is
+    // safe for this state stream. Backpressure or an unreadable buffer falls
+    // back to the reliable socket path.
+    const channel = this.handChannel;
+    if (channel?.readyState === "open") {
+      let bufferedAmount;
+      try {
+        bufferedAmount = channel.bufferedAmount;
+      } catch {
+        bufferedAmount = undefined;
+      }
+      if (Number.isFinite(bufferedAmount) && bufferedAmount < 32_768) {
+        channel.send(JSON.stringify({ type: "hand", payload: frame }));
+        return true;
+      }
+    }
     this.socket.emit(EVENTS.controllerHand, frame);
     return true;
   }

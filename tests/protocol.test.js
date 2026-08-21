@@ -492,7 +492,7 @@ describe("controller snapshot flush", () => {
     })).toBe(false);
   });
 
-  it("keeps controls on WebRTC while routing hand state through Socket.IO", () => {
+  it("keeps controls on WebRTC while preferring the hand channel for hand state", () => {
     const socket = new ControllerSocket({ room: "617042" });
     const controls = { label: "controls", readyState: "open", send: vi.fn(), close: vi.fn() };
     const hand = { label: "hand", readyState: "open", bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
@@ -505,11 +505,18 @@ describe("controller snapshot flush", () => {
     socket.sendHandFrame(handFrame({ seq: 7 }));
 
     expect(controls.send).toHaveBeenCalledTimes(1);
-    expect(hand.send).not.toHaveBeenCalled();
-    expect(socket.socket.emit).toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.objectContaining({ seq: 7 }));
+    expect(hand.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(hand.send.mock.calls[0][0])).toMatchObject({ type: "hand", payload: { seq: 7 } });
+    expect(socket.socket.emit).not.toHaveBeenCalledWith(protocol.EVENTS.controllerHand, expect.anything());
+
     hand.onclose();
     socket.setInput({ move: { x: 1, y: 0 } }, { immediate: true });
+    socket.sendHandFrame(handFrame({ seq: 8, modeEpoch: 1 }));
     expect(controls.send).toHaveBeenCalledTimes(2);
+    expect(socket.socket.emit).toHaveBeenCalledWith(
+      protocol.EVENTS.controllerHand,
+      expect.objectContaining({ seq: 8, modeEpoch: 1 }),
+    );
   });
 
   it("keeps the Socket.IO fallback controller input at a responsive 30Hz cadence", () => {
@@ -602,7 +609,7 @@ describe("controller snapshot flush", () => {
     expect(hand.mock.calls[0][0].detail).toMatchObject({ seq: 8, modeEpoch: 2 });
   });
 
-  it("delivers tracker frames through the reliable Socket.IO hand path", () => {
+  it("delivers tracker frames through the socket fallback and the hand channel", () => {
     const frame = trackerFrame();
     const socket = new ControllerSocket({ room: "617042" });
     socket.joined = true;
@@ -612,8 +619,8 @@ describe("controller snapshot flush", () => {
 
     socket.handChannel = { readyState: "open", bufferedAmount: 0, send: vi.fn() };
     expect(socket.sendHandFrame(frame)).toBe(true);
-    expect(socket.handChannel.send).not.toHaveBeenCalled();
-    expect(socket.socket.emit).toHaveBeenLastCalledWith(protocol.EVENTS.controllerHand, frame);
+    expect(socket.handChannel.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(socket.handChannel.send.mock.calls[0][0])).toMatchObject({ type: "hand", payload: frame });
   });
 
   it("accepts a tracker frame in a hand DataChannel envelope", () => {
@@ -786,8 +793,7 @@ describe("phone session multi-slot", () => {
     vi.unstubAllGlobals();
   });
 
-  it("appends the room key to the controller url", async () => {
-    const listeners = new Map();
+  it("appends the room key to the controller url", async () => {    const listeners = new Map();
     socketIoMock.mockReturnValue({
       on: vi.fn((name, listener) => listeners.set(name, listener)),
       emit: vi.fn((event, payloadOrAcknowledge, maybeAcknowledge) => {
@@ -809,6 +815,34 @@ describe("phone session multi-slot", () => {
     listeners.get("connect")();
     await vi.waitFor(() => expect(rooms).toHaveLength(1));
     expect(rooms[0].url).toBe("http://localhost:4174/controller?room=123456&k=abcdEFGH12345678");
+    vi.unstubAllGlobals();
+  });
+
+  it("joins with the device token and records the acked slot", () => {
+    const listeners = new Map();
+    const emits = [];
+    socketIoMock.mockReturnValue({
+      on: vi.fn((name, listener) => listeners.set(name, listener)),
+      emit: vi.fn((event, payload, acknowledge) => {
+        emits.push({ event, payload });
+        if (event === protocol.EVENTS.controllerJoin && typeof acknowledge === "function") {
+          acknowledge({ ok: true, slot: 2 });
+        }
+      }),
+      disconnect: vi.fn(),
+    });
+    vi.stubGlobal("window", { setInterval: vi.fn() });
+    const socket = new ControllerSocket({ room: "617042", deviceToken: "token-aaaa" });
+    const statuses = [];
+    socket.onStatus = (status, detail) => statuses.push({ status, detail });
+    socket.connect();
+    listeners.get("connect")();
+
+    expect(emits[0]).toMatchObject({ event: protocol.EVENTS.controllerJoin });
+    expect(emits[0].payload).toEqual({ room: "617042", deviceToken: "token-aaaa" });
+    expect(socket.slot).toBe(2);
+    expect(statuses[0]).toEqual({ status: "connecting", detail: undefined });
+    expect(statuses[1]).toEqual({ status: "joined", detail: { slot: 2 } });
     vi.unstubAllGlobals();
   });
 });
