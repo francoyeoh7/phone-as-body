@@ -1,0 +1,22 @@
+appId: com.tokenxapp.phoneasbody
+productName: 手机即身体
+directories:
+  output: release
+  buildResources: electron
+files:
+  - electron/**
+  - server/**
+  - src/shared/**
+  - dist/**
+  - package.json
+  - "!**/*.md"
+  - "!**/*.map"
+win:
+  icon: electron/icons/icon.png
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: 手机即身体
+  artifactName: phone-as-body-Setup-${version}.${ext}
