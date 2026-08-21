@@ -669,3 +669,28 @@ describe("controller snapshot flush", () => {
     }));
   });
 });
+
+describe("multi-controller protocol", () => {
+  it("exposes the controller cap", () => {
+    expect(protocol.MAX_CONTROLLERS).toBe(8);
+  });
+
+  it("accepts url-safe device tokens between 8 and 64 chars", () => {
+    expect(protocol.isDeviceToken("d-1a2B3c4E5f6")).toBe(true);
+    expect(protocol.isDeviceToken("a".repeat(64))).toBe(true);
+    expect(protocol.isDeviceToken("short")).toBe(false);
+    expect(protocol.isDeviceToken("has space!")).toBe(false);
+    expect(protocol.isDeviceToken("a".repeat(65))).toBe(false);
+    expect(protocol.isDeviceToken(123)).toBe(false);
+    expect(protocol.isDeviceToken(null)).toBe(false);
+  });
+
+  it("bounds slots to the controller cap", () => {
+    expect(protocol.isSlot(0)).toBe(true);
+    expect(protocol.isSlot(7)).toBe(true);
+    expect(protocol.isSlot(8)).toBe(false);
+    expect(protocol.isSlot(-1)).toBe(false);
+    expect(protocol.isSlot(1.5)).toBe(false);
+    expect(protocol.isSlot("0")).toBe(false);
+  });
+});

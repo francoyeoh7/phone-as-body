@@ -30,6 +30,8 @@ export const CONTROLLER_ACTIONS = Object.freeze([
   "presentation-close",
 ]);
 
+export const MAX_CONTROLLERS = 8;
+
 export const MAX_VOICE_DURATION_MS = 10_000;
 export const MAX_VOICE_CLIP_BYTES = 1024 * 1024;
 export const VOICE_STREAM_SAMPLE_RATE = 24_000;
@@ -50,6 +52,14 @@ const HAND_STATUS_KEYS = new Set(["version", "seq", "capturedAt", "modeEpoch", "
 
 export function isRoomCode(value) {
   return typeof value === "string" && /^\d{6}$/.test(value);
+}
+
+export function isSlot(value) {
+  return Number.isInteger(value) && value >= 0 && value < MAX_CONTROLLERS;
+}
+
+export function isDeviceToken(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(value);
 }
 
 export function isJoystickVector(value) {
