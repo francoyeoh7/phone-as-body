@@ -4,6 +4,7 @@ import { EVENTS, isControllerInput, isHandFrame, isVoiceClip, isVoiceStreamFrame
 
 const stoppedInput = () => ({
   seq: -1,
+  sentAt: 0,
   move: { x: 0, y: 0 },
   viewDelta: { yaw: 0, pitch: 0 },
   clutch: false,
@@ -11,67 +12,141 @@ const stoppedInput = () => ({
   receivedAt: 0,
 });
 
+function createSlotState() {
+  return {
+    connected: false,
+    input: stoppedInput(),
+    handSeq: -1,
+    handEpoch: 0,
+    peerConnection: null,
+    dataChannel: null,
+    handChannel: null,
+    voiceChannel: null,
+    pendingCandidates: [],
+  };
+}
+
 export class PhoneSession extends EventTarget {
   constructor() {
     super();
     this.socket = null;
     this.room = null;
+    this.secret = null;
+    this.slotStates = new Map();
+    this.primarySlotId = null;
     this.input = stoppedInput();
     this.pendingViewDelta = { yaw: 0, pitch: 0 };
     this.connected = false;
+    this.handSeq = -1;
+    this.handEpoch = 0;
     this.peerConnection = null;
     this.dataChannel = null;
     this.handChannel = null;
     this.voiceChannel = null;
-    this.handSeq = -1;
-    this.handEpoch = 0;
     this.pendingCandidates = [];
+  }
+
+  slotState(slot) {
+    let state = this.slotStates.get(slot);
+    if (!state) {
+      state = createSlotState();
+      this.slotStates.set(slot, state);
+    }
+    return state;
+  }
+
+  primarySlot() {
+    let best = null;
+    for (const [slot, state] of this.slotStates) {
+      if (state.connected && (best === null || slot < best)) best = slot;
+    }
+    return best;
+  }
+
+  effectivePrimarySlot() {
+    return this.primarySlot() ?? this.primarySlotId ?? 0;
+  }
+
+  slots() {
+    return [...this.slotStates.entries()]
+      .filter(([, state]) => state.connected)
+      .map(([slot]) => slot)
+      .sort((a, b) => a - b);
+  }
+
+  syncPrimaryMirrors() {
+    const state = this.slotState(this.effectivePrimarySlot());
+    this.peerConnection = state.peerConnection;
+    this.dataChannel = state.dataChannel;
+    this.handChannel = state.handChannel;
+    this.voiceChannel = state.voiceChannel;
+    this.pendingCandidates = state.pendingCandidates;
   }
 
   start() {
     this.socket = io({ transports: ["websocket", "polling"] });
     this.socket.on("connect", () => this.createRoom());
-    this.socket.on("disconnect", () => this.setPeerConnected(false));
-    this.socket.on(EVENTS.peerStatus, ({ connected }) => this.setPeerConnected(Boolean(connected)));
-    this.socket.on(EVENTS.controllerInput, (input) => this.acceptInput(input));
-    this.socket.on(EVENTS.controllerHand, (frame) => this.acceptHandFrame(frame));
-    this.socket.on(EVENTS.controllerVoiceClip, (clip) => this.acceptVoiceClip(clip));
-    this.socket.on(EVENTS.controllerAction, (action) => {
-      this.dispatchEvent(new CustomEvent("action", { detail: action }));
+    this.socket.on("disconnect", () => this.setAllPeersDisconnected());
+    this.socket.on(EVENTS.peerStatus, ({ connected, slot }) => {
+      this.setPeerConnected(Boolean(connected), Number.isInteger(slot) ? slot : 0);
+    });
+    this.socket.on(EVENTS.controllerInput, ({ slot, input }) => {
+      this.acceptInput(input, Number.isInteger(slot) ? slot : 0);
+    });
+    this.socket.on(EVENTS.controllerHand, ({ slot, frame }) => {
+      this.acceptHandFrame(frame, Number.isInteger(slot) ? slot : 0);
+    });
+    this.socket.on(EVENTS.controllerVoiceClip, ({ slot, clip }) => {
+      this.acceptVoiceClip(clip, Number.isInteger(slot) ? slot : 0);
+    });
+    this.socket.on(EVENTS.controllerAction, ({ slot, action }) => {
+      if (slot === this.effectivePrimarySlot()) {
+        this.dispatchEvent(new CustomEvent("action", { detail: action }));
+      }
     });
     this.socket.on(EVENTS.rtcSignal, (signal) => this.handleRtcSignal(signal));
   }
 
-  acceptInput(input) {
-    if (!isControllerInput(input) || input.seq <= this.input.seq) return;
-    this.pendingViewDelta = {
-      yaw: this.pendingViewDelta.yaw + input.viewDelta.yaw,
-      pitch: this.pendingViewDelta.pitch + input.viewDelta.pitch,
-    };
-    this.input = {
+  acceptInput(input, slot = 0) {
+    if (!isControllerInput(input)) return;
+    const state = this.slotState(slot);
+    if (input.seq <= state.input.seq) return;
+
+    state.input = {
       ...input,
       move: { ...input.move },
       viewDelta: { ...input.viewDelta },
-      clutch: input.clutch,
       crouch: input.crouch === true,
       receivedAt: performance.now(),
     };
-    this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
+    if (slot === this.effectivePrimarySlot()) {
+      this.pendingViewDelta = {
+        yaw: this.pendingViewDelta.yaw + input.viewDelta.yaw,
+        pitch: this.pendingViewDelta.pitch + input.viewDelta.pitch,
+      };
+      this.input = { ...state.input };
+      this.dispatchEvent(new CustomEvent("input", { detail: this.input }));
+    }
   }
 
-  acceptHandFrame(frame) {
+  acceptHandFrame(frame, slot = 0) {
     if (!isHandFrame(frame)) return false;
-    if (frame.modeEpoch < this.handEpoch
-      || (frame.modeEpoch === this.handEpoch && frame.seq <= this.handSeq)) return false;
-    this.handEpoch = frame.modeEpoch;
-    this.handSeq = frame.seq;
-    this.dispatchEvent(new CustomEvent("hand", {
-      detail: { ...frame, receivedAt: performance.now() },
-    }));
+    const state = this.slotState(slot);
+    if (frame.modeEpoch < state.handEpoch
+      || (frame.modeEpoch === state.handEpoch && frame.seq <= state.handSeq)) return false;
+    state.handEpoch = frame.modeEpoch;
+    state.handSeq = frame.seq;
+    if (slot === this.effectivePrimarySlot()) {
+      this.handEpoch = state.handEpoch;
+      this.handSeq = state.handSeq;
+      this.dispatchEvent(new CustomEvent("hand", {
+        detail: { ...frame, receivedAt: performance.now() },
+      }));
+    }
     return true;
   }
 
-  acceptVoiceClip(clip) {
+  acceptVoiceClip(clip, _slot = 0) {
     if (!isVoiceClip(clip)) return false;
     this.dispatchEvent(new CustomEvent("voice-clip", { detail: { ...clip } }));
     return true;
@@ -89,7 +164,8 @@ export class PhoneSession extends EventTarget {
         return;
       }
       this.room = result.code;
-      const url = await this.buildControllerUrl(result.code);
+      this.secret = result.secret ?? null;
+      const url = await this.buildControllerUrl(result.code, this.secret);
       const qrDataUrl = await QRCode.toDataURL(url, {
         width: 360,
         margin: 2,
@@ -100,7 +176,7 @@ export class PhoneSession extends EventTarget {
     });
   }
 
-  async buildControllerUrl(code) {
+  async buildControllerUrl(code, secret = null) {
     let origin = location.origin;
     try {
       const response = await fetch("/api/config");
@@ -111,17 +187,56 @@ export class PhoneSession extends EventTarget {
     }
     const url = new URL("/controller", origin);
     url.searchParams.set("room", code);
+    if (secret) url.searchParams.set("k", secret);
     return url.toString();
   }
 
-  setPeerConnected(connected) {
-    const wasConnected = this.connected;
-    this.connected = connected;
-    if (connected && !wasConnected) {
-      this.input = stoppedInput();
-      this.pendingViewDelta = { yaw: 0, pitch: 0 };
-      this.resetHandOrdering();
-    } else if (!connected) {
+  maybeSwapPrimary() {
+    const primary = this.primarySlot();
+    if (primary === this.primarySlotId) return;
+    this.primarySlotId = primary;
+    this.input = stoppedInput();
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
+    this.connected = primary !== null;
+    this.syncPrimaryMirrors();
+  }
+
+  setPeerConnected(connected, slot = 0) {
+    const state = this.slotState(slot);
+    state.connected = Boolean(connected);
+
+    if (connected) {
+      state.input = stoppedInput();
+      state.handSeq = -1;
+      state.handEpoch = 0;
+      const wasConnected = this.connected;
+      this.maybeSwapPrimary();
+      if (slot === this.primarySlotId) {
+        if (!wasConnected) {
+          this.input = stoppedInput();
+          this.pendingViewDelta = { yaw: 0, pitch: 0 };
+          this.resetHandOrdering();
+        }
+        this.startRtcOffer(slot);
+        this.dispatchEvent(new CustomEvent("peer", { detail: { connected: true, slot } }));
+      }
+      return;
+    }
+
+    const wasPrimary = this.primarySlotId === slot;
+    state.connected = false;
+    state.input = {
+      ...state.input,
+      move: { x: 0, y: 0 },
+      viewDelta: { yaw: 0, pitch: 0 },
+      clutch: false,
+      crouch: false,
+    };
+    state.handSeq = -1;
+    state.handEpoch = 0;
+    this.closePeerConnection(slot);
+    this.maybeSwapPrimary();
+    if (wasPrimary || this.primarySlotId === null) {
       this.input = {
         ...this.input,
         move: { x: 0, y: 0 },
@@ -131,40 +246,67 @@ export class PhoneSession extends EventTarget {
       };
       this.pendingViewDelta = { yaw: 0, pitch: 0 };
       this.resetHandOrdering();
+      this.dispatchEvent(new CustomEvent("peer", { detail: { connected: false, slot } }));
     }
-    this.dispatchEvent(new CustomEvent("peer", { detail: { connected } }));
-    if (connected) this.startRtcOffer();
-    else this.closePeerConnection();
   }
 
-  createPeerConnection() {
+  setAllPeersDisconnected() {
+    for (const slot of [...this.slotStates.keys()]) {
+      this.closePeerConnection(slot);
+      this.slotState(slot).connected = false;
+    }
+    this.primarySlotId = null;
+    this.connected = false;
+    this.input = {
+      ...this.input,
+      move: { x: 0, y: 0 },
+      viewDelta: { yaw: 0, pitch: 0 },
+      clutch: false,
+      crouch: false,
+    };
+    this.pendingViewDelta = { yaw: 0, pitch: 0 };
+    this.resetHandOrdering();
+    this.syncPrimaryMirrors();
+    this.dispatchEvent(new CustomEvent("peer", { detail: { connected: false } }));
+  }
+
+  createPeerConnection(slot) {
     if (typeof RTCPeerConnection === "undefined") return null;
-    this.closePeerConnection();
+    this.closePeerConnection(slot);
     const peer = new RTCPeerConnection();
+    const state = this.slotState(slot);
     peer.onicecandidate = ({ candidate }) => {
-      if (candidate) this.socket?.emit(EVENTS.rtcSignal, { candidate });
+      if (candidate) this.socket?.emit(EVENTS.rtcSignal, { slot, candidate });
     };
     peer.onconnectionstatechange = () => {
-      if (peer.connectionState === "failed") this.closePeerConnection();
+      if (peer.connectionState === "failed") this.closePeerConnection(slot);
     };
-    this.peerConnection = peer;
+    state.peerConnection = peer;
+    if (slot === this.effectivePrimarySlot()) this.peerConnection = peer;
     return peer;
   }
 
-  attachDataChannel(channel) {
+  attachDataChannel(channel, slot = 0) {
     const isControls = !channel?.label || channel.label === "controls";
     const isHand = channel?.label === "hand";
     const isVoice = channel?.label === "voice";
     if (!isControls && !isHand && !isVoice) return;
-    if (isHand) this.handChannel = channel;
-    else if (isVoice) this.voiceChannel = channel;
-    else this.dataChannel = channel;
+    const state = this.slotState(slot);
+    if (isHand) state.handChannel = channel;
+    else if (isVoice) state.voiceChannel = channel;
+    else state.dataChannel = channel;
+    if (slot === this.effectivePrimarySlot()) {
+      if (isHand) this.handChannel = channel;
+      else if (isVoice) this.voiceChannel = channel;
+      else this.dataChannel = channel;
+    }
     channel.onclose = () => {
       if (isHand) {
-        if (this.handChannel === channel) this.handChannel = null;
+        if (state.handChannel === channel) state.handChannel = null;
       } else if (isVoice) {
-        if (this.voiceChannel === channel) this.voiceChannel = null;
-      } else if (this.dataChannel === channel) this.dataChannel = null;
+        if (state.voiceChannel === channel) state.voiceChannel = null;
+      } else if (state.dataChannel === channel) state.dataChannel = null;
+      if (slot === this.effectivePrimarySlot()) this.syncPrimaryMirrors();
     };
     channel.onmessage = ({ data }) => {
       if (isVoice) {
@@ -182,9 +324,11 @@ export class PhoneSession extends EventTarget {
       try {
         const message = JSON.parse(data);
         if (isControls) {
-          if (message?.type === "input") this.acceptInput(message.payload);
+          if (message?.type === "input" && slot === this.effectivePrimarySlot()) {
+            this.acceptInput(message.payload, slot);
+          }
         } else if (message?.type === "hand") {
-          this.acceptHandFrame(message.payload);
+          this.acceptHandFrame(message.payload, slot);
         }
       } catch {
         // Ignore malformed peer messages; Socket.IO remains the fallback.
@@ -192,54 +336,63 @@ export class PhoneSession extends EventTarget {
     };
   }
 
-  async startRtcOffer() {
-    const peer = this.createPeerConnection();
+  async startRtcOffer(slot = 0) {
+    const peer = this.createPeerConnection(slot);
     if (!peer) return;
     try {
       // Movement and view packets are disposable state snapshots. Dropping a
       // late packet is preferable to retransmitting it and making controls
       // feel delayed after a brief network hiccup.
-      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false, maxRetransmits: 0 }));
-      this.attachDataChannel(peer.createDataChannel("hand", { ordered: false, maxRetransmits: 0 }));
-      this.attachDataChannel(peer.createDataChannel("voice", { ordered: true }));
+      this.attachDataChannel(peer.createDataChannel("controls", { ordered: false, maxRetransmits: 0 }), slot);
+      this.attachDataChannel(peer.createDataChannel("hand", { ordered: false, maxRetransmits: 0 }), slot);
+      this.attachDataChannel(peer.createDataChannel("voice", { ordered: true }), slot);
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      this.socket?.emit(EVENTS.rtcSignal, { description: peer.localDescription });
+      this.socket?.emit(EVENTS.rtcSignal, { slot, description: peer.localDescription });
     } catch {
-      this.closePeerConnection();
+      this.closePeerConnection(slot);
     }
   }
 
   async handleRtcSignal(signal) {
-    const peer = this.peerConnection;
+    const slot = Number.isInteger(signal?.slot) ? signal.slot : 0;
+    const state = this.slotState(slot);
+    const peer = state.peerConnection;
     if (!peer) return;
     try {
       if (signal?.description) {
         await peer.setRemoteDescription(signal.description);
-        for (const candidate of this.pendingCandidates.splice(0)) await peer.addIceCandidate(candidate);
+        for (const candidate of state.pendingCandidates.splice(0)) await peer.addIceCandidate(candidate);
       } else if (signal?.candidate) {
         if (peer.remoteDescription) await peer.addIceCandidate(signal.candidate);
-        else this.pendingCandidates.push(signal.candidate);
+        else state.pendingCandidates.push(signal.candidate);
       }
     } catch {
-      this.closePeerConnection();
+      this.closePeerConnection(slot);
     }
   }
 
-  closePeerConnection() {
-    const controls = this.dataChannel;
-    const hand = this.handChannel;
-    const voice = this.voiceChannel;
-    controls?.close?.();
-    if (hand && hand !== controls) hand.close?.();
-    if (voice && voice !== controls && voice !== hand) voice.close?.();
-    this.peerConnection?.close?.();
-    this.dataChannel = null;
-    this.handChannel = null;
-    this.voiceChannel = null;
-    this.peerConnection = null;
-    this.pendingCandidates = [];
-    this.resetHandOrdering();
+  closePeerConnection(slot) {
+    const state = this.slotStates.get(slot);
+    if (!state) return;
+    state.dataChannel?.close?.();
+    if (state.handChannel && state.handChannel !== state.dataChannel) state.handChannel.close?.();
+    if (state.voiceChannel && state.voiceChannel !== state.dataChannel && state.voiceChannel !== state.handChannel) {
+      state.voiceChannel.close?.();
+    }
+    state.peerConnection?.close?.();
+    state.dataChannel = null;
+    state.handChannel = null;
+    state.voiceChannel = null;
+    state.peerConnection = null;
+    state.pendingCandidates = [];
+    if (slot === this.effectivePrimarySlot()) {
+      this.peerConnection = null;
+      this.dataChannel = null;
+      this.handChannel = null;
+      this.voiceChannel = null;
+      this.pendingCandidates = [];
+    }
   }
 
   currentInput(maxAgeMs = 500) {
@@ -267,7 +420,7 @@ export class PhoneSession extends EventTarget {
   }
 
   destroy() {
-    this.closePeerConnection();
+    for (const slot of [...this.slotStates.keys()]) this.closePeerConnection(slot);
     this.socket?.disconnect();
   }
 }

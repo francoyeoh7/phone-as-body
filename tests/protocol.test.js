@@ -694,3 +694,121 @@ describe("multi-controller protocol", () => {
     expect(protocol.isSlot("0")).toBe(false);
   });
 });
+
+describe("phone session multi-slot", () => {
+  function inputEnvelope(seq, overrides = {}) {
+    return {
+      seq,
+      sentAt: 100,
+      move: { x: 0, y: 1 },
+      viewDelta: { yaw: 1, pitch: 0 },
+      clutch: false,
+      ...overrides,
+    };
+  }
+
+  it("drives the primary session from the lowest connected slot", () => {
+    const session = new PhoneSession();
+    const received = [];
+    session.addEventListener("input", (event) => received.push(event.detail));
+
+    session.setPeerConnected(true, 1);
+    session.acceptInput(inputEnvelope(1), 1);
+    expect(received).toHaveLength(1);
+    expect(session.currentInput(10_000)).toMatchObject({ seq: 1 });
+
+    session.setPeerConnected(true, 0);
+    session.acceptInput(inputEnvelope(2), 0);
+    expect(session.currentInput(10_000)).toMatchObject({ seq: 2 });
+
+    session.setPeerConnected(false, 0);
+    session.acceptInput(inputEnvelope(3), 1);
+    expect(session.currentInput(10_000)).toMatchObject({ seq: 3 });
+  });
+
+  it("keeps slot state independent and reuses the primary api", () => {
+    const session = new PhoneSession();
+    session.setPeerConnected(true, 0);
+    session.setPeerConnected(true, 1);
+
+    session.acceptInput(inputEnvelope(7), 1);
+    expect(session.currentInput(10_000).seq).toBe(-1);
+
+    session.setPeerConnected(false, 0);
+    session.acceptInput(inputEnvelope(8), 1);
+    expect(session.currentInput(10_000).seq).toBe(8);
+  });
+
+  it("reports occupied slots", () => {
+    const session = new PhoneSession();
+    session.setPeerConnected(true, 2);
+    session.setPeerConnected(true, 0);
+    expect(session.slots()).toEqual([0, 2]);
+    session.setPeerConnected(false, 2);
+    expect(session.slots()).toEqual([0]);
+  });
+
+  it("emits peer events with slot detail on primary changes", () => {
+    const session = new PhoneSession();
+    const peers = [];
+    session.addEventListener("peer", (event) => peers.push(event.detail));
+
+    session.setPeerConnected(true, 0);
+    session.setPeerConnected(true, 1);
+    session.setPeerConnected(false, 0);
+
+    expect(peers).toEqual([
+      { connected: true, slot: 0 },
+      { connected: false, slot: 0 },
+    ]);
+  });
+
+  it("parses slot envelopes from the socket layer", () => {
+    const listeners = new Map();
+    socketIoMock.mockReturnValue({
+      on: vi.fn((name, listener) => listeners.set(name, listener)),
+      emit: vi.fn(),
+      disconnect: vi.fn(),
+    });
+    vi.stubGlobal("window", { setInterval: vi.fn() });
+    const session = new PhoneSession();
+    session.start();
+
+    const inputs = [];
+    session.addEventListener("input", (event) => inputs.push(event.detail));
+
+    listeners.get(protocol.EVENTS.peerStatus)({ connected: true, slot: 1 });
+    listeners.get(protocol.EVENTS.controllerInput)({ slot: 1, input: inputEnvelope(4) });
+    listeners.get(protocol.EVENTS.controllerHand)({ slot: 1, frame: { version: 1, seq: 1, capturedAt: 1, modeEpoch: 0, state: "lost", reason: "t" } });
+
+    expect(inputs).toHaveLength(1);
+    expect(session.currentInput(10_000)).toMatchObject({ seq: 4 });
+    vi.unstubAllGlobals();
+  });
+
+  it("appends the room key to the controller url", async () => {
+    const listeners = new Map();
+    socketIoMock.mockReturnValue({
+      on: vi.fn((name, listener) => listeners.set(name, listener)),
+      emit: vi.fn((event, payloadOrAcknowledge, maybeAcknowledge) => {
+        const acknowledge = typeof payloadOrAcknowledge === "function" ? payloadOrAcknowledge : maybeAcknowledge;
+        if (event === protocol.EVENTS.desktopCreate && typeof acknowledge === "function") {
+          acknowledge({ ok: true, code: "123456", secret: "abcdEFGH12345678" });
+        }
+      }),
+      disconnect: vi.fn(),
+    });
+    vi.stubGlobal("window", { setInterval: vi.fn() });
+    vi.stubGlobal("location", { origin: "http://localhost:4174" });
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ json: () => Promise.resolve({}) })));
+
+    const session = new PhoneSession();
+    const rooms = [];
+    session.addEventListener("room", (event) => rooms.push(event.detail));
+    session.start();
+    listeners.get("connect")();
+    await vi.waitFor(() => expect(rooms).toHaveLength(1));
+    expect(rooms[0].url).toBe("http://localhost:4174/controller?room=123456&k=abcdEFGH12345678");
+    vi.unstubAllGlobals();
+  });
+});
