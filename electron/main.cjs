@@ -2,19 +2,36 @@ const { app, BrowserWindow } = require("electron");
 const { fork, spawn } = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
+const fs = require("node:fs");
+
+const debugLogFile = path.join(process.env.LOCALAPPDATA || __dirname, "pab-debug.log");
+function debugLog(line) {
+  try {
+    fs.appendFileSync(debugLogFile, `${new Date().toISOString()} ${line}\n`);
+  } catch { /* ignore */ }
+}
+debugLog(`boot execPath=${process.execPath} argv=${JSON.stringify(process.argv)} runAsNode=${process.env.ELECTRON_RUN_AS_NODE ?? "<unset>"} cwd=${process.cwd()}`);
 
 // 机器环境可能全局设置了 ELECTRON_RUN_AS_NODE（VS Code 等工具的常见副作用），
 // 它会让 Electron 以纯 Node 模式启动并导致 app 为 undefined。
 // 检测到时剥离该变量后重新拉起自身。
+// 注意：cwd 必须指向真实存在的目录（安装器拉起时进程 cwd 可能是已被删除的
+// 临时目录，会让 spawn 报 ENOENT）。
 if (process.env.ELECTRON_RUN_AS_NODE) {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  debugLog(`relaunch without ELECTRON_RUN_AS_NODE, spawn=${process.execPath}`);
   const relaunched = spawn(process.execPath, process.argv.slice(1), {
+    cwd: path.dirname(process.execPath),
     env,
     detached: true,
     stdio: "inherit",
   });
-  relaunched.on("exit", (code) => process.exit(code ?? 0));
+  relaunched.on("error", (error) => debugLog(`relaunch spawn error: ${error.message}`));
+  relaunched.on("exit", (code) => {
+    debugLog(`relaunch exit ${code}`);
+    process.exit(code ?? 0);
+  });
 } else {
 
 const SERVER_PORT = Number(process.env.PORT) || 4174;
@@ -28,11 +45,13 @@ let serverChild = null;
 let restartAttempts = 0;
 let quitting = false;
 
-const rootDir = path.join(__dirname, "..");
+  const rootDir = path.join(__dirname, "..");
 
-function startServer() {
-  serverChild = fork(path.join(rootDir, "server", "index.js"), [], {
-    cwd: rootDir,
+  function startServer() {
+    debugLog(`startServer fork ${path.join(rootDir, "server", "index.js")} cwd=${app.isPackaged ? path.dirname(process.execPath) : rootDir}`);
+    serverChild = fork(path.join(rootDir, "server", "index.js"), [], {
+      // cwd 不能用 rootDir：打包后它在 app.asar 内部，不是真实目录
+      cwd: app.isPackaged ? path.dirname(process.execPath) : rootDir,
     execPath: process.execPath,
     env: {
       ...process.env,
@@ -46,14 +65,15 @@ function startServer() {
   });
   serverChild.stdout.on("data", (chunk) => process.stdout.write(`[server] ${chunk}`));
   serverChild.stderr.on("data", (chunk) => process.stderr.write(`[server] ${chunk}`));
-  serverChild.on("exit", () => {
-    serverChild = null;
-    if (quitting || restartAttempts >= MAX_RESTARTS) return;
-    restartAttempts += 1;
-    const delay = Math.min(1000 * 2 ** restartAttempts, 15_000);
-    setTimeout(startServer, delay);
-  });
-}
+    serverChild.on("exit", (code, signal) => {
+      debugLog(`server child exit code=${code} signal=${signal}`);
+      serverChild = null;
+      if (quitting || restartAttempts >= MAX_RESTARTS) return;
+      restartAttempts += 1;
+      const delay = Math.min(1000 * 2 ** restartAttempts, 15_000);
+      setTimeout(startServer, delay);
+    });
+  }
 
 function waitForServer(timeoutMs = SERVER_READY_TIMEOUT_MS) {
   const startedAt = Date.now();
@@ -108,11 +128,15 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    debugLog("app ready, starting server");
     startServer();
     try {
       await waitForServer();
+      debugLog("server ready, creating window");
       await createWindow();
+      debugLog("window created");
     } catch (error) {
+      debugLog(`startup failed: ${error.message}`);
       console.error(error);
       app.quit();
     }
