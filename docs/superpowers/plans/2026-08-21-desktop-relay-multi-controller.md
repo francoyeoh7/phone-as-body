@@ -19,6 +19,8 @@
 - 云中继事件契约：`relayRegister` / `relayUnregister` / `relay:c2d` / `relay:d2c`（见 Task 7 接口定义）
 - 仓库已克隆在 `d:\gamejam\phone-as-body`；所有路径相对该根目录
 - git 提交者身份未配置：执行第一个任务前先运行 `git config user.name "francoyeoh7"` 和 `git config user.email "francoyeoh7@users.noreply.github.com"`（本仓库本地配置，勿 --global；若用户另有邮箱以用户为准）
+- **用户纪律（最高优先）**：全部工作在 `desktop-relay-multi` 分支，禁止 push `main`、禁止 force push；每完成一个任务立即 commit，每完成 2-3 个任务 push 一次分支到 origin 作备份
+- **延迟要求（用户明确）**：陀螺仪视角与手势识别必须灵敏。同 WiFi 时高频数据必须走 WebRTC 局域网直连（不经云）；跨网络时允许走云中继兜底
 
 ## 文件地图（谁负责什么）
 
@@ -1724,6 +1726,21 @@ export function ensureDeviceToken(storage) {
     const peer = new RTCPeerConnection({
       iceServers: [{ urls: ["stun:stun.qq.com:3478", "stun.l.google.com:19302"] }],
     });
+```
+
+(d) `sendHandFrame(frame)` 中 `this.socket.emit(EVENTS.controllerHand, frame);` 改为（手势帧优先走 P2P 通道，降低经云延迟；帧自带 `seq`/`modeEpoch`，桌面端 `acceptHandFrame` 已有防乱序/防陈旧保护）：
+
+```js
+    // Prefer the peer-to-peer hand channel: through the cloud relay the
+    // socket path adds a full round trip. Frames carry seq/modeEpoch, and the
+    // desktop drops stale or reordered frames, so the unreliable channel is
+    // safe for this state stream.
+    if (this.handChannel?.readyState === "open") {
+      this.handChannel.send(JSON.stringify({ type: "hand", payload: frame }));
+      return true;
+    }
+    this.socket.emit(EVENTS.controllerHand, frame);
+    return true;
 ```
 
 **`src/controller/styles.css`** 末尾追加：
