@@ -141,6 +141,14 @@ npm run verify:village
 - `Space`：守门阶段的按住/松开后备输入
 - `Escape`：暂停或继续游戏
 
+## 桌面安装包与云中继
+
+- `npm run dist:win` 产出 Windows NSIS 安装包（`release/phone-as-body-Setup-<version>.exe`），游戏与资源全部本地化，启动即玩。
+- 安装包默认把二维码指向云中继 `https://play.tokenxapp.com:8443`；手机扫码后经云端隧道接管，电脑与手机同 WiFi 时高频输入（陀螺仪视角与手势帧）仍走 WebRTC 局域网直连。
+- 云中继部署见 `relay/README.md`（腾讯云 + acme.sh DNS-01 + pm2，非标端口 8443 规避备案墙）。
+- 会话层支持最多 8 个手柄（P1-P8 槽位徽标显示），断线凭设备令牌找回原槽位；当前单人游戏绑定主手柄（最小已连接槽位）。
+- 开发调试：`npm run electron:dev`；覆盖默认云端地址用环境变量 `RELAY_URL` / `PUBLIC_CONTROLLER_ORIGIN`。
+
 ## 项目状态
 
 当前版本已经打通桌面端游戏、手机控制器、手部追踪、道具栏、NPC 对话、剧情门和场内演示文稿。固定域名部署与服务器托管将作为独立发布步骤推进，不依赖临时隧道地址。
