@@ -64,6 +64,13 @@ export function createDesktopUI(root) {
       </div>
 
       <div class="objective" id="objective"><span>当前目标</span><strong>寻找备用保险丝</strong></div>
+      <div class="game-status" id="game-status" hidden>
+        <div class="game-status-row"><span>金币</span><strong id="game-status-coins">0</strong></div>
+        <div class="game-status-row"><span>零件</span><strong id="game-status-parts">0</strong></div>
+        <div class="game-status-row"><span>回合</span><strong id="game-status-round">1/3</strong></div>
+        <div class="game-status-row"><span>存活</span><strong id="game-status-alive">5</strong></div>
+        <div class="game-status-row"><span>剩余</span><strong id="game-status-timer">--:--</strong></div>
+      </div>
       <div class="reticle" id="reticle"><span></span></div>
       <div class="interaction-prompt" id="interaction-prompt" hidden><kbd>E</kbd><span></span></div>
       <div class="subtitle" id="subtitle" hidden></div>
@@ -100,58 +107,45 @@ export function createDesktopUI(root) {
       </section>
 
       <section class="menu-overlay" id="menu-overlay" hidden>
+        <div class="menu-glow" aria-hidden="true"></div>
         <div class="menu-comp">
           <header class="menu-brand">
             <span class="menu-brand-en">PHONE AS BODY</span>
-            <span class="menu-brand-rule" aria-hidden="true"></span>
+            <span class="menu-brand-rule"></span>
             <span class="menu-brand-cn">手机即身体</span>
           </header>
 
           <div class="menu-hero">
             <h1 class="menu-title">小镇</h1>
-            <p class="menu-lede">大屏是身体，手机是四肢。创建房间，或输入房号加入。</p>
+            <p class="menu-tagline">大屏是身体 · 手机是四肢</p>
+            <p class="menu-lede">创建房间，或输入房号加入朋友的局</p>
           </div>
 
           <nav class="menu-list">
-            <button class="menu-item" id="menu-create" type="button">
-              <span class="menu-item-index">01</span>
-              <span class="menu-item-body">
-                <span class="menu-item-label">创建游戏</span>
-                <span class="menu-item-sub">CREATE</span>
-              </span>
-              <span class="menu-item-tick" aria-hidden="true"></span>
-            </button>
-            <div class="menu-item menu-item--join">
-              <span class="menu-item-index">02</span>
-              <div class="menu-join">
-                <input id="menu-join-code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="输入房号" aria-label="房号">
-                <button class="menu-join-go" id="menu-join" type="button">加入<em>JOIN</em></button>
-              </div>
+            <button class="menu-cta" id="menu-create" type="button">创建游戏</button>
+            <div class="menu-join">
+              <input id="menu-join-code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="输入房号" aria-label="房号">
+              <button class="menu-join-go" id="menu-join" type="button">加入游戏</button>
             </div>
-            <button class="menu-item menu-item--ghost" id="menu-solo" type="button">
-              <span class="menu-item-index">03</span>
-              <span class="menu-item-body">
-                <span class="menu-item-label">键鼠单人</span>
-                <span class="menu-item-sub">SOLO</span>
-              </span>
-            </button>
+            <button class="menu-ghost" id="menu-solo" type="button">键鼠单人</button>
           </nav>
 
           <p class="menu-note" id="menu-note" aria-live="polite"></p>
         </div>
         <footer class="menu-foot">
-          <span>PLAY.TOKENXAPP.COM</span>
-          <span>V 0.1</span>
+          <span>play.tokenxapp.com</span>
+          <span>v 0.1</span>
         </footer>
       </section>
 
       <section class="lobby-overlay" id="lobby-overlay" hidden>
+        <div class="lobby-glow" aria-hidden="true"></div>
         <div class="lobby-comp">
           <header class="lobby-head">
             <div class="lobby-eyebrow">
               <span>小镇</span>
               <span class="lobby-eyebrow-rule" aria-hidden="true"></span>
-              <span>TOWN</span>
+              <span>LOBBY</span>
             </div>
             <h2 class="lobby-code" id="lobby-room-code">——————</h2>
             <p class="lobby-sub">其他电脑 · 加入游戏 · 输入此房号</p>
@@ -214,6 +208,12 @@ export function createDesktopUI(root) {
     sceneRetryButton: root.querySelector("#scene-retry-button"),
     connection: root.querySelector(".desktop-connection"),
     objective: root.querySelector("#objective strong"),
+    gameStatus: root.querySelector("#game-status"),
+    gameStatusCoins: root.querySelector("#game-status-coins"),
+    gameStatusParts: root.querySelector("#game-status-parts"),
+    gameStatusRound: root.querySelector("#game-status-round"),
+    gameStatusAlive: root.querySelector("#game-status-alive"),
+    gameStatusTimer: root.querySelector("#game-status-timer"),
     reticle: root.querySelector("#reticle"),
     prompt: root.querySelector("#interaction-prompt"),
     promptLabel: root.querySelector("#interaction-prompt span"),
@@ -318,6 +318,21 @@ export function createDesktopUI(root) {
     },
     setObjective(text) {
       elements.objective.textContent = text;
+    },
+    setGameStatus(status = null) {
+      if (!status) {
+        elements.gameStatus.hidden = true;
+        return;
+      }
+      elements.gameStatus.hidden = false;
+      elements.gameStatusCoins.textContent = String(status.coins ?? 0);
+      elements.gameStatusParts.textContent = String(status.parts ?? 0);
+      elements.gameStatusRound.textContent = `${status.round ?? 1}/${status.rounds ?? 3}`;
+      elements.gameStatusAlive.textContent = String(status.alive ?? 0);
+      const seconds = status.secondsLeft;
+      elements.gameStatusTimer.textContent = Number.isFinite(seconds)
+        ? `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+        : "--:--";
     },
     setPrompt(text) {
       elements.prompt.hidden = !text;
