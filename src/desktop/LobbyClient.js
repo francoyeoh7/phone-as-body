@@ -77,9 +77,14 @@ export class LobbyClient extends EventTarget {
     const socket = await this.#ensureSocket();
     if (!socket) return { ok: false, reason: "cloud-unavailable" };
     return new Promise((resolve) => {
-      socket.timeout(ACK_TIMEOUT_MS).emit(event, payload, (error, responses) => {
-        if (error) resolve({ ok: false, reason: "timeout" });
-        else resolve(responses?.[0] ?? { ok: false, reason: "no-ack" });
+      socket.timeout(ACK_TIMEOUT_MS).emit(event, payload, (error, response) => {
+        if (error) {
+          resolve({ ok: false, reason: "timeout" });
+          return;
+        }
+        // socket.io 的 ack 可能是单值（普通 emit）或数组（广播），两种都兼容
+        const result = Array.isArray(response) ? response[0] : response;
+        resolve(result ?? { ok: false, reason: "no-ack" });
       });
     });
   }

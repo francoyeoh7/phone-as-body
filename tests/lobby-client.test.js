@@ -55,7 +55,7 @@ describe("lobby client", () => {
           state: "lobby",
           players: [{ socketId: "socket-1", name: "主机", isHost: true }],
         });
-        acknowledge(null, [{ ok: true, code: "424242" }]);
+        acknowledge(null, { ok: true, code: "424242" });
       }
     });
     const client = new LobbyClient({ fetchImpl: configFetch("https://play.tokenxapp.com:8443"), ioImpl: socketIoMock });
@@ -74,7 +74,7 @@ describe("lobby client", () => {
     mockIo(socket);
     socket.emit = vi.fn((event, payload, acknowledge) => {
       if (event === LOBBY_EVENTS.create && typeof acknowledge === "function") {
-        acknowledge(null, [{ ok: true, code: "424242" }]);
+        acknowledge(null, { ok: true, code: "424242" });
       }
     });
     const client = new LobbyClient({ fetchImpl: configFetch("https://cloud"), ioImpl: socketIoMock });
@@ -101,7 +101,7 @@ describe("lobby client", () => {
     mockIo(socket);
     socket.emit = vi.fn((event, payload, acknowledge) => {
       if (typeof acknowledge === "function") {
-        acknowledge(null, [{ ok: false, reason: "lobby-not-found" }]);
+        acknowledge(null, { ok: false, reason: "lobby-not-found" });
       }
     });
     const client = new LobbyClient({ fetchImpl: configFetch("https://cloud"), ioImpl: socketIoMock });
