@@ -108,7 +108,7 @@ export function createDesktopUI(root) {
           </header>
 
           <div class="menu-hero">
-            <h1 class="menu-title">入夜，<br>身体交给手机。</h1>
+            <h1 class="menu-title">小镇</h1>
             <p class="menu-lede">大屏是身体，手机是四肢。创建房间，或输入房号加入。</p>
           </div>
 
