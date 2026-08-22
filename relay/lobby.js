@@ -24,7 +24,7 @@ export function createLobbyRegistry({
     lobbies.set(code, {
       code,
       state: "lobby",
-      players: [{ socketId: hostSocketId, name: String(name || "主机"), isHost: true }],
+      players: [{ socketId: hostSocketId, name: String(name || "电脑1"), isHost: true }],
     });
     return { code };
   }

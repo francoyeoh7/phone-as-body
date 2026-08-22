@@ -15,6 +15,10 @@ import { InventoryState } from "./InventoryState.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { EnvironmentLoadError } from "./environment/EnvironmentLoader.js";
+import {
+  ENVIRONMENT_DEFAULT_QUALITY,
+  ENVIRONMENT_QUALITY_LEVELS,
+} from "./environment/manifest.js";
 import { createDesktopUI } from "./ui.js";
 import { createDesktopNpcRuntime, transcribeVoiceClip } from "./npc/DesktopNpcRuntime.js";
 import "./styles.css";
@@ -37,6 +41,23 @@ function isLocalVillageChunk(error) {
   } catch {
     return false;
   }
+}
+
+const ENVIRONMENT_QUALITY_STORAGE_KEY = "corridor617-environment-quality";
+
+function readStoredEnvironmentQuality() {
+  try {
+    const stored = globalThis.localStorage?.getItem?.(ENVIRONMENT_QUALITY_STORAGE_KEY);
+    return ENVIRONMENT_QUALITY_LEVELS.includes(stored) ? stored : ENVIRONMENT_DEFAULT_QUALITY;
+  } catch {
+    return ENVIRONMENT_DEFAULT_QUALITY;
+  }
+}
+
+function writeStoredEnvironmentQuality(quality) {
+  try {
+    globalThis.localStorage?.setItem?.(ENVIRONMENT_QUALITY_STORAGE_KEY, quality);
+  } catch { /* storage unavailable */ }
 }
 
 function chunkLoadMessage(error) {
@@ -130,6 +151,8 @@ export class DesktopApp {
       if (this.started && document.hidden) this.setPaused(true);
     };
     this.handlePageHide = () => this.destroy();
+    this.environmentQuality = readStoredEnvironmentQuality();
+    this.environmentQualitySwitching = null;
     this.handleFallbackKeyDown = this.handleFallbackKeyDown.bind(this);
     this.handleFallbackKeyUp = this.handleFallbackKeyUp.bind(this);
     this.handleWindowBlur = this.handleWindowBlur.bind(this);
@@ -278,12 +301,16 @@ export class DesktopApp {
     const elements = this.ui.elements;
     elements.lobbyRoomCode.textContent = state.code;
     const selfId = this.lobby?.selfSocketId;
-    elements.lobbyPlayers.innerHTML = state.players.map((player) => {
+    elements.lobbyPlayers.innerHTML = state.players.map((player, index) => {
       const safeName = String(player.name).replace(/[<>&"]/g, "");
       const tags = [];
-      if (player.isHost) tags.push('<span class="lobby-tag">主机</span>');
-      if (player.socketId === selfId) tags.push("<em>本机</em>");
-      return `<li class="${player.isHost ? "host" : ""}">${safeName}${tags.join("")}</li>`;
+      if (player.isHost) tags.push('<span class="lobby-row-tag">主机</span>');
+      if (player.socketId === selfId) tags.push('<span class="lobby-row-self">本机</span>');
+      return `<li class="lobby-row${player.isHost ? " is-host" : ""}">`
+        + `<span class="lobby-row-index">${String(index + 1).padStart(2, "0")}</span>`
+        + `<span class="lobby-row-name">${safeName}</span>`
+        + `<span class="lobby-row-tags">${tags.join("")}</span>`
+        + "</li>";
     }).join("");
   }
 
@@ -382,6 +409,7 @@ export class DesktopApp {
     try {
       experience = await createScene(this.ui.elements.sceneHost, {
         signal: attempt.controller.signal,
+        environmentQuality: this.environmentQuality,
       });
       if (!this.ownsSceneStart(attempt)) {
         this.disposeScene(experience);
@@ -518,6 +546,42 @@ export class DesktopApp {
     }
   }
 
+  async setEnvironmentQuality(quality) {
+    if (this.destroyed) return this.environmentQuality;
+    if (!ENVIRONMENT_QUALITY_LEVELS.includes(quality)) return this.environmentQuality;
+    if (quality === this.environmentQuality && !this.environmentQualitySwitching) return this.environmentQuality;
+    if (this.environmentQualitySwitching) await this.environmentQualitySwitching.catch(() => null);
+    if (quality === this.environmentQuality) return this.environmentQuality;
+    const previousQuality = this.environmentQuality;
+    this.environmentQuality = quality;
+    writeStoredEnvironmentQuality(quality);
+    if (!this.experience?.setEnvironmentQuality) return quality;
+    const attempt = (async () => {
+      this.ui.showLoading(true);
+      try {
+        await this.experience.setEnvironmentQuality(quality);
+        return quality;
+      } finally {
+        this.ui.showLoading(false);
+      }
+    })();
+    this.environmentQualitySwitching = attempt;
+    try {
+      return await attempt;
+    } catch (error) {
+      console.error("Failed to switch environment quality:", error);
+      if (this.environmentQuality === quality) {
+        this.environmentQuality = previousQuality;
+        writeStoredEnvironmentQuality(previousQuality);
+      }
+      const presentation = classifySceneError(error);
+      if (presentation.code !== "aborted") this.ui.showSceneError?.(presentation);
+      return previousQuality;
+    } finally {
+      if (this.environmentQualitySwitching === attempt) this.environmentQualitySwitching = null;
+    }
+  }
+
   handlePhoneAction(payload = {}) {
     if (this.destroyed) return;
     const { action, settings } = payload;
@@ -549,6 +613,9 @@ export class DesktopApp {
       this.player?.setSettings(settings);
       this.director?.setSettings(settings);
       this.ui.elements.reticle.hidden = settings?.reticle === false;
+      if (ENVIRONMENT_QUALITY_LEVELS.includes(settings?.quality)) {
+        void this.setEnvironmentQuality(settings.quality);
+      }
     }
     if (action === "voice-recording") {
       const active = payload.active === true;
