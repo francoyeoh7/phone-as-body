@@ -161,6 +161,7 @@ export class ControllerApp {
     this.root = root;
     const parameters = new URLSearchParams(location.search);
     this.room = parameters.get("room") ?? "";
+    this.roomKey = parameters.get("k") ?? null;
     this.deviceToken = ensureDeviceToken(globalThis.localStorage);
     this.slot = null;
     this.preview = import.meta.env.DEV && parameters.has("preview");
@@ -367,6 +368,7 @@ export class ControllerApp {
     }
     this.socket = new ControllerSocket({
       room: this.room,
+      roomKey: this.roomKey,
       deviceToken: this.deviceToken,
       onStatus: (status, detail) => this.updateConnection(status, detail),
       onEvent: (event) => this.handleDesktopEvent(event),

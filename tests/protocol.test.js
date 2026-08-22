@@ -818,7 +818,7 @@ describe("phone session multi-slot", () => {
     vi.unstubAllGlobals();
   });
 
-  it("joins with the device token and records the acked slot", () => {
+  it("joins with the device token and room key, and records the acked slot", () => {
     const listeners = new Map();
     const emits = [];
     socketIoMock.mockReturnValue({
@@ -832,14 +832,14 @@ describe("phone session multi-slot", () => {
       disconnect: vi.fn(),
     });
     vi.stubGlobal("window", { setInterval: vi.fn() });
-    const socket = new ControllerSocket({ room: "617042", deviceToken: "token-aaaa" });
+    const socket = new ControllerSocket({ room: "617042", roomKey: "abcdEFGH12345678", deviceToken: "token-aaaa" });
     const statuses = [];
     socket.onStatus = (status, detail) => statuses.push({ status, detail });
     socket.connect();
     listeners.get("connect")();
 
     expect(emits[0]).toMatchObject({ event: protocol.EVENTS.controllerJoin });
-    expect(emits[0].payload).toEqual({ room: "617042", deviceToken: "token-aaaa" });
+    expect(emits[0].payload).toEqual({ room: "617042", k: "abcdEFGH12345678", deviceToken: "token-aaaa" });
     expect(socket.slot).toBe(2);
     expect(statuses[0]).toEqual({ status: "connecting", detail: undefined });
     expect(statuses[1]).toEqual({ status: "joined", detail: { slot: 2 } });

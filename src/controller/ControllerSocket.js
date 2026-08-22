@@ -7,8 +7,9 @@ import { EVENTS, isHandFrame, isVoiceClip, isVoiceStreamFrame } from "../shared/
 const INPUT_SEND_HZ = 30;
 
 export class ControllerSocket {
-  constructor({ room, deviceToken = null, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
+  constructor({ room, roomKey = null, deviceToken = null, onStatus, onEvent, onTelemetry, now = () => performance.now() }) {
     this.room = room;
+    this.roomKey = roomKey;
     this.deviceToken = deviceToken;
     this.slot = null;
     this.onStatus = onStatus;
@@ -47,7 +48,7 @@ export class ControllerSocket {
     this.socket = io({ transports: ["websocket", "polling"] });
 
     this.socket.on("connect", () => {
-      this.socket.emit(EVENTS.controllerJoin, { room: this.room, deviceToken: this.deviceToken }, (result) => {
+      this.socket.emit(EVENTS.controllerJoin, { room: this.room, k: this.roomKey, deviceToken: this.deviceToken }, (result) => {
         this.joined = Boolean(result?.ok);
         this.slot = Number.isInteger(result?.slot) ? result.slot : null;
         this.onStatus?.(this.joined ? "joined" : result?.reason ?? "join-failed", { slot: this.slot });
