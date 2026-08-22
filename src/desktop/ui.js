@@ -3,8 +3,11 @@ import {
   ChevronRight,
   createIcons,
   Keyboard,
+  LogIn,
   Mic,
   Package,
+  Play,
+  Plus,
   RotateCcw,
   ScanLine,
   Smartphone,
@@ -14,7 +17,7 @@ import {
   X,
 } from "lucide";
 
-const icons = { ChevronLeft, ChevronRight, Keyboard, Mic, Package, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff, X };
+const icons = { ChevronLeft, ChevronRight, Keyboard, LogIn, Mic, Package, Play, Plus, RotateCcw, ScanLine, Smartphone, Volume2, Wifi, WifiOff, X };
 const INVENTORY_WIDTH = 360;
 const INVENTORY_HEIGHT = 72;
 const INVENTORY_SLOT_SIZE = 52;
@@ -99,6 +102,46 @@ export function createDesktopUI(root) {
         </div>
       </section>
 
+      <section class="menu-overlay" id="menu-overlay" hidden>
+        <div class="menu-card">
+          <p class="desktop-eyebrow">手机即身体</p>
+          <h1>选择进入方式</h1>
+          <div class="menu-actions">
+            <button class="menu-button primary" id="menu-create" type="button"><i data-lucide="plus"></i><span>创建游戏</span></button>
+            <div class="menu-join">
+              <input id="menu-join-code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="输入 6 位房号" aria-label="房号">
+              <button class="menu-button" id="menu-join" type="button"><i data-lucide="log-in"></i><span>加入游戏</span></button>
+            </div>
+            <button class="menu-button ghost" id="menu-solo" type="button"><i data-lucide="keyboard"></i><span>键鼠单人开始</span></button>
+          </div>
+          <p class="menu-note" id="menu-note" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="lobby-overlay" id="lobby-overlay" hidden>
+        <div class="lobby-card">
+          <header class="lobby-head">
+            <p class="desktop-eyebrow">联机大厅</p>
+            <h2 class="lobby-code" id="lobby-room-code">------</h2>
+            <p class="lobby-sub">其他电脑：加入游戏 → 输入此房号</p>
+          </header>
+          <ul class="lobby-players" id="lobby-players" aria-live="polite"></ul>
+          <div class="lobby-actions">
+            <button class="menu-button primary" id="lobby-start" type="button" hidden><i data-lucide="play"></i><span>开始游戏</span></button>
+            <p class="lobby-waiting" id="lobby-waiting" hidden>等待房主开始游戏…</p>
+            <button class="menu-button ghost" id="lobby-leave" type="button"><i data-lucide="x"></i><span>退出大厅</span></button>
+          </div>
+          <p class="lobby-note" id="lobby-note" aria-live="polite"></p>
+        </div>
+        <div class="qr-panel">
+          <div class="qr-frame">
+            <div class="qr-loading"><i data-lucide="scan-line"></i></div>
+            <img id="lobby-qr" alt="手机控制器二维码" hidden>
+          </div>
+          <div class="room-row"><span>手机扫码接管</span><strong id="lobby-control-code">------</strong></div>
+        </div>
+      </section>
+
       <section class="loading-overlay" id="loading-overlay" hidden>
         <span class="loading-line"></span><p>走廊正在苏醒</p>
       </section>
@@ -145,6 +188,22 @@ export function createDesktopUI(root) {
     doorDefenseFill: root.querySelector(".door-defense-track > span"),
     loading: root.querySelector("#loading-overlay"),
     pause: root.querySelector("#pause-overlay"),
+    menuOverlay: root.querySelector("#menu-overlay"),
+    menuCreate: root.querySelector("#menu-create"),
+    menuJoin: root.querySelector("#menu-join"),
+    menuJoinCode: root.querySelector("#menu-join-code"),
+    menuSolo: root.querySelector("#menu-solo"),
+    menuNote: root.querySelector("#menu-note"),
+    lobbyOverlay: root.querySelector("#lobby-overlay"),
+    lobbyRoomCode: root.querySelector("#lobby-room-code"),
+    lobbyPlayers: root.querySelector("#lobby-players"),
+    lobbyStart: root.querySelector("#lobby-start"),
+    lobbyWaiting: root.querySelector("#lobby-waiting"),
+    lobbyLeave: root.querySelector("#lobby-leave"),
+    lobbyNote: root.querySelector("#lobby-note"),
+    lobbyQr: root.querySelector("#lobby-qr"),
+    lobbyQrLoading: root.querySelector("#lobby-overlay .qr-loading"),
+    lobbyControlCode: root.querySelector("#lobby-control-code"),
   };
   let inventoryItems = [];
   let playerTranscriptTimer = null;
@@ -193,6 +252,13 @@ export function createDesktopUI(root) {
       elements.qr.hidden = false;
       elements.qrLoading.hidden = true;
       elements.pairingStatus.innerHTML = "<span></span>打开手机相机扫描";
+      if (elements.lobbyQr) {
+        elements.lobbyQr.src = qrDataUrl;
+        elements.lobbyQr.dataset.controllerUrl = url;
+        elements.lobbyQr.hidden = false;
+        elements.lobbyQrLoading.hidden = true;
+        elements.lobbyControlCode.textContent = code;
+      }
     },
     setConnected(connected) {
       elements.connection.dataset.connected = String(connected);

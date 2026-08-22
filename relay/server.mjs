@@ -5,6 +5,7 @@ import { Server as SocketIOServer } from "socket.io";
 import { EVENTS } from "../src/shared/protocol.js";
 import { shouldServeSpaShell } from "../server/spa-fallback.js";
 import { createRoomRegistry } from "./rooms.js";
+import { createLobbyRegistry } from "./lobby.js";
 
 const MAX_VOICE_CLIP_BYTES = 1024 * 1024;
 const JOIN_ACK_TIMEOUT_MS = 5_000;
@@ -36,6 +37,7 @@ function rtcSignalSizeOk(payload) {
 
 export function createRelayServer({
   registry = createRoomRegistry(),
+  lobbies = createLobbyRegistry(),
   distDir,
   tls = null,
   maxHttpBufferSize = MAX_VOICE_CLIP_BYTES + 64 * 1024,
@@ -49,13 +51,45 @@ export function createRelayServer({
     response.sendFile(path.join(distDir, "index.html"));
   });
 
-  const io = new SocketIOServer({ serveClient: false, maxHttpBufferSize });
+  // 桌面端渲染进程跨源连接大厅（http://127.0.0.1:<port> → 云端）
+  const io = new SocketIOServer({ serveClient: false, maxHttpBufferSize, cors: { origin: true } });
+
+  function broadcastLobbyState(code) {
+    const state = lobbies.stateOf(code);
+    if (!state) return;
+    for (const player of state.players) io.to(player.socketId).emit("lobby:state", state);
+  }
+
+  function handleLobbyLeave(socket) {
+    const code = socket.data.lobbyCode;
+    if (!code) return;
+    socket.data.lobbyCode = null;
+    const stateBefore = lobbies.stateOf(code);
+    const remaining = stateBefore
+      ? stateBefore.players.filter((player) => player.socketId !== socket.id).map((player) => player.socketId)
+      : [];
+    const result = lobbies.leave(socket.id);
+    if (!result.ok) return;
+    if (result.ended) {
+      for (const socketId of remaining) {
+        io.to(socketId).emit("lobby:ended", { code, reason: "host-left" });
+      }
+    } else {
+      broadcastLobbyState(code);
+    }
+  }
 
   io.on("connection", (socket) => {
+    console.log(`[relay] socket connected ${socket.id}`);
+    socket.on("disconnect", () => {
+      console.log(`[relay] socket disconnected ${socket.id} role=${socket.data.role ?? "unknown"}`);
+    });
+
     socket.on("relayRegister", (payload, acknowledge) => {
       const code = payload?.code;
       const secret = payload?.secret;
       const ok = registry.register(code, secret, socket.id);
+      console.log(`[relay] relayRegister code=${code} secretLen=${typeof secret === "string" ? secret.length : "?"} ok=${ok}`);
       if (ok) {
         socket.data.roomCode = code;
         socket.data.role = "desktop";
@@ -77,11 +111,42 @@ export function createRelayServer({
       if (phoneSocketId) io.to(phoneSocketId).emit(message.event, message.payload);
     });
 
+    socket.on("lobby:create", (payload, acknowledge) => {
+      const created = lobbies.create(socket.id, payload?.name);
+      socket.data.lobbyCode = created.code;
+      broadcastLobbyState(created.code);
+      if (typeof acknowledge === "function") acknowledge({ ok: true, code: created.code });
+    });
+
+    socket.on("lobby:join", (payload, acknowledge) => {
+      const result = lobbies.join(payload?.code, socket.id, payload?.name);
+      if (result.ok) {
+        socket.data.lobbyCode = payload.code;
+        broadcastLobbyState(payload.code);
+      }
+      if (typeof acknowledge === "function") acknowledge(result);
+    });
+
+    socket.on("lobby:start", (payload, acknowledge) => {
+      const result = lobbies.start(payload?.code, socket.id);
+      if (result.ok) {
+        const state = lobbies.stateOf(payload.code);
+        for (const player of state.players) {
+          io.to(player.socketId).emit("lobby:started", { code: payload.code });
+        }
+      }
+      if (typeof acknowledge === "function") acknowledge(result);
+    });
+
+    socket.on("lobby:leave", () => handleLobbyLeave(socket));
+
     socket.on(EVENTS.controllerJoin, async (payload, acknowledge) => {
       const code = payload?.room;
       const key = payload?.k;
+      console.log(`[relay] controllerJoin code=${code} keyLen=${typeof key === "string" ? key.length : "missing"} deviceToken=${payload?.deviceToken ? "yes" : "no"}`);
       const room = registry.validate(code, key);
       if (!room) {
+        console.log(`[relay] join rejected: room-not-found`);
         if (typeof acknowledge === "function") acknowledge({ ok: false, reason: "room-not-found" });
         return;
       }
@@ -112,6 +177,7 @@ export function createRelayServer({
         );
       });
       if (!desktopAck.ok) registry.detach(socket.id);
+      console.log(`[relay] join result code=${code} ${JSON.stringify(desktopAck)}`);
       if (typeof acknowledge === "function") acknowledge(desktopAck);
     });
 
@@ -133,6 +199,7 @@ export function createRelayServer({
     }
 
     socket.on("disconnect", () => {
+      handleLobbyLeave(socket);
       if (socket.data.role === "desktop") {
         const code = socket.data.roomCode;
         registry.markOrphan(code);

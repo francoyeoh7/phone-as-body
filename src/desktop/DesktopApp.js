@@ -1,4 +1,5 @@
 import { PhoneSession } from "./PhoneSession.js";
+import { LobbyClient } from "./LobbyClient.js";
 import * as THREE from "three";
 import { PlayerController } from "./PlayerController.js";
 import { HorrorDirector } from "./HorrorDirector.js";
@@ -17,6 +18,16 @@ import { EnvironmentLoadError } from "./environment/EnvironmentLoader.js";
 import { createDesktopUI } from "./ui.js";
 import { createDesktopNpcRuntime, transcribeVoiceClip } from "./npc/DesktopNpcRuntime.js";
 import "./styles.css";
+
+const LOBBY_ERROR_NOTES = {
+  "cloud-unavailable": "云服务未配置：本机无法联机（可先用键鼠单人开始）",
+  "lobby-not-found": "房间不存在或已结束",
+  "lobby-full": "大厅已满（最多 8 台电脑）",
+  "already-playing": "游戏已开始，无法加入",
+  "already-joined": "已在房间里",
+  timeout: "连接云端超时，请重试",
+  "not-host": "只有房主可以开始游戏",
+};
 
 function isLocalVillageChunk(error) {
   if (typeof error?.url !== "string") return false;
@@ -128,6 +139,16 @@ export class DesktopApp {
     this.handlePhoneHand = this.handlePhoneHand.bind(this);
     this.handlePhoneVoiceClip = this.handlePhoneVoiceClip.bind(this);
     this.handlePhoneVoiceStream = this.handlePhoneVoiceStream.bind(this);
+    this.handleMenuCreate = this.handleMenuCreate.bind(this);
+    this.handleMenuJoin = this.handleMenuJoin.bind(this);
+    this.handleMenuSolo = this.handleMenuSolo.bind(this);
+    this.handleLobbyStart = this.handleLobbyStart.bind(this);
+    this.handleLobbyLeave = this.handleLobbyLeave.bind(this);
+    this.handleLobbyState = this.handleLobbyState.bind(this);
+    this.handleLobbyStarted = this.handleLobbyStarted.bind(this);
+    this.handleLobbyEnded = this.handleLobbyEnded.bind(this);
+    this.lobby = null;
+    this.lobbyIsHost = false;
   }
 
   mount() {
@@ -155,6 +176,135 @@ export class DesktopApp {
     window.addEventListener("keyup", this.handleFallbackKeyUp);
     window.addEventListener("blur", this.handleWindowBlur);
     window.addEventListener("pagehide", this.handlePageHide, { once: true });
+    this.setupMainMenu();
+  }
+
+  setupMainMenu() {
+    const elements = this.ui.elements;
+    elements.menuOverlay.hidden = false;
+    elements.menuCreate.addEventListener("click", this.handleMenuCreate);
+    elements.menuJoin.addEventListener("click", this.handleMenuJoin);
+    elements.menuJoinCode.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") this.handleMenuJoin();
+    });
+    elements.menuSolo.addEventListener("click", this.handleMenuSolo);
+    elements.lobbyStart.addEventListener("click", this.handleLobbyStart);
+    elements.lobbyLeave.addEventListener("click", this.handleLobbyLeave);
+  }
+
+  ensureLobby() {
+    if (this.lobby) return this.lobby;
+    this.lobby = new LobbyClient();
+    this.lobby.addEventListener("state", this.handleLobbyState);
+    this.lobby.addEventListener("started", this.handleLobbyStarted);
+    this.lobby.addEventListener("ended", this.handleLobbyEnded);
+    return this.lobby;
+  }
+
+  async handleMenuCreate() {
+    if (this.destroyed) return;
+    const note = this.ui.elements.menuNote;
+    note.textContent = "正在创建房间…";
+    const lobby = this.ensureLobby();
+    const result = await lobby.create();
+    if (this.destroyed) return;
+    if (!result.ok) {
+      note.textContent = LOBBY_ERROR_NOTES[result.reason] ?? "创建失败，请重试";
+      return;
+    }
+    this.lobbyIsHost = true;
+    this.showLobbyView();
+  }
+
+  async handleMenuJoin() {
+    if (this.destroyed) return;
+    const elements = this.ui.elements;
+    const code = (elements.menuJoinCode.value || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      elements.menuNote.textContent = "请输入 6 位数字房号";
+      return;
+    }
+    elements.menuNote.textContent = "正在加入房间…";
+    const lobby = this.ensureLobby();
+    const result = await lobby.join(code);
+    if (this.destroyed) return;
+    if (!result.ok) {
+      elements.menuNote.textContent = LOBBY_ERROR_NOTES[result.reason] ?? "加入失败，请检查房号";
+      return;
+    }
+    this.lobbyIsHost = false;
+    this.showLobbyView();
+  }
+
+  handleMenuSolo() {
+    if (this.destroyed) return;
+    this.ui.elements.menuOverlay.hidden = true;
+    this.startGame(true);
+  }
+
+  showLobbyView() {
+    const elements = this.ui.elements;
+    elements.menuOverlay.hidden = true;
+    elements.lobbyOverlay.hidden = false;
+    elements.lobbyStart.hidden = !this.lobbyIsHost;
+    elements.lobbyWaiting.hidden = this.lobbyIsHost;
+    elements.lobbyNote.textContent = "";
+    if (this.lobby?.code) elements.lobbyRoomCode.textContent = this.lobby.code;
+  }
+
+  async handleLobbyStart() {
+    if (this.destroyed || !this.lobby) return;
+    const result = await this.lobby.start();
+    if (this.destroyed) return;
+    if (!result.ok) {
+      this.ui.elements.lobbyNote.textContent = LOBBY_ERROR_NOTES[result.reason] ?? "开始失败，请重试";
+      return;
+    }
+    this.enterGameFromLobby();
+  }
+
+  handleLobbyLeave() {
+    if (this.destroyed) return;
+    this.lobby?.leave();
+    this.lobbyIsHost = false;
+    const elements = this.ui.elements;
+    elements.lobbyOverlay.hidden = true;
+    elements.menuOverlay.hidden = false;
+    elements.menuNote.textContent = "";
+  }
+
+  handleLobbyState({ detail: state }) {
+    if (this.destroyed || !state) return;
+    const elements = this.ui.elements;
+    elements.lobbyRoomCode.textContent = state.code;
+    const selfId = this.lobby?.selfSocketId;
+    elements.lobbyPlayers.innerHTML = state.players.map((player) => {
+      const safeName = String(player.name).replace(/[<>&"]/g, "");
+      const tags = [];
+      if (player.isHost) tags.push('<span class="lobby-tag">主机</span>');
+      if (player.socketId === selfId) tags.push("<em>本机</em>");
+      return `<li class="${player.isHost ? "host" : ""}">${safeName}${tags.join("")}</li>`;
+    }).join("");
+  }
+
+  handleLobbyStarted() {
+    if (this.destroyed) return;
+    this.enterGameFromLobby();
+  }
+
+  handleLobbyEnded() {
+    if (this.destroyed) return;
+    this.lobbyIsHost = false;
+    const elements = this.ui.elements;
+    elements.lobbyOverlay.hidden = true;
+    elements.menuOverlay.hidden = false;
+    elements.menuNote.textContent = "房主已退出，大厅已解散";
+  }
+
+  enterGameFromLobby() {
+    this.ui.elements.lobbyOverlay.hidden = true;
+    this.ui.elements.menuOverlay.hidden = true;
+    this.startGame(false);
   }
 
   startGame(fallback) {
@@ -978,6 +1128,7 @@ export class DesktopApp {
     runCleanup(() => phone?.removeEventListener?.("voice-stream", this.handlePhoneVoiceStream));
     runCleanup(() => this.disposeRuntime());
     runCleanup(() => this.audio.dispose());
+    runCleanup(() => this.lobby?.destroy());
     runCleanup(() => phone?.destroy());
     if (this.phone === phone) this.phone = null;
     if (cleanupError) throw cleanupError;
