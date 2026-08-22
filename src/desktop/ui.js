@@ -149,9 +149,9 @@ export function createDesktopUI(root) {
         <div class="lobby-comp">
           <header class="lobby-head">
             <div class="lobby-eyebrow">
-              <span>联机大厅</span>
+              <span>小镇</span>
               <span class="lobby-eyebrow-rule" aria-hidden="true"></span>
-              <span>LOBBY</span>
+              <span>TOWN</span>
             </div>
             <h2 class="lobby-code" id="lobby-room-code">——————</h2>
             <p class="lobby-sub">其他电脑 · 加入游戏 · 输入此房号</p>
