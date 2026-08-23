@@ -43,6 +43,9 @@ export class GamePanels {
     if (footerEl) footerEl.remove();
     const anchor = card.querySelector(".option-cancel");
     for (const option of options) {
+      // The template ships a permanent cancel button; a menu-level "cancel"
+      // option would render as a duplicate row.
+      if (option.id === "cancel") continue;
       const button = document.createElement("button");
       button.className = "option-button";
       button.disabled = option.disabled === true;

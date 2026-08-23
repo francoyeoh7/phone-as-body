@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { isFlashlightEnabled } from "./flashlight-state.js";
 
 const ACQUIRE_ALIGNMENT = 0.9;
 const ASSIST_ALIGNMENT = 0.965;
@@ -82,7 +83,8 @@ export class ShadowQuestDirector {
     if (distance > 0) this.toTarget.multiplyScalar(1 / distance);
     camera.getWorldDirection(this.direction);
     const alignment = this.direction.dot(this.toTarget);
-    const flashlightOn = this.experience.objects.flashlight.visible;
+    const flashlightOn = this.experience.objects.flashlight.visible
+      && isFlashlightEnabled(this.experience.objects.flashlight);
     this.available = flashlightOn && distance <= MAX_DISTANCE && alignment >= ACQUIRE_ALIGNMENT;
     this.objects.window.enabled = this.available;
     this.objects.taskPoint.visible = this.available;

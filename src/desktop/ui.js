@@ -224,7 +224,11 @@ export function createDesktopUI(root) {
         <span class="loading-line"></span><p>走廊正在苏醒</p>
       </section>
 
-      <section class="pause-overlay" id="pause-overlay" hidden><p>暂停</p></section>
+      <section class="pause-overlay" id="pause-overlay" hidden>
+        <p>暂停</p>
+        <button class="pause-resume" id="pause-resume" type="button">继续游戏</button>
+        <p class="pause-hint">按 Esc 或点击按钮继续</p>
+      </section>
     </main>`;
 
   createIcons({ icons, attrs: { "stroke-width": 1.8 } });
@@ -296,6 +300,7 @@ export function createDesktopUI(root) {
     doorDefenseFill: root.querySelector(".door-defense-track > span"),
     loading: root.querySelector("#loading-overlay"),
     pause: root.querySelector("#pause-overlay"),
+    pauseResume: root.querySelector("#pause-resume"),
     menuOverlay: root.querySelector("#menu-overlay"),
     menuCreate: root.querySelector("#menu-create"),
     menuJoin: root.querySelector("#menu-join"),

@@ -842,6 +842,13 @@ export function createFlashlightRig(camera, target, { cookieFactory = makeFlashl
   innerBeam.rotation.x = -Math.PI / 2;
   innerBeam.position.set(0, -0.05, -6.05);
   group.add(core, spill, outerBeam, innerBeam, flashlightTarget);
+  // Toggle state lives here: DesktopApp dims these lights via flashlight-state
+  // instead of hiding the group, which would force a global shader recompile.
+  group.userData.flashlightEnabled = true;
+  group.userData.flashlightLights = [
+    { light: core, intensity: core.intensity },
+    { light: spill, intensity: spill.intensity },
+  ];
   const rig = {
     group,
     core,

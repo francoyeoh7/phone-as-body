@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createObjectiveState } from "../shared/objectives.js";
+import { isFlashlightEnabled } from "./flashlight-state.js";
 
 const vectorFrom = (value, fallback = null) => {
   if (value?.isVector3) return value.clone();
@@ -201,6 +202,7 @@ export class HorrorDirector {
     if (
       objects.silhouette.visible &&
       objects.flashlight.visible &&
+      isFlashlightEnabled(objects.flashlight) &&
       alignment > 0.9 &&
       this.elapsed - this.silhouetteShownAt > 0.62
     ) {

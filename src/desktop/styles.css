@@ -39,7 +39,7 @@ button {
   background: #070909;
 }
 
-.desktop-shell[data-clean-view="true"] > :not(.scene-host):not(.player-transcript):not(.knock-cinematic-video):not(.presentation-overlay) {
+.desktop-shell[data-clean-view="true"] > :not(.scene-host):not(.player-transcript):not(.knock-cinematic-video):not(.presentation-overlay):not(.option-menu):not(.trade-overlay):not(.pause-overlay):not(.interaction-prompt):not(.subtitle):not(.game-status):not(.reticle):not(.objective):not(.voice-recording):not(.npc-voice-status):not(.door-defense):not(.inventory-bar) {
   display: none !important;
 }
 
@@ -772,4 +772,216 @@ button.menu-row:hover {
   font: 600 20px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.22em;
   color: #ecebe6;
+}
+
+/* ===== 游戏内面板（互动选项 / 交易 / 暂停） ===== */
+
+.option-menu,
+.trade-overlay,
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 9, 9, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+.option-card,
+.trade-stage {
+  min-width: min(360px, 88vw);
+  padding: 22px 24px;
+  border: 1px solid rgba(236, 235, 230, 0.12);
+  border-radius: 14px;
+  background: rgba(14, 16, 19, 0.78);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  color: #ecebe6;
+}
+
+.option-title {
+  margin: 0 0 14px;
+  font-size: 15px;
+  color: rgba(236, 235, 230, 0.85);
+}
+
+.option-button {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(236, 235, 230, 0.09);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option-button:hover:not(:disabled) {
+  color: #ff6b35;
+}
+
+.option-button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.option-button em {
+  font-style: normal;
+  font-size: 12px;
+  color: rgba(236, 235, 230, 0.45);
+}
+
+.option-button kbd.digit {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 5px;
+  margin-right: 6px;
+  border: 1px solid rgba(255, 107, 53, 0.55);
+  border-radius: 4px;
+  font: 600 11px/1.4 ui-monospace, monospace;
+  color: #ff6b35;
+  text-align: center;
+}
+
+.option-price-row {
+  margin-bottom: 10px;
+}
+
+.option-price-row input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid rgba(236, 235, 230, 0.16);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #ecebe6;
+}
+
+.option-footer {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: rgba(236, 235, 230, 0.45);
+}
+
+.trade-stage {
+  min-width: min(640px, 92vw);
+}
+
+.trade-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.trade-close {
+  border: 0;
+  background: none;
+  color: rgba(236, 235, 230, 0.6);
+  cursor: pointer;
+}
+
+.trade-close:hover {
+  color: #ff6b35;
+}
+
+.trade-status {
+  margin: 8px 0 14px;
+  font-size: 13px;
+  color: rgba(236, 235, 230, 0.6);
+}
+
+.trade-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.trade-col h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: rgba(236, 235, 230, 0.5);
+}
+
+.trade-coins {
+  float: right;
+  color: #ff6b35;
+}
+
+.trade-item {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(236, 235, 230, 0.08);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trade-item.selected,
+.trade-item:hover:not(:disabled) {
+  color: #ff6b35;
+}
+
+.trade-bid-row,
+.trade-respond-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.trade-bid-row input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid rgba(236, 235, 230, 0.16);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #ecebe6;
+}
+
+.trade-bid-row button,
+.trade-respond-row button,
+.pause-resume {
+  padding: 9px 22px;
+  border: 0;
+  border-radius: 8px;
+  background: #ff6b35;
+  color: #0b0c0e;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trade-respond-row button:last-child {
+  background: transparent;
+  border: 1px solid rgba(236, 235, 230, 0.25);
+  color: #ecebe6;
+}
+
+.pause-overlay {
+  flex-direction: column;
+  gap: 18px;
+  font-size: 22px;
+  letter-spacing: 0.3em;
+}
+
+.pause-overlay p {
+  margin: 0;
+}
+
+.pause-hint {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: rgba(236, 235, 230, 0.4);
 }

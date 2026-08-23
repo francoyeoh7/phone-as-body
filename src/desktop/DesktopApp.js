@@ -15,6 +15,7 @@ import { PresentationDirector } from "./PresentationDirector.js";
 import { HandTrackingDirector } from "./HandTrackingDirector.js";
 import { RightHandFlashlight } from "./RightHandFlashlight.js";
 import { InventoryState } from "./InventoryState.js";
+import { isFlashlightEnabled, toggleFlashlight } from "./flashlight-state.js";
 import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { EnvironmentLoadError } from "./environment/EnvironmentLoader.js";
@@ -158,9 +159,7 @@ export class DesktopApp {
     this.handleStartClick = () => this.startGame(false);
     this.handleFallbackClick = () => this.startGame(true);
     this.handleSceneRetryClick = () => this.retrySceneStart();
-    this.handleVisibilityChange = () => {
-      if (this.started && document.hidden) this.setPaused(true);
-    };
+    this.handleVisibilityChange = () => this.applyVisibilityChange();
     this.handlePageHide = () => this.destroy();
     this.environmentQuality = readStoredEnvironmentQuality();
     this.environmentQualitySwitching = null;
@@ -187,6 +186,7 @@ export class DesktopApp {
 
   mount() {
     this.ui = createDesktopUI(this.root);
+    if (import.meta.env.DEV) window.__desktopApp = this;
     this.phone = new PhoneSession();
     this.phone.addEventListener("room", this.handlePhoneRoom);
     this.phone.addEventListener("peer", this.handlePhonePeer);
@@ -205,6 +205,13 @@ export class DesktopApp {
     this.ui.elements.startButton.addEventListener("click", this.handleStartClick);
     this.ui.elements.fallbackButton.addEventListener("click", this.handleFallbackClick);
     this.ui.elements.sceneRetryButton.addEventListener("click", this.handleSceneRetryClick);
+    // Pause overlay resume: the click is a user gesture, so re-lock the pointer
+    // right away — without it the player resumes with a dead mouse.
+    this.ui.elements.pauseResume?.addEventListener?.("click", () => {
+      if (this.destroyed || !this.paused) return;
+      this.setPaused(false);
+      this.experience?.renderer?.domElement?.requestPointerLock?.();
+    });
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     window.addEventListener("keydown", this.handleFallbackKeyDown);
     window.addEventListener("keyup", this.handleFallbackKeyUp);
@@ -218,7 +225,7 @@ export class DesktopApp {
       const flashlight = this.experience?.objects?.flashlight;
       if (!flashlight) return;
       try {
-        flashlight.visible = !flashlight.visible;
+        toggleFlashlight(flashlight);
         this.audio?.cue?.("flashlight");
       } catch (error) {
         console.warn("flashlight toggle failed", error);
@@ -782,7 +789,7 @@ export class DesktopApp {
     }
     if (action === "interact") this.player?.interact("touch");
     if (action === "flashlight" && this.experience) {
-      this.experience.objects.flashlight.visible = !this.experience.objects.flashlight.visible;
+      toggleFlashlight(this.experience.objects.flashlight);
       this.audio.cue("flashlight");
     }
     if (action === "recenter") this.player?.recenter();
@@ -1163,6 +1170,22 @@ export class DesktopApp {
       }
     }
     if (disconnectError) throw disconnectError;
+  }
+
+  applyVisibilityChange() {
+    if (!this.started || this.destroyed) return;
+    if (document.hidden) {
+      if (!this.paused) {
+        this.pausedByVisibility = true;
+        this.setPaused(true);
+      }
+      return;
+    }
+    if (this.pausedByVisibility) {
+      this.pausedByVisibility = false;
+      this.setPaused(false);
+      this.ui?.setSubtitle?.("已继续——点击画面恢复视角控制", true);
+    }
   }
 
   setPaused(paused, showOverlay = true) {

@@ -94,13 +94,23 @@ export class BotPlayers {
         pauseUntil: this.rng() * 2,
         speed: 0,
         eliminated: false,
-        interaction: {
-          anchor: clone,
-          contactRadius: 0.4,
-          maxUseDistance: 2.4,
-          approachDirection: null,
-          contactNormal: new THREE.Vector3(0, 1, 0),
-        },
+        interaction: null,
+      };
+      // Raycast resolves a hit by walking up to a userData.interactableId —
+      // stations and crates stamp their roots, bots must too. The assisted
+      // fallback aims at the interaction anchor, so it sits at chest height:
+      // an anchor at the feet is geometrically unreachable from eye height.
+      clone.userData.interactableId = bot.id;
+      const chestAnchor = new THREE.Object3D();
+      chestAnchor.name = "interaction-anchor";
+      chestAnchor.position.set(0, 1.35, 0);
+      clone.add(chestAnchor);
+      bot.interaction = {
+        anchor: chestAnchor,
+        contactRadius: 0.4,
+        maxUseDistance: 2.4,
+        approachDirection: null,
+        contactNormal: new THREE.Vector3(0, 1, 0),
       };
       this.play(bot, "idle");
       this.bots.push(bot);
