@@ -9,8 +9,8 @@ import { readGlbDocument } from "../scripts/environment/glb-io.mjs";
 import {
   assertExpectedSourceHash,
   ELDERBOOM_V1_CONFIG,
+  VILLAGE_QUALITY_PROFILES,
 } from "../scripts/environment/elderboom-v1.config.mjs";
-import { VILLAGE_TEXTURE_LIMITS } from "../scripts/environment/optimize-village-textures.mjs";
 import { repairVillageMaterials } from "../scripts/build-elderboom-village.mjs";
 import { syntheticDocument, withSyntheticGlb } from "./fixtures/synthetic-glb.js";
 
@@ -70,13 +70,13 @@ describe("GLB graph inspection", () => {
 });
 
 describe("ElderBoom v1 intake contract", () => {
-  it("pins the exact source identity, western-core region, and immutable transform", () => {
+  it("pins the exact source identity, full-map region, and immutable transform", () => {
     const config = ELDERBOOM_V1_CONFIG;
 
     expect(config.source.defaultPath).toBe("D:\\3d资产\\ElderBoomHollow\\source\\elderbloom_hollow.glb");
     expect(config.source.bytes).toBe(936_886_692);
     expect(config.source.sha256).toBe("0DFDDCB9650C9EAAF22F488014F332109EF9966F90E12635F4B2C3B8A2A08ADB");
-    expect(config.selection.bounds).toEqual({ min: [-10, -2, 12], max: [25, 30, 48] });
+    expect(config.selection.bounds).toEqual({ min: [-51, -1, -51], max: [102, 30, 102] });
     expect(config.rootTransform.position).toEqual([-7.5, -1, -30]);
     expect(Object.isFrozen(config.selection.bounds.min)).toBe(true);
     expect(() => { config.selection.bounds.min[0] = 0; }).toThrow(TypeError);
@@ -84,15 +84,32 @@ describe("ElderBoom v1 intake contract", () => {
     expect(assertExpectedSourceHash(config.source.sha256.toLowerCase(), config)).toBe(true);
   });
 
-  it("keeps the architecture detailed while capping dense runtime foliage", () => {
+  it("retains every dense foliage instance without thinning", () => {
     expect(ELDERBOOM_V1_CONFIG.foliage).toMatchObject({
       cellSize: 5,
-      maxInstancesPerMeshPerCell: 2,
-      maxInstancesPerMesh: 120,
+      maxInstancesPerMeshPerCell: Number.MAX_SAFE_INTEGER,
+      maxInstancesPerMesh: Number.MAX_SAFE_INTEGER,
       highPolyTriangleThreshold: 100_000,
-      maxHighPolyInstancesPerMesh: 0,
+      maxHighPolyInstancesPerMesh: Number.MAX_SAFE_INTEGER,
     });
-    expect(VILLAGE_TEXTURE_LIMITS).toEqual({ color: 768, data: 384 });
+  });
+
+  it("defines one build chunk per runtime quality tier with balanced as default", () => {
+    expect(ELDERBOOM_V1_CONFIG.defaultQuality).toBe("balanced");
+    expect(ELDERBOOM_V1_CONFIG.chunks).toHaveLength(4);
+    expect(ELDERBOOM_V1_CONFIG.chunks.map((chunk) => chunk.quality)).toEqual([
+      "low", "balanced", "high", "ultra",
+    ]);
+    for (const chunk of ELDERBOOM_V1_CONFIG.chunks) {
+      expect(chunk.id).toBe(`full-village-${chunk.quality}`);
+    }
+    expect(VILLAGE_QUALITY_PROFILES.balanced).toMatchObject({
+      encoding: "webp",
+      colorMax: 1536,
+      dataMax: 768,
+    });
+    expect(VILLAGE_QUALITY_PROFILES.ultra).toMatchObject({ encoding: "original", webpQuality: null });
+    expect(VILLAGE_QUALITY_PROFILES.ultra.colorMax).toBeGreaterThanOrEqual(8192);
   });
 
   it("repairs Unreal placeholder landscape, grass, and water materials", () => {
@@ -105,6 +122,18 @@ describe("ElderBoom v1 intake contract", () => {
       normalTexture: { index: 9, texCoord: 1 },
       alphaMode: "MASK",
       alphaCutoff: 0.3333,
+      doubleSided: true,
+    };
+    const alderTileableTemplate = {
+      name: "MI_BlackAlder_Tileable_SM_BlackAlder_Field_04",
+      pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], baseColorTexture: { index: 96 } },
+      alphaMode: "MASK",
+      doubleSided: true,
+    };
+    const alderTwoSidedTemplate = {
+      name: "MI_BlackAlder_TwoSided_SM_BlackAlder_Field_04",
+      pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], baseColorTexture: { index: 101 } },
+      alphaMode: "MASK",
       doubleSided: true,
     };
     const materials = [
@@ -120,9 +149,23 @@ describe("ElderBoom v1 intake contract", () => {
         pbrMetallicRoughness: { baseColorFactor: [1, 0, 1, 1], roughnessFactor: 0.1 },
       },
       { name: "untouched", pbrMetallicRoughness: { baseColorFactor: [0.5, 0.5, 0.5, 1] } },
+      alderTileableTemplate,
+      alderTwoSidedTemplate,
+      {
+        name: "MI_BlackAlder_Tileable_SM_BlackAlder_Field_56",
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 1, 1] },
+        emissiveFactor: [1, 0, 1],
+        alphaMode: "MASK",
+      },
+      {
+        name: "MI_BlackAlder_TwoSided_SM_BlackAlder_Field_66",
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 1, 1] },
+        emissiveFactor: [1, 0, 1],
+        alphaMode: "MASK",
+      },
     ];
 
-    expect(repairVillageMaterials(materials)).toEqual({ landscape: 1, grass: 1, water: 1 });
+    expect(repairVillageMaterials(materials)).toEqual({ landscape: 1, grass: 1, water: 1, alder: 2 });
     expect(materials[0].pbrMetallicRoughness.baseColorFactor).toEqual([0.18, 0.24, 0.12, 1]);
     expect(materials[2].pbrMetallicRoughness).toEqual(grassTemplate.pbrMetallicRoughness);
     expect(materials[2].normalTexture).toEqual(grassTemplate.normalTexture);
@@ -137,5 +180,29 @@ describe("ElderBoom v1 intake contract", () => {
       },
     });
     expect(materials[4].pbrMetallicRoughness.baseColorFactor).toEqual([0.5, 0.5, 0.5, 1]);
+    expect(materials[7]).toMatchObject({
+      name: "MI_BlackAlder_Tileable_SM_BlackAlder_Field_56",
+      alphaMode: "MASK",
+      pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], baseColorTexture: { index: 96 } },
+    });
+    expect(materials[7].emissiveFactor).toBeUndefined();
+    expect(materials[8].pbrMetallicRoughness.baseColorTexture).toEqual({ index: 101 });
+    expect(materials[8].emissiveFactor).toBeUndefined();
+  });
+
+  it("falls back to a dark leaf color when no textured alder template survives", () => {
+    const materials = [
+      {
+        name: "MI_BlackAlder_Tileable_SM_BlackAlder_Field_56",
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 1, 1] },
+        emissiveFactor: [1, 0, 1],
+        alphaMode: "MASK",
+      },
+    ];
+
+    expect(repairVillageMaterials(materials)).toEqual({ landscape: 0, grass: 0, water: 0, alder: 1 });
+    expect(materials[0].pbrMetallicRoughness.baseColorFactor).toEqual([0.16, 0.3, 0.14, 1]);
+    expect(materials[0].emissiveFactor).toEqual([0, 0, 0]);
+    expect(materials[0].alphaMode).toBe("MASK");
   });
 });

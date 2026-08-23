@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "characters": [
+    {
+      "id": "bubba",
+      "name": "Bubba The Handyman",
+      "url": "/assets/characters/bubba.glb",
+      "bytes": 31210060,
+      "sha256": "3A6D5057433BF310D08CF90F0DAB6298F6AE6DD988A01DE4FA569FC50BAF66FE",
+      "animations": [
+        "idle",
+        "idleAlt",
+        "walk",
+        "run"
+      ]
+    }
+  ]
+}

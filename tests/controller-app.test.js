@@ -15,6 +15,58 @@ describe("controller gameplay chrome", () => {
     expect(markup).not.toContain('class="room-code"');
   });
 
+  it("offers the four environment quality tiers in the settings menu", () => {
+    const markup = controllerShellMarkup("617042");
+
+    expect(markup).toContain('id="quality"');
+    expect(markup).toContain('value="low"');
+    expect(markup).toContain('value="balanced"');
+    expect(markup).toContain('value="high"');
+    expect(markup).toContain('value="ultra"');
+    expect(markup).toContain("极限（原始 8K）");
+    expect(markup).toContain('value="balanced" selected');
+    expect(controllerShellMarkup("617042", { sensitivity: 1, smoothing: 0.18, quality: "ultra" })).toContain('value="ultra" selected');
+  });
+
+  it("persists and forwards the environment quality selection", () => {
+    const storage = new Map();
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn((key) => storage.get(key) ?? null),
+      setItem: vi.fn((key, value) => storage.set(key, String(value))),
+      removeItem: vi.fn((key) => storage.delete(key)),
+    });
+    const listeners = new Map();
+    const element = (id) => ({
+      id,
+      addEventListener: vi.fn((type, handler) => listeners.set(`${id}:${type}`, handler)),
+    });
+    const elements = {
+      sensitivity: element("sensitivity"),
+      smoothing: element("smoothing"),
+      quality: element("quality"),
+    };
+    const { app, actions } = createApp();
+    app.root = { querySelector: vi.fn((selector) => elements[selector.slice(1)]) };
+    app.settings = { sensitivity: 1, smoothing: 0.18, quality: "balanced" };
+
+    try {
+      app.bindSettings();
+
+      const change = listeners.get("quality:change");
+      expect(change).toBeTypeOf("function");
+      change({ target: { value: "high" } });
+      expect(app.settings.quality).toBe("high");
+      expect(storage.get("corridor617-settings")).toBe(JSON.stringify(app.settings));
+      expect(actions).toHaveBeenLastCalledWith("settings", { settings: app.settings });
+
+      change({ target: { value: "extreme" } });
+      expect(app.settings.quality).toBe("high");
+      expect(actions).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps both PPT directions enabled for a multi-page circular deck", () => {
     const { app } = createApp();
     Object.assign(app, {

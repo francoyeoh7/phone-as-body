@@ -53,6 +53,46 @@ export function createDesktopUI(root) {
         </div>
       </section>
 
+      <section class="option-menu" id="option-menu" hidden aria-label="互动选项">
+        <div class="option-card">
+          <p class="option-title">与 <strong id="option-target">对方</strong> 互动</p>
+          <div class="option-price-row" id="option-price-row" hidden>
+            <input id="option-price" inputmode="numeric" placeholder="金额（金币）" aria-label="金额">
+          </div>
+          <button class="option-button option-cancel" id="option-cancel" type="button">取消</button>
+        </div>
+      </section>
+
+      <section class="trade-overlay" id="trade-overlay" hidden aria-label="交易">
+        <div class="trade-stage">
+          <header class="trade-header">
+            <span id="trade-title">交易</span>
+            <button class="trade-close" id="trade-close" type="button" aria-label="离开"><i data-lucide="x"></i></button>
+          </header>
+          <p class="trade-status" id="trade-status">挑一样对方的东西，出个价。</p>
+          <div class="trade-columns">
+            <div class="trade-col">
+              <h3>对方出售</h3>
+              <div class="trade-items" id="trade-bot-items"></div>
+            </div>
+            <div class="trade-col">
+              <h3>我的背包 <span class="trade-coins">金币 <strong id="trade-my-coins">0</strong></span></h3>
+              <div class="trade-items" id="trade-my-items"></div>
+            </div>
+          </div>
+          <div class="trade-bid-row">
+            <span id="trade-bid-label">未选中物品</span>
+            <input id="trade-price" inputmode="numeric" placeholder="出价（金币）" aria-label="出价">
+            <button id="trade-bid" type="button">出价</button>
+          </div>
+          <div class="trade-respond-row" id="trade-respond-row" hidden>
+            <span id="trade-counter-label"></span>
+            <button id="trade-accept" type="button">接受</button>
+            <button id="trade-reject" type="button">拒绝</button>
+          </div>
+        </div>
+      </section>
+
       <header class="game-header">
         <div class="location-mark"><strong>617</strong><span>东侧维护走廊</span></div>
         <div class="desktop-connection" data-connected="false"><i data-lucide="wifi-off"></i><span>等待手机</span></div>
@@ -72,6 +112,8 @@ export function createDesktopUI(root) {
         <div class="game-status-row"><span>剩余</span><strong id="game-status-timer">--:--</strong></div>
       </div>
       <div class="reticle" id="reticle"><span></span></div>
+      <div class="build-tag" id="build-tag"></div>
+      <div class="interaction-debug" id="interaction-debug" aria-live="polite"></div>
       <div class="interaction-prompt" id="interaction-prompt" hidden><kbd>E</kbd><span></span></div>
       <div class="subtitle" id="subtitle" hidden></div>
       <div class="player-transcript" id="player-transcript" role="status" aria-live="polite" hidden></div>
@@ -214,6 +256,8 @@ export function createDesktopUI(root) {
     gameStatusRound: root.querySelector("#game-status-round"),
     gameStatusAlive: root.querySelector("#game-status-alive"),
     gameStatusTimer: root.querySelector("#game-status-timer"),
+    interactionDebug: root.querySelector("#interaction-debug"),
+    buildTag: root.querySelector("#build-tag"),
     reticle: root.querySelector("#reticle"),
     prompt: root.querySelector("#interaction-prompt"),
     promptLabel: root.querySelector("#interaction-prompt span"),
@@ -221,6 +265,28 @@ export function createDesktopUI(root) {
     playerTranscript: root.querySelector("#player-transcript"),
     voiceRecording: root.querySelector("#voice-recording"),
     npcVoiceStatus: root.querySelector("#npc-voice-status"),
+    optionMenu: root.querySelector("#option-menu"),
+    optionTarget: root.querySelector("#option-target"),
+    optionCard: root.querySelector("#option-menu .option-card"),
+    optionPriceRow: root.querySelector("#option-price-row"),
+    optionPrice: root.querySelector("#option-price"),
+    optionTrade: root.querySelector("#option-trade"),
+    optionContest: root.querySelector("#option-contest"),
+    optionCancel: root.querySelector("#option-cancel"),
+    tradeOverlay: root.querySelector("#trade-overlay"),
+    tradeTitle: root.querySelector("#trade-title"),
+    tradeStatus: root.querySelector("#trade-status"),
+    tradeBotItems: root.querySelector("#trade-bot-items"),
+    tradeMyItems: root.querySelector("#trade-my-items"),
+    tradeMyCoins: root.querySelector("#trade-my-coins"),
+    tradePrice: root.querySelector("#trade-price"),
+    tradeBid: root.querySelector("#trade-bid"),
+    tradeBidLabel: root.querySelector("#trade-bid-label"),
+    tradeRespondRow: root.querySelector("#trade-respond-row"),
+    tradeCounterLabel: root.querySelector("#trade-counter-label"),
+    tradeAccept: root.querySelector("#trade-accept"),
+    tradeReject: root.querySelector("#trade-reject"),
+    tradeClose: root.querySelector("#trade-close"),
     inventoryBar: root.querySelector("#inventory-bar"),
     inventoryItems: root.querySelector("#inventory-items"),
     inventoryCursor: root.querySelector("#inventory-cursor"),
@@ -340,6 +406,12 @@ export function createDesktopUI(root) {
     },
     setTargetFocused(focused) {
       elements.reticle.dataset.focused = String(Boolean(focused));
+    },
+    setInteractionDebug(text) {
+      elements.interactionDebug.textContent = text ?? "";
+    },
+    setBuildTag(text) {
+      elements.buildTag.textContent = text ?? "";
     },
     setSubtitle(text, visible = true) {
       elements.subtitle.textContent = text;

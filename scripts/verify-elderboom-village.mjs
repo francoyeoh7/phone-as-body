@@ -7,32 +7,30 @@ import { isDeepStrictEqual } from "node:util";
 import { Box3, Matrix4, Quaternion, Vector3 } from "three";
 import { validateEnvironmentManifest } from "../src/desktop/environment/manifest.js";
 import { buildSubsetDocument, selectSpatialNodes } from "./build-elderboom-village.mjs";
-import { ELDERBOOM_V1_CONFIG } from "./environment/elderboom-v1.config.mjs";
+import {
+  ELDERBOOM_V1_CONFIG,
+  villageGatesForQuality,
+  villageQualityProfile,
+} from "./environment/elderboom-v1.config.mjs";
 import { assertClosedDocument, collectDocumentReferences } from "./environment/glb-graph.mjs";
 import { readGlbDocument } from "./environment/glb-io.mjs";
-import { VILLAGE_TEXTURE_LIMITS } from "./environment/optimize-village-textures.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COPY_BUFFER_BYTES = 1024 * 1024;
-const REQUIRED_EXTENSIONS = Object.freeze([
+const BASE_REQUIRED_EXTENSIONS = Object.freeze([
   "KHR_materials_specular",
   "KHR_materials_sheen",
   "KHR_materials_anisotropy",
   "KHR_texture_transform",
   "EXT_mesh_gpu_instancing",
-  "EXT_texture_webp",
 ]);
-const DEFAULT_GATES = Object.freeze({
-  maxRenderNodesExclusive: 900,
-  maxDrawCallsExclusive: 450,
-  maxExpandedTrianglesExclusive: 9_000_000,
-  maxImages: 260,
-  minArtifactBytes: 1,
-  maxArtifactBytes: 128 * 1024 * 1024,
-  maxTextureTexels: 120_000_000,
-  maxColorDimension: VILLAGE_TEXTURE_LIMITS.color,
-  maxDataDimension: VILLAGE_TEXTURE_LIMITS.data,
-});
+
+export function requiredExtensionsForQuality(quality) {
+  const profile = villageQualityProfile(quality);
+  return profile.encoding === "webp"
+    ? [...BASE_REQUIRED_EXTENSIONS, "EXT_texture_webp"]
+    : [...BASE_REQUIRED_EXTENSIONS];
+}
 
 function invariant(condition, message) {
   if (!condition) throw new Error(`Village verification failed: ${message}`);
@@ -105,7 +103,11 @@ export function deriveArtifactMetrics(json) {
   };
 }
 
-export function assertPerformanceGates(metrics, artifactBytes, gates = DEFAULT_GATES) {
+export function assertPerformanceGates(
+  metrics,
+  artifactBytes,
+  gates = villageGatesForQuality(ELDERBOOM_V1_CONFIG.defaultQuality),
+) {
   const failures = [];
   if (metrics.renderNodes >= gates.maxRenderNodesExclusive) failures.push(`render nodes ${metrics.renderNodes} >= ${gates.maxRenderNodesExclusive}`);
   if (metrics.drawCalls >= gates.maxDrawCallsExclusive) failures.push(`draw calls ${metrics.drawCalls} >= ${gates.maxDrawCallsExclusive}`);
@@ -123,7 +125,7 @@ export function assertPerformanceGates(metrics, artifactBytes, gates = DEFAULT_G
   return true;
 }
 
-export function assertRequiredExtensions(json, required = REQUIRED_EXTENSIONS) {
+export function assertRequiredExtensions(json, required = requiredExtensionsForQuality(ELDERBOOM_V1_CONFIG.defaultQuality)) {
   const used = new Set(json.extensionsUsed ?? []);
   for (const extension of required) invariant(used.has(extension), `missing required extension ${extension}`);
   invariant(
@@ -325,12 +327,10 @@ function assertManifestBounds(manifest, config) {
   }
 }
 
-function assertReport(report, { sourceIdentity, artifactIdentity, sourceDocument, artifactDocument, selection, references, actualMetrics }) {
-  invariant(report?.version === 1, "build report version must be 1");
+function assertInspectionReport(report, { sourceIdentity, sourceDocument, selection, references }) {
+  invariant(report?.version === 2, "build report version must be 2");
   sameNumber(report.inspection?.source?.bytes, sourceIdentity.bytes, "report source bytes");
   invariant(String(report.inspection?.source?.sha256).toUpperCase() === sourceIdentity.sha256, "report source SHA-256 mismatch");
-  sameNumber(report.artifact?.bytes, artifactIdentity.bytes, "report artifact bytes");
-  invariant(String(report.artifact?.sha256).toUpperCase() === artifactIdentity.sha256, "report artifact SHA-256 mismatch");
   const sourceJson = sourceDocument.json;
   const expectedTotals = {
     nodes: sourceJson.nodes?.length ?? 0,
@@ -343,9 +343,9 @@ function assertReport(report, { sourceIdentity, artifactIdentity, sourceDocument
   for (const [key, value] of Object.entries(expectedTotals)) sameNumber(report.inspection?.totals?.[key], value, `report source ${key}`);
   const expectedScene = sourceJson.scenes?.[sourceJson.scene ?? 0]?.name ?? null;
   invariant(report.inspection?.scene === expectedScene, `report source scene mismatch: expected ${expectedScene}`);
-  sameArray(report.inspection?.westernCore?.bounds?.min, ELDERBOOM_V1_CONFIG.selection.bounds.min, "report selection minimum");
-  sameArray(report.inspection?.westernCore?.bounds?.max, ELDERBOOM_V1_CONFIG.selection.bounds.max, "report selection maximum");
-  const expectedWesternCore = {
+  sameArray(report.inspection?.selection?.bounds?.min, ELDERBOOM_V1_CONFIG.selection.bounds.min, "report selection minimum");
+  sameArray(report.inspection?.selection?.bounds?.max, ELDERBOOM_V1_CONFIG.selection.bounds.max, "report selection maximum");
+  const expectedSelection = {
     meshNodes: selection.selectedNodes.size,
     referencedNodes: references.nodes.size,
     meshes: references.meshes.size,
@@ -359,7 +359,16 @@ function assertReport(report, { sourceIdentity, artifactIdentity, sourceDocument
     denseFoliageCandidates: selection.metrics.denseFoliageCandidates,
     denseFoliageRetained: selection.metrics.denseFoliageRetained,
   };
-  for (const [key, value] of Object.entries(expectedWesternCore)) sameNumber(report.inspection?.westernCore?.[key], value, `report western-core ${key}`);
+  for (const [key, value] of Object.entries(expectedSelection)) sameNumber(report.inspection?.selection?.[key], value, `report selection ${key}`);
+}
+
+function assertChunkReport(chunkReport, { chunk, artifactIdentity, artifactDocument, sourceDocument, selection, actualMetrics }) {
+  invariant(chunkReport, `build report is missing chunk ${chunk.id}`);
+  invariant(chunkReport.id === chunk.id, `build report chunk id mismatch: expected ${chunk.id}`);
+  invariant(chunkReport.quality === chunk.quality, `build report chunk ${chunk.id} quality mismatch`);
+  sameNumber(chunkReport.artifact?.bytes, artifactIdentity.bytes, `report chunk ${chunk.id} bytes`);
+  invariant(String(chunkReport.artifact?.sha256).toUpperCase() === artifactIdentity.sha256, `report chunk ${chunk.id} SHA-256 mismatch`);
+  const sourceJson = sourceDocument.json;
   const sourceSelectedDrawCalls = [...selection.selectedNodes].reduce(
     (sum, index) => sum + (sourceJson.meshes?.[sourceJson.nodes?.[index]?.mesh]?.primitives?.length ?? 0),
     0,
@@ -373,7 +382,7 @@ function assertReport(report, { sourceIdentity, artifactIdentity, sourceDocument
     sourceSelectedDrawCalls,
     ...actualMetrics,
   };
-  for (const [key, value] of Object.entries(expectedMetrics)) sameNumber(report.metrics?.[key], value, `report metric ${key}`);
+  for (const [key, value] of Object.entries(expectedMetrics)) sameNumber(chunkReport.metrics?.[key], value, `report chunk ${chunk.id} metric ${key}`);
 }
 
 function artifactPathFromChunk(chunk) {
@@ -389,89 +398,102 @@ export async function verifyVillageAssets({ sourcePath = ELDERBOOM_V1_CONFIG.sou
   const manifestPath = path.resolve(REPO_ROOT, ELDERBOOM_V1_CONFIG.outputs.manifest);
   const reportPath = path.resolve(REPO_ROOT, ELDERBOOM_V1_CONFIG.outputs.report);
   const manifest = validateEnvironmentManifest(JSON.parse(await readFile(manifestPath, "utf8")));
-  invariant(manifest.chunks.length === 1, "manifest must contain exactly one generated chunk");
-  const chunk = manifest.chunks[0];
-  const artifactPath = artifactPathFromChunk(chunk);
-  const [sourceStat, artifactStat, report] = await Promise.all([
-    stat(sourcePath),
-    stat(artifactPath),
-    readFile(reportPath, "utf8").then(JSON.parse),
-  ]);
+  const configuredChunks = ELDERBOOM_V1_CONFIG.chunks;
+  invariant(manifest.chunks.length === configuredChunks.length, "manifest must contain every configured quality chunk");
+  const configuredById = new Map(configuredChunks.map((entry) => [entry.id, entry]));
+  for (const chunk of manifest.chunks) {
+    const configured = configuredById.get(chunk.id);
+    invariant(configured, `manifest chunk ${chunk.id} is not a configured quality chunk`);
+    invariant(chunk.quality === configured.quality, `manifest chunk ${chunk.id} quality does not match configuration`);
+  }
+  const report = JSON.parse(await readFile(reportPath, "utf8"));
+  const [sourceStat] = await Promise.all([stat(sourcePath)]);
   sameNumber(sourceStat.size, ELDERBOOM_V1_CONFIG.source.bytes, "source byte length");
   const forbiddenPaths = [sourcePath, sourcePath.replaceAll("\\", "/")];
-  const [sourceIdentity, artifactIdentity] = await Promise.all([
-    hashFile(sourcePath),
-    hashFile(artifactPath, forbiddenPaths),
-  ]);
+  const sourceIdentity = await hashFile(sourcePath);
   invariant(sourceIdentity.sha256 === ELDERBOOM_V1_CONFIG.source.sha256, `source SHA-256 mismatch: received ${sourceIdentity.sha256}`);
-  sameNumber(artifactStat.size, chunk.artifact.bytes, "manifest artifact byte length");
-  sameNumber(artifactIdentity.bytes, chunk.artifact.bytes, "hashed artifact byte length");
-  invariant(artifactIdentity.sha256 === chunk.artifact.sha256, `manifest artifact SHA-256 mismatch: received ${artifactIdentity.sha256}`);
-  invariant(!artifactIdentity.leaked, `artifact leaks source path ${artifactIdentity.leaked}`);
-  invariant(path.resolve(sourcePath) !== path.resolve(artifactPath), "source and artifact paths are identical");
-  invariant(artifactIdentity.bytes < sourceIdentity.bytes, "artifact is not smaller than the complete source GLB");
-  invariant(artifactIdentity.sha256 !== sourceIdentity.sha256, "artifact is a complete source copy");
 
-  const [sourceDocument, artifactDocument] = await Promise.all([
-    readGlbDocument(sourcePath),
-    readGlbDocument(artifactPath),
-  ]);
+  const sourceDocument = await readGlbDocument(sourcePath);
   assertBufferLayout(sourceDocument, "source GLB");
-  assertBufferLayout(artifactDocument, "artifact GLB");
-  assertClosedDocument(artifactDocument.json);
-  assertRequiredExtensions(artifactDocument.json);
-  assertGpuInstancing(artifactDocument.json);
-  const artifactJsonText = JSON.stringify(artifactDocument.json);
-  invariant(!/[A-Za-z]:[\\/]/u.test(artifactJsonText) && !/file:\/\//iu.test(artifactJsonText), "artifact JSON contains an absolute source path");
-
   assertManifestBounds(manifest, ELDERBOOM_V1_CONFIG);
   const selection = selectSpatialNodes(sourceDocument.json, ELDERBOOM_V1_CONFIG);
   const references = collectDocumentReferences(sourceDocument.json, selection.selectedNodes);
-  const expectedSubset = buildSubsetDocument(sourceDocument, selection);
-  const optimizedImages = (artifactDocument.json.images ?? []).every((image) => image.mimeType === "image/webp");
-  if (!optimizedImages) assertDeterministicDocument(artifactDocument.json, expectedSubset.json);
-  sameNumber(artifactDocument.json.meshes?.length ?? 0, references.meshes.size, "retained mesh count");
-  sameNumber(artifactDocument.json.materials?.length ?? 0, references.materials.size, "retained material count");
-  sameNumber(artifactDocument.json.textures?.length ?? 0, references.textures.size, "retained texture count");
-  sameNumber(artifactDocument.json.images?.length ?? 0, references.images.size, "retained image count");
-  const imageComparison = optimizedImages
-    ? { images: artifactDocument.json.images?.length ?? 0, embeddedBytes: 0, dimensions: [] }
-    : await compareRetainedImages({
-      sourcePath,
-      sourceDocument,
-      artifactPath,
+  const expectedSubset = buildSubsetDocument(sourceDocument, selection, ELDERBOOM_V1_CONFIG);
+  assertInspectionReport(report, { sourceIdentity, sourceDocument, selection, references });
+
+  const chunkResults = [];
+  for (const chunk of manifest.chunks) {
+    const artifactPath = artifactPathFromChunk(chunk);
+    const artifactStat = await stat(artifactPath);
+    const artifactIdentity = await hashFile(artifactPath, forbiddenPaths);
+    sameNumber(artifactStat.size, chunk.artifact.bytes, `chunk ${chunk.id} manifest artifact byte length`);
+    sameNumber(artifactIdentity.bytes, chunk.artifact.bytes, `chunk ${chunk.id} hashed artifact byte length`);
+    invariant(artifactIdentity.sha256 === chunk.artifact.sha256, `chunk ${chunk.id} manifest artifact SHA-256 mismatch: received ${artifactIdentity.sha256}`);
+    invariant(!artifactIdentity.leaked, `chunk ${chunk.id} leaks source path ${artifactIdentity.leaked}`);
+    invariant(path.resolve(sourcePath) !== path.resolve(artifactPath), "source and artifact paths are identical");
+    invariant(artifactIdentity.bytes < sourceIdentity.bytes, `chunk ${chunk.id} is not smaller than the complete source GLB`);
+    invariant(artifactIdentity.sha256 !== sourceIdentity.sha256, `chunk ${chunk.id} is a complete source copy`);
+
+    const artifactDocument = await readGlbDocument(artifactPath);
+    assertBufferLayout(artifactDocument, `chunk ${chunk.id} GLB`);
+    assertClosedDocument(artifactDocument.json);
+    assertRequiredExtensions(artifactDocument.json, requiredExtensionsForQuality(chunk.quality));
+    assertGpuInstancing(artifactDocument.json);
+    const artifactJsonText = JSON.stringify(artifactDocument.json);
+    invariant(!/[A-Za-z]:[\\/]/u.test(artifactJsonText) && !/file:\/\//iu.test(artifactJsonText), `chunk ${chunk.id} JSON contains an absolute source path`);
+
+    const profile = villageQualityProfile(chunk.quality);
+    const optimizedImages = (artifactDocument.json.images ?? []).every((image) => image.mimeType === "image/webp");
+    invariant(optimizedImages === (profile.encoding === "webp"), `chunk ${chunk.id} texture encoding does not match its quality profile`);
+    if (!optimizedImages) assertDeterministicDocument(artifactDocument.json, expectedSubset.json);
+    sameNumber(artifactDocument.json.meshes?.length ?? 0, references.meshes.size, `chunk ${chunk.id} retained mesh count`);
+    sameNumber(artifactDocument.json.materials?.length ?? 0, references.materials.size, `chunk ${chunk.id} retained material count`);
+    sameNumber(artifactDocument.json.textures?.length ?? 0, references.textures.size, `chunk ${chunk.id} retained texture count`);
+    sameNumber(artifactDocument.json.images?.length ?? 0, references.images.size, `chunk ${chunk.id} retained image count`);
+    const imageComparison = optimizedImages
+      ? { images: artifactDocument.json.images?.length ?? 0, embeddedBytes: 0, dimensions: [] }
+      : await compareRetainedImages({
+        sourcePath,
+        sourceDocument,
+        artifactPath,
+        artifactDocument,
+        sourceImageIndices: [...references.images].sort((a, b) => a - b),
+      });
+    const actualMetrics = deriveArtifactMetrics(artifactDocument.json);
+    const chunkReport = (report.chunks ?? []).find((entry) => entry.id === chunk.id);
+    const textureMetrics = {
+      texels: chunkReport?.metrics?.texels ?? 0,
+      maxColorDimension: chunkReport?.metrics?.maxColorDimension ?? 0,
+      maxDataDimension: chunkReport?.metrics?.maxDataDimension ?? 0,
+    };
+    assertPerformanceGates({ ...actualMetrics, ...textureMetrics }, artifactIdentity.bytes, villageGatesForQuality(chunk.quality));
+    assertChunkReport(chunkReport, {
+      chunk,
+      artifactIdentity,
       artifactDocument,
-      sourceImageIndices: [...references.images].sort((a, b) => a - b),
+      sourceDocument,
+      selection,
+      actualMetrics: { ...actualMetrics, ...textureMetrics },
     });
-  const actualMetrics = deriveArtifactMetrics(artifactDocument.json);
-  const textureMetrics = {
-    texels: report.metrics?.texels ?? 0,
-    maxColorDimension: report.metrics?.maxColorDimension ?? 0,
-    maxDataDimension: report.metrics?.maxDataDimension ?? 0,
-  };
-  assertPerformanceGates({ ...actualMetrics, ...textureMetrics }, artifactIdentity.bytes);
-  assertReport(report, {
-    sourceIdentity,
-    artifactIdentity,
-    sourceDocument,
-    artifactDocument,
-    selection,
-    references,
-    actualMetrics,
-  });
+    chunkResults.push({
+      id: chunk.id,
+      quality: chunk.quality,
+      artifact: { path: artifactPath, ...artifactIdentity, leaked: undefined },
+      retainedImages: imageComparison.images,
+      retainedImageBytes: imageComparison.embeddedBytes,
+      extensions: requiredExtensionsForQuality(chunk.quality),
+      metrics: { ...actualMetrics, ...textureMetrics },
+    });
+  }
 
   return {
     status: "PASS",
     source: sourceIdentity,
-    artifact: { path: artifactPath, ...artifactIdentity, leaked: undefined },
     selection: {
       bounds: ELDERBOOM_V1_CONFIG.selection.bounds,
       selectedMeshNodes: selection.selectedNodes.size,
-      retainedImages: imageComparison.images,
-      retainedImageBytes: imageComparison.embeddedBytes,
     },
-    extensions: REQUIRED_EXTENSIONS,
-    metrics: { ...actualMetrics, ...textureMetrics },
+    chunks: chunkResults,
   };
 }
 

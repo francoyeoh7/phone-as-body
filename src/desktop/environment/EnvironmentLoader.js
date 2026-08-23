@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { validateEnvironmentManifest } from "./manifest.js";
+import {
+  ENVIRONMENT_DEFAULT_QUALITY,
+  ENVIRONMENT_QUALITY_LEVELS,
+  validateEnvironmentManifest,
+} from "./manifest.js";
 import {
   disposeEnvironmentResources,
   ENVIRONMENT_TEXTURE_SLOTS,
@@ -149,6 +153,16 @@ function prepareChunkRoot(root, prefixes, chunkId) {
         const texture = material?.[slot];
         if (texture?.isTexture) texture.anisotropy = Math.min(texture.anisotropy || 1, ENVIRONMENT_ANISOTROPY);
       }
+    }
+
+    if (object.isInstancedMesh && typeof object.computeBoundingSphere === "function") {
+      try {
+        object.computeBoundingSphere();
+        const sphere = object.boundingSphere;
+        if (sphere && Number.isFinite(sphere.radius) && sphere.radius > 0 && Number.isFinite(sphere.center?.x)) {
+          object.userData.environmentCull = { center: sphere.center.clone(), radius: sphere.radius };
+        }
+      } catch { /* culling metadata stays optional when instance bounds cannot be derived */ }
     }
   });
   return root;
@@ -322,6 +336,13 @@ async function loadChunk({ chunk, baseUrl, fetchImpl, loader, signal }) {
   }
 }
 
+function selectChunksForQuality(manifest, quality) {
+  const selected = manifest.chunks.filter((chunk) => chunk.quality === undefined || chunk.quality === quality);
+  if (selected.length > 0) return selected;
+  if (manifest.chunks.length === 1) return manifest.chunks;
+  return [];
+}
+
 export async function loadEnvironment({
   scene,
   manifestUrl,
@@ -329,6 +350,7 @@ export async function loadEnvironment({
   loader = new GLTFLoader(),
   signal,
   onProgress,
+  quality = ENVIRONMENT_DEFAULT_QUALITY,
   validateManifest = validateEnvironmentManifest,
 } = {}) {
   if (!scene?.isScene || typeof scene.add !== "function") {
@@ -340,18 +362,30 @@ export async function loadEnvironment({
   if (!loader || typeof loader.parseAsync !== "function") {
     throw new TypeError("loadEnvironment requires a loader with parseAsync");
   }
+  if (!ENVIRONMENT_QUALITY_LEVELS.includes(quality)) {
+    throw new TypeError(`loadEnvironment requires a quality level: ${ENVIRONMENT_QUALITY_LEVELS.join(", ")}`);
+  }
 
   const fetched = await fetchManifest({ manifestUrl, fetchImpl, signal, validateManifest });
   const { manifest } = fetched;
+  const chunks = selectChunksForQuality(manifest, quality);
+  if (chunks.length === 0) {
+    throw new EnvironmentLoadError(
+      "manifest-invalid",
+      `Environment manifest has no chunk for quality "${quality}"`,
+      { url: fetched.manifestUrl, phase: "validate" },
+    );
+  }
+  const activeQuality = chunks[0].quality ?? null;
   const parsed = [];
-  const totalBytes = manifest.chunks.reduce((sum, chunk) => sum + chunk.artifact.bytes, 0);
+  const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.artifact.bytes, 0);
   let loadedBytes = 0;
   let root;
   let lights;
   let occluderRoots = [];
 
   try {
-    for (const chunk of manifest.chunks) {
+    for (const chunk of chunks) {
       const loaded = await loadChunk({
         chunk,
         baseUrl: fetched.manifestUrl,
@@ -364,7 +398,7 @@ export async function loadEnvironment({
       onProgress?.({
         chunkId: chunk.id,
         completedChunks: parsed.length,
-        totalChunks: manifest.chunks.length,
+        totalChunks: chunks.length,
         loadedBytes,
         totalBytes,
         ratio: totalBytes === 0 ? 1 : loadedBytes / totalBytes,
@@ -402,6 +436,7 @@ export async function loadEnvironment({
     manifest,
     root,
     chunks: parsed,
+    quality: activeQuality,
     occluderRoots,
     anchors: createAnchors(manifest),
     lights: {

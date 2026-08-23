@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, Menu } = require("electron");
 const { fork, spawn } = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
@@ -111,6 +111,13 @@ async function createWindow() {
     show: false,
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  // The null application menu (set at startup) already removes the dangerous
+  // accelerators (Ctrl+R reload, Ctrl+W close). Do NOT add a
+  // before-input-event filter: it would also swallow crouch-move combos like
+  // Ctrl+W and make movement stutter.
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    debugLog(`render process gone: ${details.reason}`);
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -121,6 +128,9 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
+  // No default application menu: its Ctrl+R / Ctrl+W / F12 accelerators read
+  // as crashes when Ctrl is the crouch key.
+  Menu.setApplicationMenu(null);
   app.on("second-instance", () => {
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();

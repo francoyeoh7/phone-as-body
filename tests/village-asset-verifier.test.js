@@ -74,20 +74,33 @@ describe("ElderBoom village asset verifier", () => {
       instancingGroups: 1,
       instances: 2,
     });
-    expect(() => assertPerformanceGates({ ...metrics, texels: 100, maxColorDimension: 1, maxDataDimension: 1 }, 64 * 1024 * 1024)).not.toThrow();
+    const explicitGates = {
+      maxRenderNodesExclusive: 900,
+      maxDrawCallsExclusive: 450,
+      maxExpandedTrianglesExclusive: 9_000_000,
+      maxImages: 260,
+      minArtifactBytes: 1,
+      maxArtifactBytes: 128 * 1024 * 1024,
+      maxTextureTexels: 120_000_000,
+      maxColorDimension: 768,
+      maxDataDimension: 384,
+    };
+    expect(() => assertPerformanceGates({ ...metrics, texels: 100, maxColorDimension: 1, maxDataDimension: 1 }, 64 * 1024 * 1024, explicitGates)).not.toThrow();
     expect(() => assertPerformanceGates({
       ...metrics,
       texels: 100,
       maxColorDimension: 768,
       maxDataDimension: 384,
-    }, 64 * 1024 * 1024)).not.toThrow();
+    }, 64 * 1024 * 1024, explicitGates)).not.toThrow();
     expect(() => assertPerformanceGates({
       ...metrics,
       texels: 100,
       maxColorDimension: 769,
       maxDataDimension: 384,
-    }, 64 * 1024 * 1024)).toThrow(/color texture dimension/i);
-    expect(() => assertPerformanceGates({ ...metrics, drawCalls: 450, texels: 100, maxColorDimension: 1, maxDataDimension: 1 }, 64 * 1024 * 1024)).toThrow(/draw calls/i);
+    }, 64 * 1024 * 1024, explicitGates)).toThrow(/color texture dimension/i);
+    expect(() => assertPerformanceGates({ ...metrics, drawCalls: 450, texels: 100, maxColorDimension: 1, maxDataDimension: 1 }, 64 * 1024 * 1024, explicitGates)).toThrow(/draw calls/i);
+    expect(() => assertPerformanceGates({ ...metrics, texels: 100, maxColorDimension: 1536, maxDataDimension: 768 }, 64 * 1024 * 1024)).not.toThrow();
+    expect(() => assertPerformanceGates({ ...metrics, texels: 100, maxColorDimension: 1537, maxDataDimension: 768 }, 64 * 1024 * 1024)).toThrow(/color texture dimension/i);
   });
 
   it("compares retained embedded image dimensions and bytes against the source", async () => {

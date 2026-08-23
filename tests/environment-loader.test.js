@@ -37,8 +37,10 @@ function hashBytes(bytes) {
 
 async function manifestFixture(chunkBytes = 4, sha256 = "0".repeat(64)) {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  manifest.chunks[0].artifact.bytes = chunkBytes;
-  manifest.chunks[0].artifact.sha256 = sha256;
+  const balanced = structuredClone(manifest.chunks.find((chunk) => chunk.quality === "balanced"));
+  balanced.artifact.bytes = chunkBytes;
+  balanced.artifact.sha256 = sha256;
+  manifest.chunks = [balanced];
   return manifest;
 }
 
@@ -95,8 +97,17 @@ function renderRoot(name = "chunk-root") {
   );
   decorative.name = "VillageRock";
   decorative.castShadow = true;
-  root.add(selected, semanticParent, decorative);
-  return { root, selected, selectedByParent, decorative, textures: [map, normalMap, roughnessMap] };
+
+  const instanced = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial(),
+    2,
+  );
+  instanced.name = "instance-002-mesh-02";
+  instanced.setMatrixAt(0, new THREE.Matrix4().makeTranslation(0, 0, 0));
+  instanced.setMatrixAt(1, new THREE.Matrix4().makeTranslation(4, 0, 0));
+  root.add(selected, semanticParent, decorative, instanced);
+  return { root, selected, selectedByParent, decorative, instanced, textures: [map, normalMap, roughnessMap] };
 }
 
 function makeFetch(manifest, chunkResponses) {
@@ -119,6 +130,7 @@ describe("EnvironmentLoader", () => {
       selected,
       selectedByParent,
       decorative,
+      instanced,
       textures,
     } = renderRoot();
     const loader = { parseAsync: vi.fn(async () => ({ scene: chunkRoot })) };
@@ -140,7 +152,7 @@ describe("EnvironmentLoader", () => {
 
     expect(calls.map(({ url }) => url)).toEqual([
       "https://game.test/app/village-manifest.json",
-      "https://game.test/assets/environment/elderboom-v1/chunks/western-core.glb",
+      "https://game.test/assets/environment/elderboom-v1/chunks/full-village-balanced.glb",
     ]);
     expect(calls.every(({ options }) => options.signal === controller.signal)).toBe(true);
     expect(loader.parseAsync).toHaveBeenCalledWith(
@@ -161,7 +173,11 @@ describe("EnvironmentLoader", () => {
     expect(decorative.receiveShadow).toBe(true);
     expect(decorative.castShadow).toBe(false);
     expect(textures.every((texture) => texture.anisotropy <= 2)).toBe(true);
-    expect(instance.chunks.map(({ id }) => id)).toEqual(["western-core"]);
+    expect(instanced.userData.environmentCull).toBeDefined();
+    expect(instanced.userData.environmentCull.radius).toBeGreaterThan(1);
+    expect(instanced.userData.environmentCull.center.x).toBeGreaterThan(1);
+    expect(instance.chunks.map(({ id }) => id)).toEqual(["full-village-balanced"]);
+    expect(instance.quality).toBe("balanced");
     expect(instance.lights.byId["moon-key"].isDirectionalLight).toBe(true);
     expect(instance.lights.byId["moon-key"].shadow.mapSize.toArray()).toEqual([1024, 1024]);
     expect(instance.lights.byId["moon-key"].shadow.camera.left).toBeLessThanOrEqual(-20);
@@ -177,7 +193,7 @@ describe("EnvironmentLoader", () => {
     expect(instance.occluderRoots).toHaveLength(instance.manifest.occluders.length);
     expect(instance.occluderRoots.every((root) => root.userData.environmentOccluder)).toBe(true);
     expect(progress).toHaveBeenLastCalledWith({
-      chunkId: "western-core",
+      chunkId: "full-village-balanced",
       completedChunks: 1,
       totalChunks: 1,
       loadedBytes: bytes.byteLength,
@@ -222,12 +238,12 @@ describe("EnvironmentLoader", () => {
     });
 
     expect(instance.chunks.map(({ id, root }) => [id, root.name])).toEqual([
-      ["western-core", "first"],
+      ["full-village-balanced", "first"],
       ["yard-detail", "second"],
     ]);
     expect(progress.mock.calls.map(([value]) => value)).toEqual([
       {
-        chunkId: "western-core",
+        chunkId: "full-village-balanced",
         completedChunks: 1,
         totalChunks: 2,
         loadedBytes: 2,
@@ -425,16 +441,16 @@ describe("EnvironmentLoader", () => {
 
   it("exposes the documented error type", () => {
     const error = new EnvironmentLoadError("chunk-load", "failed", {
-      chunkId: "western-core", status: 404, phase: "response", url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
+      chunkId: "full-village-balanced", status: 404, phase: "response", url: "/assets/environment/elderboom-v1/chunks/full-village-balanced.glb",
     });
     expect(error).toMatchObject({
       name: "EnvironmentLoadError",
       code: "chunk-load",
       retryable: true,
-      chunkId: "western-core",
+      chunkId: "full-village-balanced",
       status: 404,
       phase: "response",
-      url: "/assets/environment/elderboom-v1/chunks/western-core.glb",
+      url: "/assets/environment/elderboom-v1/chunks/full-village-balanced.glb",
     });
   });
 
@@ -454,9 +470,96 @@ describe("EnvironmentLoader", () => {
       name: "EnvironmentLoadError",
       code: "chunk-invalid",
       phase: "integrity",
-      chunkId: "western-core",
+      chunkId: "full-village-balanced",
     });
 
     vi.unstubAllGlobals();
+  });
+
+  it("loads only the chunk matching the requested quality level", async () => {
+    const bytes = new Uint8Array([7, 7, 7, 7]);
+    const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
+    const high = structuredClone(manifest.chunks[0]);
+    high.id = "full-village-high";
+    high.url = "/assets/environment/elderboom-v1/chunks/full-village-high.glb";
+    high.quality = "high";
+    manifest.chunks.push(high);
+    const root = renderRoot("high-root").root;
+    const loader = { parseAsync: vi.fn(async () => ({ scene: root })) };
+    const { fetchImpl, calls } = makeFetch(manifest, [
+      (url) => bufferResponse(bytes, url),
+    ]);
+
+    const instance = await loadEnvironment({
+      scene: new THREE.Scene(),
+      manifestUrl: "https://game.test/manifest.json",
+      fetchImpl,
+      loader,
+      quality: "high",
+    });
+
+    expect(calls.map(({ url }) => url)).toEqual([
+      "https://game.test/manifest.json",
+      "https://game.test/assets/environment/elderboom-v1/chunks/full-village-high.glb",
+    ]);
+    expect(instance.quality).toBe("high");
+    expect(instance.chunks.map(({ id }) => id)).toEqual(["full-village-high"]);
+  });
+
+  it("rejects unknown quality levels before touching the network for chunks", async () => {
+    const manifest = await manifestFixture(4);
+    const { fetchImpl, calls } = makeFetch(manifest, []);
+
+    await expect(loadEnvironment({
+      scene: new THREE.Scene(),
+      manifestUrl: "https://game.test/manifest.json",
+      fetchImpl,
+      loader: { parseAsync: vi.fn() },
+      quality: "extreme",
+    })).rejects.toThrow(/quality level/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fails when a multi-chunk manifest has no chunk for the requested quality", async () => {
+    const manifest = await manifestFixture(4);
+    manifest.chunks[0].quality = "low";
+    const balanced = structuredClone(manifest.chunks[0]);
+    balanced.id = "full-village-balanced";
+    balanced.url = "/assets/environment/elderboom-v1/chunks/full-village-balanced.glb";
+    balanced.quality = "balanced";
+    manifest.chunks.push(balanced);
+    const { fetchImpl } = makeFetch(manifest, []);
+
+    await expect(loadEnvironment({
+      scene: new THREE.Scene(),
+      manifestUrl: "https://game.test/manifest.json",
+      fetchImpl,
+      loader: { parseAsync: vi.fn() },
+      quality: "ultra",
+    })).rejects.toMatchObject({
+      name: "EnvironmentLoadError",
+      code: "manifest-invalid",
+      retryable: true,
+    });
+  });
+
+  it("falls back to the only chunk of a legacy single-chunk manifest", async () => {
+    const bytes = new Uint8Array([9, 9, 9, 9]);
+    const manifest = await manifestFixture(bytes.byteLength, hashBytes(bytes));
+    delete manifest.chunks[0].quality;
+    const root = renderRoot("legacy-root").root;
+    const loader = { parseAsync: vi.fn(async () => ({ scene: root })) };
+    const { fetchImpl } = makeFetch(manifest, [(url) => bufferResponse(bytes, url)]);
+
+    const instance = await loadEnvironment({
+      scene: new THREE.Scene(),
+      manifestUrl: "https://game.test/manifest.json",
+      fetchImpl,
+      loader,
+      quality: "ultra",
+    });
+
+    expect(instance.quality).toBeNull();
+    expect(instance.chunks).toHaveLength(1);
   });
 });

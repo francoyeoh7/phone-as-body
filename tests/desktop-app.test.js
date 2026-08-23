@@ -17,8 +17,11 @@ vi.mock("lucide", () => ({
   ChevronRight: {},
   createIcons: vi.fn(),
   Keyboard: {},
+  LogIn: {},
   Mic: {},
   Package: {},
+  Play: {},
+  Plus: {},
   RotateCcw: {},
   ScanLine: {},
   Smartphone: {},
@@ -115,6 +118,7 @@ function createSceneStartHarness() {
       startButton: createElement(),
       fallbackButton: createElement(),
       sceneRetryButton: createElement(),
+      reticle: createElement(),
     },
     showLoading: vi.fn(),
     showPairing: vi.fn(),
@@ -1459,11 +1463,46 @@ describe("fallback Space hold", () => {
 
     expect(createSceneMock).toHaveBeenCalledWith(
       app.ui.elements.sceneHost,
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), environmentQuality: null },
     );
     expect(app.ui.showSceneError).toHaveBeenLastCalledWith(expected);
     expect(JSON.stringify(app.ui.showSceneError.mock.calls)).not.toContain("D:\\private");
     expect(app.started).toBe(false);
+  });
+
+  it("applies the stored quality level at scene start and switches it live from phone settings", async () => {
+    const storage = new Map();
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn((key) => storage.get(key) ?? null),
+      setItem: vi.fn((key, value) => storage.set(key, String(value))),
+    });
+    storage.set("corridor617-environment-quality", "low");
+    const { app } = createSceneStartHarness();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    createSceneMock.mockRejectedValueOnce(new EnvironmentLoadError("chunk-load", "stop"));
+
+    await app.startGame(false);
+
+    expect(createSceneMock).toHaveBeenCalledWith(
+      app.ui.elements.sceneHost,
+      { signal: expect.any(AbortSignal), environmentQuality: "low" },
+    );
+    expect(app.environmentQuality).toBe("low");
+
+    app.experience = { setEnvironmentQuality: vi.fn(async () => {}) };
+    app.handlePhoneAction({ action: "settings", settings: { quality: "high" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(app.experience.setEnvironmentQuality).toHaveBeenCalledWith("high");
+    expect(app.environmentQuality).toBe("high");
+    expect(storage.get("corridor617-environment-quality")).toBe("high");
+
+    app.handlePhoneAction({ action: "settings", settings: { quality: "extreme" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(app.experience.setEnvironmentQuality).toHaveBeenCalledTimes(1);
+    expect(app.environmentQuality).toBe("high");
+    expect(storage.get("corridor617-environment-quality")).toBe("high");
   });
 
   it("retries a failed scene once, suppresses a double click, and starts the replacement", async () => {

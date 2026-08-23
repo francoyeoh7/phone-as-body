@@ -68,6 +68,9 @@ export class PlayerController {
     this.settings = { sensitivity: 1, smoothing: 0.18, invertY: false };
     this.aimAssist = null;
     this.cinematic = false;
+    this.bobPhase = 0;
+    this.bobTime = 0;
+    this.sprinting = false;
     this.raycaster = new THREE.Raycaster();
     this.occlusionRaycaster = new THREE.Raycaster();
     this.pointerLocked = false;
@@ -82,6 +85,9 @@ export class PlayerController {
     const bodyDescription = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(...spawnPosition);
     this.body = world.createRigidBody(bodyDescription);
     this.collider = world.createCollider(RAPIER.ColliderDesc.capsule(0.52, 0.32), this.body);
+    // The player (group 2) collides with the environment (group 1) but never
+    // with bot players (group 4), so bumping into a bot never jitters.
+    this.collider.setCollisionGroups?.((0x2 << 16) | 0x1);
     this.characterController = world.createCharacterController(0.01);
     this.characterController.enableAutostep(0.3, 0.16, true);
     this.characterController.enableSnapToGround(0.2);
@@ -111,7 +117,7 @@ export class PlayerController {
   resetCrouch() {
     this.crouching = false;
     this.crouchAmount = 0;
-    this.movementSpeed = 3.25;
+    this.movementSpeed = 2.4;
   }
 
   setControllerInput(input, connected) {
@@ -121,11 +127,14 @@ export class PlayerController {
       move: { x: 0, y: 0 },
       clutch: false,
     };
+    const wasConnected = this.phoneConnected;
     this.phoneConnected = connected;
-    if (!connected) {
+    // Only reset on an actual disconnect; doing this every frame fights the
+    // keyboard crouch path and makes the camera spaz.
+    if (!connected && wasConnected) {
       this.recenter();
       this.resetCrouch();
-    } else if (!this.fallback) {
+    } else if (connected && !this.fallback) {
       this.setCrouching(this.phoneInput.crouch === true);
     }
   }
@@ -197,7 +206,10 @@ export class PlayerController {
     const alpha = 1 - Math.exp(-delta / 0.12);
     const target = this.crouching ? 1 : 0;
     this.crouchAmount += (target - this.crouchAmount) * alpha;
-    this.movementSpeed = 3.25 + (2.0 - 3.25) * this.crouchAmount;
+    const sprinting = (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight")) && this.crouchAmount < 0.5;
+    this.sprinting = sprinting;
+    const base = sprinting ? 4.2 : 2.4;
+    this.movementSpeed = base + (1.2 - base) * this.crouchAmount;
   }
 
   setAimAssist(target, strength = 0.22) {
@@ -265,12 +277,30 @@ export class PlayerController {
     this.camera.rotation.y = this.cameraRenderYaw;
     this.camera.rotation.x = this.cameraRenderPitch;
     this.updateInteraction();
+    const speed = Math.hypot(this.velocity.x, this.velocity.z);
+    this.bobTime += delta;
+    this.bobPhase += delta * (2.2 + speed * 2.4);
   }
 
   syncAfterPhysics() {
     if (this.cinematic) return;
     const translation = this.body.translation();
-    this.camera.position.set(translation.x, translation.y + 0.55 - 0.35 * this.crouchAmount, translation.z);
+    const speed = Math.hypot(this.velocity.x, this.velocity.z);
+    const moveBlend = Math.min(1, speed / 2.4);
+    const bobScale = moveBlend * (1 - this.crouchAmount * 0.7);
+    const bobY = Math.sin(this.bobPhase * 2) * 0.02 * bobScale;
+    const bobX = Math.sin(this.bobPhase) * 0.012 * bobScale;
+    const breath = Math.sin(this.bobTime * 1.35) * 0.007 * (1 - moveBlend);
+    const yaw = this.cameraRenderYaw;
+    // Slight roll into strafes and with the bob keeps the head from feeling bolted on.
+    const lateralSpeed = this.velocity.x * Math.cos(yaw) - this.velocity.z * Math.sin(yaw);
+    const strafeLean = -lateralSpeed * 0.0045;
+    this.camera.position.set(
+      translation.x + bobX * Math.cos(yaw),
+      translation.y + 0.55 - 0.62 * this.crouchAmount + bobY + breath,
+      translation.z - bobX * Math.sin(yaw),
+    );
+    this.camera.rotation.z = Math.sin(this.bobPhase) * 0.004 * bobScale + strafeLean;
   }
 
   snapshotPose() {
@@ -327,7 +357,7 @@ export class PlayerController {
     this.cameraRenderPitch = pose.cameraRenderPitch;
     this.crouching = pose.crouching === true;
     this.crouchAmount = Math.max(0, Math.min(1, Number(pose.crouchAmount) || 0));
-    this.movementSpeed = 3.25 + (2.0 - 3.25) * this.crouchAmount;
+    this.movementSpeed = 2.4 + (1.2 - 2.4) * this.crouchAmount;
     this.camera.rotation.order = "YXZ";
     this.camera.rotation.y = this.cameraRenderYaw;
     this.camera.rotation.x = this.cameraRenderPitch;
@@ -466,7 +496,9 @@ export class PlayerController {
   }
 
   interact(source = "unknown") {
-    if (!this.cinematic && this.selected) this.onInteract?.(this.selected.id, { source });
+    if (!this.cinematic && this.selected) {
+      this.onInteract?.(this.selected.id, { source, crouched: this.crouchAmount > 0.5 });
+    }
   }
 
   setPaused(paused) {
@@ -478,7 +510,7 @@ export class PlayerController {
   }
 
   handleKeyDown(event) {
-    if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyC", "ControlLeft", "ControlRight"].includes(event.code)) this.keys.add(event.code);
+    if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyC", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(event.code)) this.keys.add(event.code);
     if (event.repeat) return;
     if (event.code === "KeyE") this.interact("keyboard");
     if (event.code === "KeyF") this.onAction?.("flashlight");
@@ -493,8 +525,11 @@ export class PlayerController {
   handleMouseMove(event) {
     if (!this.pointerLocked || this.paused || this.cinematic) return;
     this.pitchOverflow = 0;
-    this.cameraYaw -= event.movementX * 0.0022;
-    this.cameraPitch = Math.max(-1.25, Math.min(1.25, this.cameraPitch - event.movementY * 0.0022));
+    const sensitivity = Number.isFinite(this.settings?.sensitivity) ? this.settings.sensitivity : 1;
+    const scale = 0.0022 * sensitivity;
+    const invertY = this.settings?.invertY ? -1 : 1;
+    this.cameraYaw -= event.movementX * scale;
+    this.cameraPitch = Math.max(-1.25, Math.min(1.25, this.cameraPitch - event.movementY * scale * invertY));
   }
 
   handlePointerLock() {

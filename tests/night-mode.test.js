@@ -16,10 +16,11 @@ describe("village night lighting", () => {
     expect(fog).toBeLessThan(0x182438);
     const moon = manifest.lights.find((light) => light.id === "moon-key");
     const hemi = manifest.lights.find((light) => light.id === "night-hemi");
-    expect(moon.intensity).toBeGreaterThan(0.35);
-    expect(moon.intensity).toBeLessThan(0.6);
-    expect(hemi.intensity).toBeGreaterThan(0.18);
-    expect(hemi.intensity).toBeLessThan(0.34);
+    // Darker night so the flashlight reads as the main light source.
+    expect(moon.intensity).toBeGreaterThan(0.2);
+    expect(moon.intensity).toBeLessThan(0.35);
+    expect(hemi.intensity).toBeGreaterThan(0.08);
+    expect(hemi.intensity).toBeLessThan(0.18);
   });
 
   it("uses the actual ElderBoom architecture, wall, fence, well, and tree names for shadow casters", async () => {

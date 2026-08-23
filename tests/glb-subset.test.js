@@ -70,6 +70,38 @@ describe("deterministic GLB subset", () => {
     expect(first.metrics.denseFoliageRetained).toBe(2);
   });
 
+  it("splits large instancing groups into spatial tiles for runtime culling", () => {
+    const json = repeatedDocument();
+    json.nodes[4].translation = [0.1, 0, 0];
+    json.nodes[5].translation = [20, 0, 0];
+    json.nodes[6].translation = [40, 0, 0];
+    const document = { json, binOffset: 0, binLength: 40 };
+    const config = fixtureConfig({
+      selection: { bounds: { min: [-5, -5, -5], max: [50, 5, 5] } },
+      instancing: { tileSize: 16, minGroupSize: 3 },
+    });
+
+    const selection = selectSpatialNodes(json, config);
+    const subset = buildSubsetDocument(document, selection, config);
+    const untiled = buildSubsetDocument(document, selectSpatialNodes(json, fixtureConfig({
+      selection: { bounds: { min: [-5, -5, -5], max: [50, 5, 5] } },
+    })));
+
+    expect(untiled.metrics.instancingGroups).toBe(1);
+    expect(untiled.metrics.instances).toBe(4);
+    expect(subset.metrics.instancingGroups).toBe(3);
+    expect(subset.metrics.instances).toBe(4);
+
+    const tiledNodes = subset.json.nodes.filter((node) => node.extensions?.EXT_mesh_gpu_instancing);
+    expect(tiledNodes).toHaveLength(3);
+    expect(tiledNodes.every((node) => /-tile--?\d+--?\d+-mesh-1$/.test(node.name))).toBe(true);
+    const instanceCounts = tiledNodes
+      .map((node) => subset.json.accessors[node.extensions.EXT_mesh_gpu_instancing.attributes.TRANSLATION].count)
+      .sort((a, b) => a - b);
+    expect(instanceCounts).toEqual([1, 1, 2]);
+    expect(subset.metrics.drawCalls).toBeLessThan(untiled.metrics.sourceSelectedDrawCalls);
+  });
+
   it("writes a closed, aligned, deterministic subset with exact images and GPU instances", async () => {
     const json = repeatedDocument();
     await withSyntheticGlb(async ({ directory, file }) => {

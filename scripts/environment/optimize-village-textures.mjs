@@ -19,9 +19,6 @@ const DATA_SLOTS = new Set([
   "sheenRoughnessTexture",
   "anisotropyTexture",
 ]);
-const RUNTIME_DIMENSION_SCALE = 0.8;
-
-export const VILLAGE_TEXTURE_LIMITS = Object.freeze({ color: 768, data: 384 });
 
 async function readAt(handle, position, length) {
   const buffer = Buffer.alloc(length);
@@ -68,13 +65,13 @@ function capForUsage(slots, colorMax, dataMax) {
   return [...slots].some((slot) => DATA_SLOTS.has(slot)) ? dataMax : colorMax;
 }
 
-async function encodeWebp(bytes, maxDimension, quality) {
+async function encodeWebp(bytes, maxDimension, quality, dimensionScale = 1) {
   const source = sharp(bytes, { limitInputPixels: false });
   const metadata = await source.metadata();
   const width = metadata.width ?? 1;
   const height = metadata.height ?? 1;
   const max = Math.max(width, height);
-  const effectiveMaxDimension = Math.max(1, Math.floor(maxDimension * RUNTIME_DIMENSION_SCALE));
+  const effectiveMaxDimension = Math.max(1, Math.floor(maxDimension * dimensionScale));
   const pipeline = max > effectiveMaxDimension
     ? source.resize({ width: effectiveMaxDimension, height: effectiveMaxDimension, fit: "inside", withoutEnlargement: true })
     : source;
@@ -145,9 +142,10 @@ export async function inspectRuntimeTextures(document) {
 export async function optimizeVillageTextures({
   inputPath,
   outputPath,
-  colorMax = VILLAGE_TEXTURE_LIMITS.color,
-  dataMax = VILLAGE_TEXTURE_LIMITS.data,
-  quality = 60,
+  colorMax = 1536,
+  dataMax = 768,
+  quality = 88,
+  dimensionScale = 0.8,
 } = {}) {
   const document = await readGlbDocument(inputPath);
   document.path = inputPath;
@@ -177,7 +175,7 @@ export async function optimizeVillageTextures({
       let bytes = sourceBytes;
       if (imageIndex !== undefined) {
         const cap = capForUsage(usage[imageIndex], colorMax, dataMax);
-        const encoded = await encodeWebp(sourceBytes, cap, quality);
+        const encoded = await encodeWebp(sourceBytes, cap, quality, dimensionScale);
         bytes = encoded.bytes;
         const area = encoded.width * encoded.height;
         texels += area;

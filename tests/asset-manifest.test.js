@@ -46,7 +46,8 @@ describe("village asset contract", () => {
       bytes: 936_886_692,
       sha256: "0DFDDCB9650C9EAAF22F488014F332109EF9966F90E12635F4B2C3B8A2A08ADB",
     });
-    expect(manifest.chunks).toHaveLength(1);
+    expect(manifest.chunks).toHaveLength(4);
+    expect(manifest.chunks.map((chunk) => chunk.quality)).toEqual(["low", "balanced", "high", "ultra"]);
   });
 
   it.runIf(process.env.VILLAGE_ASSETS_REQUIRED === "1")(

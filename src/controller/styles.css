@@ -637,6 +637,18 @@ button {
   accent-color: #c9a55b;
 }
 
+.pause-menu select {
+  grid-column: 2;
+  justify-self: end;
+  min-width: 150px;
+  padding: 9px 12px;
+  border: 1px solid #494d46;
+  border-radius: 8px;
+  background: #1b1e1c;
+  color: #d5d5ce;
+  font-size: 14px;
+}
+
 .toggle-row input {
   position: absolute;
   opacity: 0;

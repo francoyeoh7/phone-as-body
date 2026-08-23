@@ -72,6 +72,21 @@ function softwareRendererHarness() {
   return { renderer, rendererFactory };
 }
 
+function mainstreamRendererHarness() {
+  const { renderer, rendererFactory } = rendererHarness();
+  const debugInfo = { UNMASKED_RENDERER_WEBGL: 0x9246 };
+  const context = {
+    RENDERER: 0x1f01,
+    getExtension: vi.fn(() => debugInfo),
+    getParameter: vi.fn((parameter) => parameter === debugInfo.UNMASKED_RENDERER_WEBGL
+      ? "ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 6GB (0x00001C03) Direct3D11 vs_5_0 ps_5_0)"
+      : "GeForce GTX 1060"),
+  };
+  renderer.getContext = vi.fn(() => context);
+  renderer.compileAsync = vi.fn(async () => {});
+  return { renderer, rendererFactory };
+}
+
 function ownedHost() {
   return {
     current: null,
@@ -119,6 +134,7 @@ function semanticLights(manifest) {
       light = new THREE.HemisphereLight(definition.skyColor, definition.groundColor, definition.intensity);
     } else if (definition.type === "directional") {
       light = new THREE.DirectionalLight(definition.color, definition.intensity);
+      light.castShadow = Boolean(definition.castShadow);
     } else {
       light = new THREE.PointLight(definition.color, definition.intensity, definition.distance, definition.decay);
     }
@@ -254,6 +270,55 @@ describe("real village scene assembly", () => {
     expect(npcSystem.destroy).toHaveBeenCalledOnce();
   });
 
+  it("forwards the requested quality level and swaps environments live", async () => {
+    installBrowserHarness();
+    const manifest = await trackedManifest();
+    const { renderer, rendererFactory } = rendererHarness();
+    const physics = physicsHarness();
+    const first = environmentHarness(manifest);
+    const second = environmentHarness(manifest);
+    const colliders = { colliders: [], rigidBodies: [], occluderRoots: [], dispose: vi.fn() };
+    const npcSystem = { load: vi.fn(() => new Promise(() => {})), update: vi.fn(), destroy: vi.fn() };
+    const loadEnvironment = vi.fn(async ({ scene, quality }) => {
+      const harness = quality === "high" ? second : first;
+      scene.add(harness.environment.root, ...harness.environment.lights.all);
+      return harness.environment;
+    });
+
+    const experience = await createScene({ replaceChildren: vi.fn() }, {
+      RAPIER: physics.RAPIER,
+      rendererFactory,
+      loadEnvironment,
+      createEnvironmentColliders: vi.fn(() => colliders),
+      createNpcSystem: () => npcSystem,
+      environmentQuality: "balanced",
+    });
+
+    expect(loadEnvironment).toHaveBeenLastCalledWith(expect.objectContaining({ quality: "balanced" }));
+    expect(experience.environmentQuality).toBe("balanced");
+    expect(experience.objects.environment).toBe(first.environment);
+
+    await expect(experience.setEnvironmentQuality("extreme")).rejects.toThrow(/quality/i);
+
+    const swapped = await experience.setEnvironmentQuality("high");
+    expect(loadEnvironment).toHaveBeenLastCalledWith(expect.objectContaining({ quality: "high" }));
+    expect(swapped).toBe(second.environment);
+    expect(experience.environmentQuality).toBe("high");
+    expect(experience.objects.environment).toBe(second.environment);
+    expect(experience.objects.ceilingLights).toBe(second.environment.lights.byRole["power-sequence"]);
+    expect(experience.objects.emergencyLights).toBe(second.environment.lights.byRole.emergency);
+    expect(experience.objects.corridor.anchors).toBe(second.environment.anchors);
+    expect(first.environment.dispose).toHaveBeenCalledOnce();
+    expect(experience.scene.children).toContain(second.environment.root);
+    expect(experience.scene.children).not.toContain(first.environment.root);
+
+    await experience.setEnvironmentQuality("high");
+    expect(loadEnvironment).toHaveBeenCalledTimes(2);
+
+    experience.dispose();
+    expect(second.environment.dispose).toHaveBeenCalledOnce();
+  });
+
   it("automatically enters a low-cost profile for software WebGL without blocking scene startup", async () => {
     installBrowserHarness();
     const manifest = await trackedManifest();
@@ -274,6 +339,57 @@ describe("real village scene assembly", () => {
     expect(renderer.setPixelRatio).toHaveBeenCalledWith(0.75);
     expect(renderer.shadowMap.enabled).toBe(false);
     expect(renderer.compileAsync).not.toHaveBeenCalled();
+    experience.dispose();
+  });
+
+  it("enters a mainstream profile that tightens fog, drops moon shadows, and distance-culls far geometry", async () => {
+    installBrowserHarness();
+    const manifest = await trackedManifest();
+    const { renderer, rendererFactory } = mainstreamRendererHarness();
+    const physics = physicsHarness();
+    const { environment, loadEnvironment } = environmentHarness(manifest);
+    const environmentRoot = new THREE.Group();
+    const nearMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial(),
+    );
+    nearMesh.position.set(6, 0, -2);
+    const farMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial(),
+    );
+    farMesh.position.set(6, 0, -95);
+    environmentRoot.add(nearMesh, farMesh);
+    environment.root.add(environmentRoot);
+    const colliders = { colliders: [], rigidBodies: [], occluderRoots: [], dispose: vi.fn() };
+    const npcSystem = { load: vi.fn(() => new Promise(() => {})), update: vi.fn(), destroy: vi.fn() };
+
+    const experience = await createScene({ replaceChildren: vi.fn() }, {
+      RAPIER: physics.RAPIER,
+      rendererFactory,
+      loadEnvironment,
+      createEnvironmentColliders: vi.fn(() => colliders),
+      createNpcSystem: () => npcSystem,
+    });
+
+    expect(experience.renderProfile).toEqual(expect.objectContaining({
+      kind: "mainstream",
+      pixelRatioCap: 0.75,
+      environmentCullDistance: 48,
+      foliageCullDistance: 28,
+    }));
+    expect(loadEnvironment).toHaveBeenCalledWith(expect.objectContaining({ quality: "low" }));
+    expect(renderer.setPixelRatio).toHaveBeenCalledWith(0.75);
+    expect(experience.scene.fog.far).toBeLessThanOrEqual(48);
+    expect(experience.camera.far).toBeLessThan(140);
+    const moon = experience.objects.environment.lights.byId["moon-key"];
+    expect(moon.castShadow).toBe(false);
+
+    expect(farMesh.visible).toBe(false);
+    expect(nearMesh.visible).toBe(true);
+
+    experience.update(0.016, 0.02);
+    expect(farMesh.visible).toBe(false);
     experience.dispose();
   });
 

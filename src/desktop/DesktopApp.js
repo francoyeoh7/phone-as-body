@@ -4,6 +4,9 @@ import * as THREE from "three";
 import { PlayerController } from "./PlayerController.js";
 import { HorrorDirector } from "./HorrorDirector.js";
 import { VillageDirector } from "./VillageDirector.js";
+import { EliminationDirector } from "./game/EliminationDirector.js";
+import { TradeDirector } from "./game/TradeDirector.js";
+import { GamePanels, botOptionMenu, craftMenu, boardMenu } from "./game/GamePanels.js";
 import { FoundPhoneDirector } from "./FoundPhoneDirector.js";
 import { DoorDefenseDirector } from "./DoorDefenseDirector.js";
 import { ShadowQuestDirector } from "./ShadowQuestDirector.js";
@@ -16,7 +19,6 @@ import { createGameAudio } from "./audio.js";
 import { createScene } from "./create-scene.js";
 import { EnvironmentLoadError } from "./environment/EnvironmentLoader.js";
 import {
-  ENVIRONMENT_DEFAULT_QUALITY,
   ENVIRONMENT_QUALITY_LEVELS,
 } from "./environment/manifest.js";
 import { createDesktopUI } from "./ui.js";
@@ -48,9 +50,9 @@ const ENVIRONMENT_QUALITY_STORAGE_KEY = "corridor617-environment-quality";
 function readStoredEnvironmentQuality() {
   try {
     const stored = globalThis.localStorage?.getItem?.(ENVIRONMENT_QUALITY_STORAGE_KEY);
-    return ENVIRONMENT_QUALITY_LEVELS.includes(stored) ? stored : ENVIRONMENT_DEFAULT_QUALITY;
+    return ENVIRONMENT_QUALITY_LEVELS.includes(stored) ? stored : null;
   } catch {
-    return ENVIRONMENT_DEFAULT_QUALITY;
+    return null;
   }
 }
 
@@ -83,11 +85,16 @@ function chunkInvalidMessage(error) {
   return error?.phase ? "村庄资源加载失败。" : "村庄资源无法解析。";
 }
 
+const ENVIRONMENT_ERROR_CODES = new Set(["manifest-fetch", "manifest-invalid", "chunk-load", "chunk-invalid"]);
+
 export function classifySceneError(error) {
   if (error?.name === "AbortError" || error?.phase === "abort" || error?.cause?.name === "AbortError") {
     return { code: "aborted", message: null, retryable: false };
   }
-  const environmentError = error instanceof EnvironmentLoadError;
+  // Duck typing on top of instanceof: vitest SSR graphs (and Electron bundles)
+  // can evaluate the loader module twice, producing a second class identity.
+  const environmentError = error instanceof EnvironmentLoadError
+    || (error?.name === "EnvironmentLoadError" && ENVIRONMENT_ERROR_CODES.has(error?.code));
   const code = environmentError ? error.code : "scene-start";
   const messages = {
     "manifest-fetch": "村庄配置暂时无法载入。",
@@ -118,6 +125,8 @@ export class DesktopApp {
     this.elapsed = 0;
     this.audio = createGameAudio();
     this.director = null;
+    this.trade = null;
+    this.panels = null;
     this.foundPhone = null;
     this.doorDefense = null;
     this.shadowQuest = null;
@@ -144,6 +153,8 @@ export class DesktopApp {
     this.lastFeedbackSequence = -1;
     this.currentTargetId = null;
     this.currentTargetEpoch = 0;
+    this.highlightedTarget = null;
+    this.highlightedTargetId = null;
     this.handleStartClick = () => this.startGame(false);
     this.handleFallbackClick = () => this.startGame(true);
     this.handleSceneRetryClick = () => this.retrySceneStart();
@@ -198,6 +209,35 @@ export class DesktopApp {
     window.addEventListener("keydown", this.handleFallbackKeyDown);
     window.addEventListener("keyup", this.handleFallbackKeyUp);
     window.addEventListener("blur", this.handleWindowBlur);
+    // Right mouse toggles the flashlight; suppress the context menu in game.
+    window.addEventListener("contextmenu", (event) => {
+      if (this.started && !this.destroyed) event.preventDefault();
+    });
+    window.addEventListener("mousedown", (event) => {
+      if (event.button !== 2 || !this.started || this.destroyed) return;
+      const flashlight = this.experience?.objects?.flashlight;
+      if (!flashlight) return;
+      try {
+        flashlight.visible = !flashlight.visible;
+        this.audio?.cue?.("flashlight");
+      } catch (error) {
+        console.warn("flashlight toggle failed", error);
+      }
+    });
+    // Hotbar framework: mouse wheel cycles, digit keys 1-9 pick a slot.
+    window.addEventListener("wheel", (event) => {
+      if (!this.started || this.paused || this.destroyed || this.inventoryOpen) return;
+      this.cycleHotbar(Math.sign(event.deltaY) || 1);
+    }, { passive: true });
+    window.addEventListener("keydown", (event) => {
+      if (!/^Digit[1-9]$/.test(event.code) || !this.started || this.destroyed) return;
+      const digit = event.code.slice(5);
+      if (this.panels?.isOpen) {
+        this.panels.handleDigit(digit);
+        return;
+      }
+      this.equipHotbarIndex(Number(digit) - 1);
+    });
     window.addEventListener("pagehide", this.handlePageHide, { once: true });
     this.setupMainMenu();
   }
@@ -416,6 +456,8 @@ export class DesktopApp {
         return;
       }
       this.experience = experience;
+      this.environmentQuality = experience.environmentQuality ?? this.environmentQuality;
+      this.ui?.setBuildTag?.("build 0823-0115");
       const handTracking = new HandTrackingDirector({
         camera: this.experience.camera,
         sendControllerEvent: (event) => this.phone?.send(event),
@@ -452,18 +494,42 @@ export class DesktopApp {
       });
       this.player.setFallback(fallback);
       const isVillage = this.experience.objects?.environment?.manifest?.id === "elderboom-v1";
-      this.director = isVillage ? new VillageDirector({
+      this.panels = new GamePanels({ ui: this.ui });
+      this.panels.bind();
+      this.trade = new TradeDirector({
+        ui: this.ui,
+        audio: this.audio,
+        getLocalCoins: () => this.director?.getLocalCoins?.() ?? 0,
+        spendLocalCoins: (amount) => this.director?.spendLocalCoins?.(amount) ?? false,
+        getLocalItems: () => this.director?.getLocalItems?.() ?? [],
+        receiveLocalItem: (id, label) => this.director?.receiveLocalItem?.(id, label),
+      });
+      this.trade.bind();
+      this.director = isVillage ? new EliminationDirector({
         experience: this.experience,
         ui: this.ui,
         audio: this.audio,
         inventory: this.inventory,
+        onBotInteract: (bot, details) => this.openBotMenu(bot, details),
+        onCraftStation: () => this.openCraftMenu(),
+        onBulletinBoard: () => this.openBoardMenu(),
       }) : new HorrorDirector({
         experience: this.experience,
         ui: this.ui,
         audio: this.audio,
         inventory: this.inventory,
       });
-      if (isVillage && this.experience.objects?.npcs) {
+      if (isVillage && typeof this.director.load === "function") {
+        try {
+          await this.director.load();
+        } catch (error) {
+          console.error("Elimination game failed to load; scene stays playable.", error);
+        }
+      }
+      if (!this.ownsSceneStart(attempt)) return;
+      // The elimination game replaces the story NPCs with bot players; the
+      // voice runtime is phone-driven and keyboard mode cannot use it.
+      if (isVillage && this.experience.objects?.npcs && !(this.director instanceof EliminationDirector)) {
         try {
           this.npcRuntime = this.createNpcRuntime({
             npcSystem: this.experience.objects.npcs,
@@ -580,6 +646,117 @@ export class DesktopApp {
     } finally {
       if (this.environmentQualitySwitching === attempt) this.environmentQualitySwitching = null;
     }
+  }
+
+  // --- Game menus: bot interaction, crafting, bulletin board ---
+  openBotMenu(bot, details = {}) {
+    if (!this.panels || !this.director) return;
+    this.activeBot = bot;
+    const crouched = details?.crouched === true;
+    const menu = botOptionMenu({ crouched });
+    this.panels.open({
+      title: crouched ? `偷窃 ${bot.name}` : `${bot.name}`,
+      options: menu.options,
+      onSelect: (id) => this.handleBotMenuSelect(bot, id),
+    });
+  }
+
+  handleBotMenuSelect(bot, id) {
+    if (id === "trade") {
+      this.trade?.openTrade(bot);
+      return;
+    }
+    if (id === "contest") {
+      this.ui.setSubtitle?.("比赛（骰子对决）将在中立区赌桌开放。", true);
+      return;
+    }
+    if (id === "pickpocket-coins") {
+      this.director?.pickpocket(bot.id, "coins");
+      return;
+    }
+    if (id === "pickpocket-item") {
+      this.director?.pickpocket(bot.id, "item");
+    }
+  }
+
+  openCraftMenu() {
+    if (!this.panels || !this.director) return;
+    this.panels.open({
+      title: "合成台",
+      ...craftMenu(this.director.state, "local"),
+      onSelect: (id) => {
+        if (id.startsWith("craft-")) this.director.craft(id.slice(6));
+      },
+    });
+  }
+
+  openBoardMenu() {
+    if (!this.panels || !this.director) return;
+    this.panels.open({
+      ...boardMenu(this.director.board, "local"),
+      onSelect: (id) => this.handleBoardSelect(id),
+    });
+  }
+
+  handleBoardSelect(id) {
+    if (id.startsWith("claim-")) {
+      this.director?.claimBoardTask(id.slice(6));
+      return;
+    }
+    if (id.startsWith("complete-")) {
+      this.director?.completeBoardTask(id.slice(9));
+      return;
+    }
+    if (id.startsWith("buy-")) {
+      this.director?.buyBoardListing(id.slice(4));
+      return;
+    }
+    if (id === "sell") this.openSellMenu();
+  }
+
+  openSellMenu() {
+    const items = this.director?.getLocalItems?.() ?? [];
+    if (items.length === 0) {
+      this.ui.setSubtitle?.("背包是空的，没东西可卖。", true);
+      return;
+    }
+    const el = this.ui.elements;
+    this.panels.open({
+      title: "挂售道具",
+      options: [
+        ...items.map((item) => ({ id: `sell-${item.id}`, label: item.label })),
+        { id: "cancel", label: "取消" },
+      ],
+      priceInput: true,
+      onSelect: (id) => {
+        if (!id.startsWith("sell-")) return;
+        const price = Number(el.optionPrice?.value);
+        if (!Number.isFinite(price) || price <= 0) {
+          this.ui.setSubtitle?.("先填一个正数金额。", true);
+          return;
+        }
+        this.director?.sellBoardItem(id.slice(5), price);
+      },
+    });
+  }
+
+  // Hotbar framework: wheel cycles the equipped item, digits pick directly.
+  // Items populate it as the loot/trade systems grow.
+  cycleHotbar(direction) {
+    const { items, equippedId } = this.inventory.snapshot();
+    if (!items.length) return;
+    const currentIndex = items.findIndex((item) => item.id === equippedId);
+    const next = (currentIndex + direction + items.length) % items.length;
+    this.inventory.equip(items[next].id);
+    this.audio?.cue?.("ui-tick");
+  }
+
+  equipHotbarIndex(index) {
+    const { items } = this.inventory.snapshot();
+    const item = items[index];
+    if (!item) return;
+    this.inventory.equip(item.id);
+    this.audio?.cue?.("ui-tick");
   }
 
   handlePhoneAction(payload = {}) {
@@ -796,14 +973,20 @@ export class DesktopApp {
   }
 
   handleInteraction(id, details = {}) {
+    this.ui?.setInteractionDebug?.(`E按下: ${id} @ ${new Date().toLocaleTimeString()}`);
     if (
       this.inventoryOpen
+      || this.trade?.isOpen
+      || this.panels?.isOpen
       || this.presentation?.isOpen?.()
       || this.doorDefense?.isCinematic()
       || this.knockDoor?.isCinematic()
       || this.foundPhone?.isInspecting()
       || this.shadowQuest?.isCinematic()
-    ) return false;
+    ) {
+      this.ui?.setInteractionDebug?.(`E按下: ${id} 但被拦截`);
+      return false;
+    }
     if (id === "presentation-paper") {
       return this.presentation?.open({ source: "door" }) ?? false;
     }
@@ -841,6 +1024,37 @@ export class DesktopApp {
     return true;
   }
 
+  // Yellow emissive highlight on the interactable the player is looking at —
+  // the "press E" cue needs to read from behind, not only through the reticle.
+  applyTargetHighlight(targetId) {
+    if (this.highlightedTargetId === targetId) return;
+    if (this.highlightedTarget) {
+      for (const { material, emissive, emissiveIntensity } of this.highlightedTarget.saved) {
+        material.emissive.setHex(emissive);
+        material.emissiveIntensity = emissiveIntensity;
+      }
+      this.highlightedTarget = null;
+      this.highlightedTargetId = null;
+    }
+    if (!targetId) return;
+    const entry = this.experience?.interactables?.find?.((item) => item.id === targetId);
+    const root = entry?.root;
+    if (!root?.traverse) return;
+    const saved = [];
+    root.traverse((object) => {
+      if (!object.isMesh) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material || !material.emissive) continue;
+        saved.push({ material, emissive: material.emissive.getHex(), emissiveIntensity: material.emissiveIntensity });
+        material.emissive.setHex(0xc9a55b);
+        material.emissiveIntensity = 0.6;
+      }
+    });
+    this.highlightedTarget = { id: targetId, saved };
+    this.highlightedTargetId = targetId;
+  }
+
   handleTargetFocus(target = {}) {
     const { id, focused } = target;
     const previousTargetId = this.currentTargetId;
@@ -849,6 +1063,8 @@ export class DesktopApp {
       ? target.epoch
       : this.currentTargetId !== previousTargetId ? this.currentTargetEpoch + 1 : this.currentTargetEpoch;
     this.ui?.setTargetFocused(Boolean(this.currentTargetId));
+    this.ui?.setInteractionDebug?.(`目标: ${this.currentTargetId ?? "无"}`);
+    this.applyTargetHighlight(this.currentTargetId);
     this.handTracking?.setTarget?.(this.currentTargetId ? {
       id: this.currentTargetId,
       epoch: this.currentTargetEpoch,
@@ -1160,6 +1376,7 @@ export class DesktopApp {
     this.rightHandFlashlight = null;
     this.shadowQuest = null;
     this.director = null;
+    this.trade = null;
     this.player = null;
     this.experience = null;
     if (cleanupError) throw cleanupError;

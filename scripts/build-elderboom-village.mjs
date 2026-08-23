@@ -5,10 +5,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Matrix4, Quaternion, Vector3 } from "three";
 import { validateEnvironmentManifest } from "../src/desktop/environment/manifest.js";
-import { ELDERBOOM_V1_CONFIG, assertExpectedSourceHash } from "./environment/elderboom-v1.config.mjs";
+import {
+  ELDERBOOM_V1_CONFIG,
+  assertExpectedSourceHash,
+  villageGatesForQuality,
+  villageQualityProfile,
+} from "./environment/elderboom-v1.config.mjs";
 import { collectDocumentReferences, nodeWorldBounds, walkNodeWorldTransforms } from "./environment/glb-graph.mjs";
 import { readGlbDocument } from "./environment/glb-io.mjs";
-import { optimizeVillageTextures, VILLAGE_TEXTURE_LIMITS } from "./environment/optimize-village-textures.mjs";
+import { inspectRuntimeTextures, optimizeVillageTextures } from "./environment/optimize-village-textures.mjs";
 
 const JSON_CHUNK = 0x4e4f534a;
 const BIN_CHUNK = 0x004e4942;
@@ -34,6 +39,112 @@ function parentIndices(json) {
     for (const child of json.nodes[index]?.children ?? []) parents.set(child, index);
   }
   return parents;
+}
+
+// ---------------------------------------------------------------------------
+// Architecture colliders. Instanced groupings erase node names at runtime, so
+// colliders must be generated here while names are still intact. Meshes become
+// oriented boxes (local AABB pushed through the node's world transform), which
+// keeps rotated walls tight instead of sealing doorways with world-AABBs.
+// ---------------------------------------------------------------------------
+const ARCHITECTURE_PATTERN = /wall|door|fence|gate|house|building|modular|well|pillar|beam|stair|arch|barrel|cart|stall|table|bench|anvil|trough|bollard|wheel|gravestone|carafe|wood_pile|chopped|tower|barn|stable|shed|mill|church|roof|plank|timber|stone_wall|crate|wooden/i;
+const NON_SOLID_PATTERN = /foliage|leaf|leaves|grass|flower|plant|branch|vine|moss|tree|blackalder|landscape|terrain|cloth|fabric|flag|banner|lantern|candle|fire|smoke|particle/i;
+// The hand-authored colliders own the core courtyard; generated pieces only
+// fill in the outer village so the authored gameplay route stays clear.
+const CORE_COURTYARD = { minX: -18.5, maxX: 18.5, minZ: -19, maxZ: 19 };
+
+export function generateArchitectureColliders(json, selection, config = ELDERBOOM_V1_CONFIG, excludeNearPositions = [], authoredColliders = []) {
+  const transforms = selection.worldTransforms ?? walkNodeWorldTransforms(json);
+  const rootOffset = config.rootTransform.position;
+  const colliders = [];
+  const occupied = new Set();
+  for (const index of ordered(selection.selectedNodes)) {
+    const node = json.nodes[index];
+    const name = node.name ?? "";
+    if (!Number.isInteger(node?.mesh)) continue;
+    if (!ARCHITECTURE_PATTERN.test(name) || NON_SOLID_PATTERN.test(name)) continue;
+    // Door/gate frames contain the doorway opening; a solid box would seal it.
+    if (/door|gate/i.test(name)) continue;
+    const mesh = json.meshes?.[node.mesh];
+    if (!mesh) continue;
+
+    // Mesh-local AABB across primitives (accessor bounds are exact).
+    let min = null;
+    let max = null;
+    for (const primitive of mesh.primitives ?? []) {
+      const accessor = json.accessors?.[primitive.attributes?.POSITION];
+      if (!accessor?.min || !accessor?.max) continue;
+      min = min ? min.map((v, axis) => Math.min(v, accessor.min[axis])) : [...accessor.min];
+      max = max ? max.map((v, axis) => Math.max(v, accessor.max[axis])) : [...accessor.max];
+    }
+    if (!min || !max) continue;
+    const localSize = max.map((v, axis) => v - min[axis]);
+    if (localSize.some((v) => !Number.isFinite(v))) continue;
+
+    const world = transforms.get(index);
+    if (!world) continue;
+    const position = new Vector3();
+    const rotation = new Quaternion();
+    const scaleVec = new Vector3();
+    world.decompose(position, rotation, scaleVec);
+    const worldSize = localSize.map((v, axis) => v * Math.abs(scaleVec.toArray()[axis] ?? 1));
+    if (worldSize[1] < 0.25 || Math.max(worldSize[0], worldSize[2]) > 9) continue;
+    if (Math.min(worldSize[0], worldSize[2]) < 0.04) continue;
+    // Low ruined walls and rubble (< ~1.1 m) sit in walking lanes; blocking
+    // them strands the authored route. Real walls/fences are taller.
+    if (worldSize[1] < 1.1) continue;
+
+    const localCenter = min.map((v, axis) => (v + max[axis]) / 2);
+    const worldCenter = new Vector3(...localCenter).applyMatrix4(world);
+    // Inset XZ so collider faces don't nick the walking lanes between pieces.
+    const halfExtents = worldSize.map((v, axis) => Math.max(0.04, (v / 2) * (axis === 1 ? 1 : 0.88)));
+    const gameCenter = [
+      worldCenter.x + rootOffset[0],
+      worldCenter.y + rootOffset[1],
+      worldCenter.z + rootOffset[2],
+    ];
+    // Never block task anchors: gameplay needs a clear approach radius. The
+    // conservative XZ reach of the box (half-diagonal) + clearance keeps the
+    // anchor approachable even for rotated pieces.
+    const xzReach = Math.hypot(halfExtents[0], halfExtents[2]);
+    if (excludeNearPositions.some((anchor) => {
+      const dx = anchor[0] - gameCenter[0];
+      const dz = anchor[2] - gameCenter[2];
+      const horizontal = Math.hypot(dx, dz);
+      return horizontal - xzReach < 1.0;
+    })) continue;
+    // The hand-authored colliders own the core courtyard (route + doorways).
+    if (
+      gameCenter[0] > CORE_COURTYARD.minX && gameCenter[0] < CORE_COURTYARD.maxX
+      && gameCenter[2] > CORE_COURTYARD.minZ && gameCenter[2] < CORE_COURTYARD.maxZ
+    ) continue;
+    // The hand-authored colliders own the core buildings (door-aware). Skip
+    // generated pieces that would double-cover or intrude into them.
+    if (authoredColliders.some((authored) => {
+      const dx = authored.position[0] - gameCenter[0];
+      const dz = authored.position[2] - gameCenter[2];
+      return dx * dx + dz * dz < 2.2 * 2.2;
+    })) continue;
+    const key = [
+      Math.round(worldCenter.x * 4), Math.round(worldCenter.y * 4), Math.round(worldCenter.z * 4),
+      Math.round(halfExtents[0] * 20), Math.round(halfExtents[1] * 20), Math.round(halfExtents[2] * 20),
+    ].join(":");
+    if (occupied.has(key)) continue;
+    occupied.add(key);
+
+    colliders.push({
+      id: `arch-${colliders.length}`,
+      shape: "box",
+      position: [
+        +gameCenter[0].toFixed(2),
+        +gameCenter[1].toFixed(2),
+        +gameCenter[2].toFixed(2),
+      ],
+      rotation: [rotation.x, rotation.y, rotation.z, rotation.w].map((v) => +v.toFixed(4)),
+      halfExtents: halfExtents.map((v) => +v.toFixed(3)),
+    });
+  }
+  return colliders;
 }
 
 function sceneForRoot(json, nodeIndex) {
@@ -165,11 +276,38 @@ const isFactor = (value, expected) => (
 );
 
 export function repairVillageMaterials(materials = []) {
-  const repairs = { landscape: 0, grass: 0, water: 0 };
+  const repairs = { landscape: 0, grass: 0, water: 0, alder: 0 };
   const grassTemplate = materials.find((material) => (
     /^MI_Grass_Clumps_rbojr_2K_/.test(material?.name ?? "")
     && material?.pbrMetallicRoughness?.baseColorTexture
   ));
+  const alderTemplates = {
+    tileable: materials.find((material) => (
+      /^MI_BlackAlder_Tileable_SM_BlackAlder_Field_\d+$/.test(material?.name ?? "")
+      && material?.pbrMetallicRoughness?.baseColorTexture
+    )),
+    twoSided: materials.find((material) => (
+      /^MI_BlackAlder_TwoSided_SM_BlackAlder_Field_\d+$/.test(material?.name ?? "")
+      && material?.pbrMetallicRoughness?.baseColorTexture
+    )),
+  };
+
+  const repairBrokenAlder = (material, name, template) => {
+    delete material.emissiveFactor;
+    if (template) {
+      const replacement = structuredClone(template);
+      Object.assign(material, replacement, { name });
+    } else {
+      material.pbrMetallicRoughness = {
+        ...material.pbrMetallicRoughness,
+        baseColorFactor: [0.16, 0.3, 0.14, 1],
+        metallicFactor: 0,
+        roughnessFactor: 0.9,
+      };
+      material.emissiveFactor = [0, 0, 0];
+    }
+    repairs.alder += 1;
+  };
 
   for (const material of materials) {
     const name = material?.name ?? "";
@@ -184,7 +322,16 @@ export function repairVillageMaterials(materials = []) {
       repairs.landscape += 1;
       continue;
     }
+    if (/^MI_BlackAlder_Tileable_SM_BlackAlder_Field_\d+$/.test(name) && isFactor(factor, [1, 0, 1, 1])) {
+      repairBrokenAlder(material, name, alderTemplates.tileable);
+      continue;
+    }
+    if (/^MI_BlackAlder_TwoSided_SM_BlackAlder_Field_\d+$/.test(name) && isFactor(factor, [1, 0, 1, 1])) {
+      repairBrokenAlder(material, name, alderTemplates.twoSided);
+      continue;
+    }
     if (/^MI_Grass_Clumps_rbojr_2K_/.test(name) && isFactor(factor, [1, 0, 1, 1])) {
+      delete material.emissiveFactor;
       if (grassTemplate) {
         const replacement = structuredClone(grassTemplate);
         Object.assign(material, replacement, { name });
@@ -233,7 +380,7 @@ function createFloatAttribute(values, type, count) {
   return { bytes, accessor: { componentType: 5126, count, type, min, max } };
 }
 
-function findInstancingGroups(json, selectedNodes, parents) {
+function findInstancingGroups(json, selectedNodes, parents, transforms, config) {
   const groups = new Map();
   for (const index of ordered(selectedNodes)) {
     const node = json.nodes[index];
@@ -252,16 +399,48 @@ function findInstancingGroups(json, selectedNodes, parents) {
     group.sourceNodes.push(index);
     groups.set(key, group);
   }
-  return [...groups.values()]
+  const base = [...groups.values()]
     .filter((group) => group.sourceNodes.length >= 2)
     .sort((a, b) => a.sourceNodes[0] - b.sourceNodes[0]);
+
+  const tileSize = Number(config?.instancing?.tileSize);
+  if (!Number.isFinite(tileSize) || tileSize <= 0) return base;
+  const minGroupSize = Number.isFinite(Number(config?.instancing?.minGroupSize))
+    ? Number(config.instancing.minGroupSize)
+    : 16;
+
+  const tiled = [];
+  for (const group of base) {
+    if (group.sourceNodes.length < minGroupSize) {
+      tiled.push(group);
+      continue;
+    }
+    const tiles = new Map();
+    for (const index of group.sourceNodes) {
+      const world = transforms.get(index);
+      const tileX = Math.floor((world?.elements[12] ?? 0) / tileSize);
+      const tileZ = Math.floor((world?.elements[14] ?? 0) / tileSize);
+      const tileKey = `${tileX}|${tileZ}`;
+      const tile = tiles.get(tileKey) ?? { x: tileX, z: tileZ, sourceNodes: [] };
+      tile.sourceNodes.push(index);
+      tiles.set(tileKey, tile);
+    }
+    if (tiles.size <= 1) {
+      tiled.push(group);
+      continue;
+    }
+    for (const tile of [...tiles.values()].sort((a, b) => a.x - b.x || a.z - b.z)) {
+      tiled.push({ ...group, sourceNodes: tile.sourceNodes, tile: { x: tile.x, z: tile.z } });
+    }
+  }
+  return tiled.sort((a, b) => a.sourceNodes[0] - b.sourceNodes[0]);
 }
 
-export function buildSubsetDocument(document, selection) {
+export function buildSubsetDocument(document, selection, config = null) {
   const source = document.json;
   const parents = parentIndices(source);
   const references = collectDocumentReferences(source, selection.selectedNodes);
-  const instancingGroups = findInstancingGroups(source, selection.selectedNodes, parents);
+  const instancingGroups = findInstancingGroups(source, selection.selectedNodes, parents, selection.worldTransforms, config);
   const instancedSources = new Set(instancingGroups.flatMap((group) => group.sourceNodes));
   const retainedNodes = new Set([...references.nodes].filter((index) => !instancedSources.has(index)));
   const nodeMap = mappingFor(retainedNodes);
@@ -316,7 +495,9 @@ export function buildSubsetDocument(document, selection) {
       ROTATION: appendAttribute(createFloatAttribute(transforms.flatMap((entry) => entry.rotation), "VEC4", transforms.length)),
       SCALE: appendAttribute(createFloatAttribute(transforms.flatMap((entry) => entry.scale), "VEC3", transforms.length)),
     };
-    group.generatedNodeName = `instance-${String(groupIndex).padStart(3, "0")}-mesh-${group.mesh}`;
+    group.generatedNodeName = group.tile
+      ? `instance-${String(groupIndex).padStart(3, "0")}-tile-${group.tile.x}-${group.tile.z}-mesh-${group.mesh}`
+      : `instance-${String(groupIndex).padStart(3, "0")}-mesh-${group.mesh}`;
     group.generatedNodeIndex = retainedNodes.size + generatedNodes.length;
     generatedNodes.push({
       name: group.generatedNodeName,
@@ -541,7 +722,7 @@ export async function inspectVillageSource({ sourcePath = ELDERBOOM_V1_CONFIG.so
       textures: json.textures?.length ?? 0,
       images: json.images?.length ?? 0,
     },
-    westernCore: {
+    selection: {
       bounds: ELDERBOOM_V1_CONFIG.selection.bounds,
       meshNodes: selection.selectedNodes.size,
       referencedNodes: references.nodes.size,
@@ -556,30 +737,42 @@ export async function inspectVillageSource({ sourcePath = ELDERBOOM_V1_CONFIG.so
   };
 }
 
-function assertPerformanceGates(metrics, artifact, textureMetrics = {}) {
+function assertPerformanceGates(metrics, artifact, gates) {
   const failures = [];
-  if (metrics.renderNodes >= 900) failures.push(`render nodes ${metrics.renderNodes} >= 900`);
-  if (metrics.drawCalls >= 450) failures.push(`draw calls ${metrics.drawCalls} >= 450`);
-  if (metrics.expandedTriangles >= 9_000_000) failures.push(`expanded triangles ${metrics.expandedTriangles} >= 9000000`);
-  if (metrics.images > 260) failures.push(`images ${metrics.images} > 260`);
-  const maxBytes = 128 * 1024 * 1024;
-  if (artifact.bytes > maxBytes) failures.push(`artifact bytes ${artifact.bytes} > ${maxBytes}`);
-  if ((textureMetrics.texels ?? 0) > 120_000_000) failures.push(`texture texels ${textureMetrics.texels} > 120000000`);
-  if ((textureMetrics.maxColorDimension ?? 0) > VILLAGE_TEXTURE_LIMITS.color) {
-    failures.push(`color texture dimension ${textureMetrics.maxColorDimension} > ${VILLAGE_TEXTURE_LIMITS.color}`);
+  if (metrics.renderNodes >= gates.maxRenderNodesExclusive) failures.push(`render nodes ${metrics.renderNodes} >= ${gates.maxRenderNodesExclusive}`);
+  if (metrics.drawCalls >= gates.maxDrawCallsExclusive) failures.push(`draw calls ${metrics.drawCalls} >= ${gates.maxDrawCallsExclusive}`);
+  if (metrics.expandedTriangles >= gates.maxExpandedTrianglesExclusive) {
+    failures.push(`expanded triangles ${metrics.expandedTriangles} >= ${gates.maxExpandedTrianglesExclusive}`);
   }
-  if ((textureMetrics.maxDataDimension ?? 0) > VILLAGE_TEXTURE_LIMITS.data) {
-    failures.push(`data texture dimension ${textureMetrics.maxDataDimension} > ${VILLAGE_TEXTURE_LIMITS.data}`);
+  if (metrics.images > gates.maxImages) failures.push(`images ${metrics.images} > ${gates.maxImages}`);
+  if (artifact.bytes > gates.maxArtifactBytes) failures.push(`artifact bytes ${artifact.bytes} > ${gates.maxArtifactBytes}`);
+  if (artifact.bytes < gates.minArtifactBytes) failures.push(`artifact bytes ${artifact.bytes} < ${gates.minArtifactBytes}`);
+  if ((metrics.texels ?? 0) > gates.maxTextureTexels) failures.push(`texture texels ${metrics.texels} > ${gates.maxTextureTexels}`);
+  if ((metrics.maxColorDimension ?? 0) > gates.maxColorDimension) {
+    failures.push(`color texture dimension ${metrics.maxColorDimension} > ${gates.maxColorDimension}`);
+  }
+  if ((metrics.maxDataDimension ?? 0) > gates.maxDataDimension) {
+    failures.push(`data texture dimension ${metrics.maxDataDimension} > ${gates.maxDataDimension}`);
   }
   if (failures.length > 0) throw new Error(`Village subset performance gates failed: ${failures.join(", ")}`);
 }
 
-async function updateManifestArtifact(artifact) {
+async function updateManifestArtifact(artifacts, generatedColliders = null) {
   const manifestPath = path.resolve(ELDERBOOM_V1_CONFIG.outputs.manifest);
   const source = JSON.parse(await readFile(manifestPath, "utf8"));
-  const chunk = source.chunks?.find((entry) => entry.id === "western-core");
-  if (!chunk) throw new Error("Village manifest is missing the western-core chunk");
-  chunk.artifact = { bytes: artifact.bytes, sha256: artifact.sha256 };
+  for (const chunk of source.chunks ?? []) {
+    const artifact = artifacts.get(chunk.id);
+    if (!artifact) throw new Error(`Village manifest is missing build output for chunk ${chunk.id}`);
+    chunk.artifact = { bytes: artifact.bytes, sha256: artifact.sha256 };
+  }
+  if (Array.isArray(generatedColliders)) {
+    const authored = (source.colliders ?? []).filter((entry) => !String(entry.id).startsWith("arch-"));
+    source.colliders = [...authored, ...generatedColliders];
+  }
+  const configuredIds = ELDERBOOM_V1_CONFIG.chunks.map((chunk) => chunk.id).sort().join(",");
+  if ((source.chunks ?? []).map((chunk) => chunk.id).sort().join(",") !== configuredIds) {
+    throw new Error(`Village manifest chunks do not match the configured quality chunks: ${configuredIds}`);
+  }
   const manifest = validateEnvironmentManifest(source);
   const temporaryPath = `${manifestPath}.tmp-${process.pid}`;
   await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -590,22 +783,69 @@ async function buildVillage({ sourcePath = ELDERBOOM_V1_CONFIG.source.defaultPat
   const inspection = await inspectVillageSource({ sourcePath });
   const document = await readGlbDocument(sourcePath);
   const selection = selectSpatialNodes(document.json, ELDERBOOM_V1_CONFIG);
-  const subset = buildSubsetDocument(document, selection);
-  const outputPath = path.resolve(ELDERBOOM_V1_CONFIG.outputs.directory, "western-core.glb");
-  const rawPath = `${outputPath}.raw-${process.pid}.glb`;
-  await writeGlbStream(sourcePath, rawPath, subset);
-  const textureMetrics = await optimizeVillageTextures({ inputPath: rawPath, outputPath });
-  await rm(rawPath, { force: true });
-  const artifact = {
-    path: outputPath,
-    bytes: textureMetrics.bytes,
-    sha256: await sha256File(outputPath),
+  const subset = buildSubsetDocument(document, selection, ELDERBOOM_V1_CONFIG);
+  const existingManifest = JSON.parse(await readFile(path.resolve(ELDERBOOM_V1_CONFIG.outputs.manifest), "utf8"));
+  const taskAnchors = Object.values(existingManifest.tasks ?? {}).map((task) => task.position).filter(Array.isArray);
+  const authoredColliders = (existingManifest.colliders ?? []).filter((entry) => !String(entry.id).startsWith("arch-"));
+  const generatedColliders = generateArchitectureColliders(document.json, selection, ELDERBOOM_V1_CONFIG, taskAnchors, authoredColliders);
+  const outputDirectory = path.resolve(ELDERBOOM_V1_CONFIG.outputs.directory);
+  await mkdir(outputDirectory, { recursive: true });
+
+  const artifacts = new Map();
+  const chunkReports = [];
+  const ultraChunk = ELDERBOOM_V1_CONFIG.chunks.find((chunk) => chunk.quality === "ultra");
+  const ultraProfile = villageQualityProfile(ultraChunk.quality);
+  if (ultraProfile.encoding !== "original") throw new Error("The ultra chunk must retain original textures");
+
+  const ultraPath = path.join(outputDirectory, `${ultraChunk.id}.glb`);
+  await writeGlbStream(sourcePath, ultraPath, subset);
+  const ultraStat = await stat(ultraPath);
+  const ultraArtifact = { path: ultraPath, bytes: ultraStat.size, sha256: await sha256File(ultraPath) };
+  const ultraDocument = await readGlbDocument(ultraPath);
+  ultraDocument.path = ultraPath;
+  const ultraTextureMetrics = await inspectRuntimeTextures(ultraDocument);
+  const ultraMetrics = { ...subset.metrics, ...ultraTextureMetrics };
+  assertPerformanceGates(ultraMetrics, ultraArtifact, villageGatesForQuality(ultraChunk.quality));
+  artifacts.set(ultraChunk.id, ultraArtifact);
+  chunkReports.push({
+    id: ultraChunk.id,
+    quality: ultraChunk.quality,
+    artifact: ultraArtifact,
+    metrics: ultraMetrics,
+  });
+
+  for (const chunk of ELDERBOOM_V1_CONFIG.chunks.filter((entry) => entry.quality !== "ultra")) {
+    const profile = villageQualityProfile(chunk.quality);
+    const outputPath = path.join(outputDirectory, `${chunk.id}.glb`);
+    const textureMetrics = await optimizeVillageTextures({
+      inputPath: ultraPath,
+      outputPath,
+      colorMax: profile.colorMax,
+      dataMax: profile.dataMax,
+      quality: profile.webpQuality,
+      dimensionScale: 0.8,
+    });
+    const artifact = {
+      path: outputPath,
+      bytes: textureMetrics.bytes,
+      sha256: await sha256File(outputPath),
+    };
+    const metrics = { ...subset.metrics, ...textureMetrics };
+    assertPerformanceGates(metrics, artifact, villageGatesForQuality(chunk.quality));
+    artifacts.set(chunk.id, artifact);
+    chunkReports.push({ id: chunk.id, quality: chunk.quality, artifact, metrics });
+  }
+
+  const report = {
+    version: 2,
+    generatedAt: new Date().toISOString(),
+    defaultQuality: ELDERBOOM_V1_CONFIG.defaultQuality,
+    inspection,
+    chunks: chunkReports,
   };
-  assertPerformanceGates(subset.metrics, artifact, textureMetrics);
-  const report = { version: 1, generatedAt: new Date().toISOString(), inspection, artifact, metrics: { ...subset.metrics, ...textureMetrics } };
   await mkdir(path.dirname(ELDERBOOM_V1_CONFIG.outputs.report), { recursive: true });
   await writeFile(ELDERBOOM_V1_CONFIG.outputs.report, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await updateManifestArtifact(artifact);
+  await updateManifestArtifact(artifacts, generatedColliders);
   return report;
 }
 

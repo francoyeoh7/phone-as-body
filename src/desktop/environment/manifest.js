@@ -1,11 +1,15 @@
 const TASK_IDS = Object.freeze([
-  "exit-door",
+    "exit-door",
   "found-phone",
   "fuse",
   "panel",
   "shadow-window",
   "washbasin",
 ]);
+
+export const ENVIRONMENT_QUALITY_LEVELS = Object.freeze(["low", "balanced", "high", "ultra"]);
+export const ENVIRONMENT_DEFAULT_QUALITY = "balanced";
+const QUALITY_LEVELS = new Set(ENVIRONMENT_QUALITY_LEVELS);
 
 const LIGHT_ROLES = new Set(["moon", "storm", "power-sequence", "emergency", "practical"]);
 const LOCAL_CHUNK_PREFIX = "/assets/environment/elderboom-v1/chunks/";
@@ -129,8 +133,11 @@ function artifact(value, path) {
 }
 
 function chunk(value, path) {
-  exactObject(value, path, ["id", "url", "required", "artifact", "bounds", "castShadowNamePrefixes"]);
+  exactObject(value, path, ["id", "url", "required", "artifact", "bounds", "castShadowNamePrefixes"], ["quality"]);
   if (typeof value.required !== "boolean") invalid(`${path}.required`, "expected a boolean");
+  if (value.quality !== undefined && !QUALITY_LEVELS.has(value.quality)) {
+    invalid(`${path}.quality`, `expected one of ${ENVIRONMENT_QUALITY_LEVELS.join(", ")}`);
+  }
   if (!Array.isArray(value.castShadowNamePrefixes) || value.castShadowNamePrefixes.length === 0) {
     invalid(`${path}.castShadowNamePrefixes`, "expected at least one node-name prefix");
   }
@@ -148,6 +155,7 @@ function chunk(value, path) {
     artifact: artifact(value.artifact, `${path}.artifact`),
     bounds: bounds(value.bounds, `${path}.bounds`),
     castShadowNamePrefixes,
+    ...(value.quality !== undefined ? { quality: value.quality } : {}),
   };
 }
 
@@ -337,7 +345,9 @@ export function validateEnvironmentManifest(value) {
   if (value.id !== "elderboom-v1") invalid("manifest.id", "expected elderboom-v1");
   if (value.version !== 1) invalid("manifest.version", "expected version 1");
   if (value.coordinateSpace !== "game") invalid("manifest.coordinateSpace", "expected game");
-  if (!Array.isArray(value.chunks) || value.chunks.length !== 1) invalid("manifest.chunks", "expected exactly one chunk");
+  if (!Array.isArray(value.chunks) || value.chunks.length < 1 || value.chunks.length > 4) {
+    invalid("manifest.chunks", "expected one to four chunks");
+  }
   if (!Array.isArray(value.colliders) || value.colliders.length === 0) invalid("manifest.colliders", "expected colliders");
   if (!Array.isArray(value.occluders)) invalid("manifest.occluders", "expected an array");
   if (!Array.isArray(value.lights) || value.lights.length === 0) invalid("manifest.lights", "expected lights");
@@ -352,6 +362,10 @@ export function validateEnvironmentManifest(value) {
 
   const chunks = value.chunks.map((entry, index) => chunk(entry, `manifest.chunks[${index}]`));
   uniqueIds(chunks, "manifest.chunks");
+  const chunkQualities = chunks.map((entry) => entry.quality).filter((quality) => quality !== undefined);
+  if (new Set(chunkQualities).size !== chunkQualities.length) {
+    invalid("manifest.chunks", "quality levels must be unique across chunks");
+  }
   const colliders = value.colliders.map((entry, index) => collider(entry, `manifest.colliders[${index}]`));
   const colliderIds = uniqueIds(colliders, "manifest.colliders");
   const colliderById = new Map(colliders.map((entry) => [entry.id, entry]));

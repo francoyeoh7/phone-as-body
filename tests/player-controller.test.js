@@ -42,6 +42,9 @@ function createCrouchPlayer({ phoneConnected = true, fallback = false } = {}) {
     settings: { sensitivity: 1, smoothing: 0.18, invertY: false },
     pitchOverflow: 0,
     aimAssist: null,
+    bobPhase: 0,
+    bobTime: 0,
+    sprinting: false,
     camera: { position: new THREE.Vector3(), rotation: {} },
     body: {
       translation: () => ({ ...translation }),
@@ -137,7 +140,7 @@ describe("player phone view deltas", () => {
 
     player.interact("hand");
 
-    expect(onInteract).toHaveBeenCalledExactlyOnceWith("found-phone", { source: "hand" });
+    expect(onInteract).toHaveBeenCalledExactlyOnceWith("found-phone", { source: "hand", crouched: false });
   });
 
   it("softly attracts the camera and reports a newly focused assisted target", () => {
@@ -465,7 +468,7 @@ describe("player crouch presentation", () => {
 
     player.update(1 / 60);
 
-    expect(Math.hypot(player.velocity.x, player.velocity.z)).toBeGreaterThan(1.25);
+    expect(Math.hypot(player.velocity.x, player.velocity.z)).toBeGreaterThan(0.9);
   });
 
   it.each([30, 60, 120])("approaches the crouched pose monotonically at %ifps", (fps) => {
@@ -478,29 +481,35 @@ describe("player crouch presentation", () => {
       expect(player.crouchAmount).toBeGreaterThanOrEqual(previous);
       previous = player.crouchAmount;
     }
+    player.bobPhase = 0;
+    player.bobTime = 0;
     player.syncAfterPhysics();
 
     expect(player.crouchAmount).toBeGreaterThan(0.98);
-    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(0.20, 2);
+    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(-0.07, 2);
   });
 
   it("interpolates eye height and speed, then recovers after release", () => {
     const player = createCrouchPlayer();
     player.setCrouching(true);
     for (let index = 0; index < 60; index += 1) player.update(1 / 60);
+    player.bobPhase = 0;
+    player.bobTime = 0;
     player.syncAfterPhysics();
 
-    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(0.20, 2);
+    expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(-0.07, 2);
     expect(Math.hypot(player.velocity.x, player.velocity.z)).toBeCloseTo(0, 6);
-    expect(player.movementSpeed).toBeCloseTo(2.0, 2);
+    expect(player.movementSpeed).toBeCloseTo(1.2, 2);
 
     player.setCrouching(false);
     for (let index = 0; index < 60; index += 1) player.update(1 / 60);
+    player.bobPhase = 0;
+    player.bobTime = 0;
     player.syncAfterPhysics();
 
     expect(player.crouchAmount).toBeLessThan(0.02);
     expect(player.camera.position.y - player.body.translation().y).toBeCloseTo(0.55, 2);
-    expect(player.movementSpeed).toBeCloseTo(3.25, 2);
+    expect(player.movementSpeed).toBeCloseTo(2.4, 2);
   });
 
   it("uses fresh phone crouch input and Control/C fallback keys", () => {

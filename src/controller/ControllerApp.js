@@ -23,6 +23,10 @@ import { pcm16FramesToWav } from "./PcmVoiceStreamer.js";
 import { VirtualJoystick } from "./VirtualJoystick.js";
 import { VoiceHoldController } from "./VoiceHoldController.js";
 import { BrowserVoiceRecognizer } from "./BrowserVoiceRecognizer.js";
+import {
+  ENVIRONMENT_DEFAULT_QUALITY,
+  ENVIRONMENT_QUALITY_LEVELS,
+} from "../desktop/environment/manifest.js";
 import "./styles.css";
 
 const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, Presentation, RotateCcw, Settings, X };
@@ -30,7 +34,15 @@ const icons = { ChevronLeft, ChevronRight, Crosshair, Mic, Presentation, RotateC
 const defaultSettings = {
   sensitivity: 1,
   smoothing: 0.18,
+  quality: ENVIRONMENT_DEFAULT_QUALITY,
 };
+
+const QUALITY_OPTIONS = Object.freeze([
+  { value: "low", label: "流畅（纹理 1024）" },
+  { value: "balanced", label: "均衡（纹理 1536）" },
+  { value: "high", label: "高清（纹理 2048）" },
+  { value: "ultra", label: "极限（原始 8K）" },
+]);
 
 function loadSettings() {
   try {
@@ -43,6 +55,7 @@ function loadSettings() {
       smoothing: !legacySettings && Number.isFinite(smoothing)
         ? Math.min(1, Math.max(0, smoothing))
         : defaultSettings.smoothing,
+      quality: ENVIRONMENT_QUALITY_LEVELS.includes(saved?.quality) ? saved.quality : defaultSettings.quality,
     };
   } catch {
     return { ...defaultSettings };
@@ -122,6 +135,11 @@ export function controllerShellMarkup(_room, settings = defaultSettings) {
         </label>
         <label>转向平滑 <output id="smoothing-value">${Math.round(settings.smoothing * 100)}%</output>
           <input id="smoothing" type="range" min="0" max="1" step="0.01" value="${settings.smoothing}">
+        </label>
+        <label>环境画质
+          <select id="quality" aria-label="环境画质">${QUALITY_OPTIONS.map((option) => (
+            `<option value="${option.value}"${option.value === settings.quality ? " selected" : ""}>${option.label}</option>`
+          )).join("")}</select>
         </label>
         <button class="secondary-button" id="recenter" type="button"><i data-lucide="crosshair"></i><span>重新校准方向</span></button>
         <button class="secondary-button presentation-launch" id="presentation-open" type="button"><i data-lucide="presentation"></i><span>PPT</span></button>
@@ -977,6 +995,13 @@ export class ControllerApp {
         this.socket?.sendAction("settings", { settings: this.settings });
       });
     }
+    this.root.querySelector("#quality")?.addEventListener("change", (event) => {
+      const quality = event.target.value;
+      if (!ENVIRONMENT_QUALITY_LEVELS.includes(quality)) return;
+      this.settings.quality = quality;
+      localStorage.setItem("corridor617-settings", JSON.stringify(this.settings));
+      this.socket?.sendAction("settings", { settings: this.settings });
+    });
   }
 
   setPresentationControls({ active = false, index = 0, total = 0 } = {}) {

@@ -6,6 +6,7 @@ import { createFoundPhoneProp } from "./FoundPhoneProp.js";
 import { createWashbasinState } from "./Washbasin.js";
 import { createCorridorLayout } from "./CorridorLayout.js";
 import { loadEnvironment as loadVillageEnvironment } from "./environment/EnvironmentLoader.js";
+import { ENVIRONMENT_DEFAULT_QUALITY, ENVIRONMENT_QUALITY_LEVELS } from "./environment/manifest.js";
 import { createEnvironmentColliders as createVillageColliders } from "./environment/colliders.js";
 import { disposeEnvironmentResources } from "./environment/resources.js";
 import { VillageNpcSystem } from "./npc/VillageNpcSystem.js";
@@ -176,6 +177,7 @@ function applyVillageGroundTexture(environmentRoot) {
   const normal = loadPbrTexture("/assets/materials/polyhaven/forest-ground-01/normal.jpg", { repeat: [5, 5] });
   const roughness = loadPbrTexture("/assets/materials/polyhaven/forest-ground-01/roughness.jpg", { repeat: [5, 5] });
   if (!diffuse && !normal && !roughness) return;
+  const size = new THREE.Vector3();
   environmentRoot.traverse((object) => {
     if (!object.isMesh || !/landscape/i.test(`${object.name} ${object.geometry?.name ?? ""}`)) return;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -193,6 +195,28 @@ function applyVillageGroundTexture(environmentRoot) {
     });
     object.material = Array.isArray(object.material) ? replacements : replacements[0];
     object.receiveShadow = true;
+    if (object.geometry?.computeBoundingBox) {
+      object.geometry.computeBoundingBox();
+      if (object.geometry.boundingBox) {
+        object.geometry.boundingBox.getSize(size);
+        // ~1.7 m per ground texture tile keeps the flashlight circle detailed
+        // without swimming artifacts. Landscape components are axis-aligned,
+        // so the local bounding box equals the world footprint.
+        const repeatX = Math.max(2, Math.round(size.x / 1.7));
+        const repeatY = Math.max(2, Math.round(size.z / 1.7));
+        for (const material of replacements) {
+          for (const texture of [material.map, material.normalMap, material.roughnessMap]) {
+            if (!texture) continue;
+            const tiled = texture.clone();
+            tiled.repeat.set(repeatX, repeatY);
+            tiled.needsUpdate = true;
+            if (material.map === texture) material.map = tiled;
+            else if (material.normalMap === texture) material.normalMap = tiled;
+            else material.roughnessMap = tiled;
+          }
+        }
+      }
+    }
   });
 }
 
@@ -962,7 +986,9 @@ export function disposePhysicsWorld(world) {
 
 const STANDARD_PIXEL_RATIO_CAP = 0.9;
 const SOFTWARE_PIXEL_RATIO_CAP = 0.75;
+const MAINSTREAM_PIXEL_RATIO_CAP = 0.75;
 const SOFTWARE_RENDERER_PATTERN = /microsoft basic render driver|swiftshader|llvmpipe|software rasterizer|warp-webgl/i;
+const MAINSTREAM_RENDERER_PATTERN = /gtx\s*(9\d\d|10\d\d|16\d\d)|mx\d{3}|rtx\s*2050|quadro|rx\s*(4[5-9]0|5[5-9]0)|vega\s*(8|11|56|64)|iris\s*xe|uhd\s*graphics|arc\s*a3\d\d|apple\s*m[12]\b|mali|adreno/i;
 
 function readRendererName(renderer) {
   try {
@@ -982,11 +1008,18 @@ function readRendererName(renderer) {
 export function detectRenderProfile(renderer) {
   const rendererName = readRendererName(renderer);
   const isSoftware = SOFTWARE_RENDERER_PATTERN.test(rendererName);
+  const isMainstream = !isSoftware && MAINSTREAM_RENDERER_PATTERN.test(rendererName);
   return {
-    kind: isSoftware ? "software" : rendererName ? "hardware" : "unknown",
+    kind: isSoftware ? "software" : isMainstream ? "mainstream" : rendererName ? "hardware" : "unknown",
     rendererName,
     isSoftware,
-    pixelRatioCap: isSoftware ? SOFTWARE_PIXEL_RATIO_CAP : STANDARD_PIXEL_RATIO_CAP,
+    isMainstream,
+    pixelRatioCap: isSoftware || isMainstream ? SOFTWARE_PIXEL_RATIO_CAP : STANDARD_PIXEL_RATIO_CAP,
+    environmentCullDistance: isSoftware ? 34 : isMainstream ? 48 : 112,
+    foliageCullDistance: isSoftware ? 24 : isMainstream ? 28 : 80,
+    fogNearCap: isSoftware ? 10 : isMainstream ? 13 : Number.POSITIVE_INFINITY,
+    fogFarCap: isSoftware ? 34 : isMainstream ? 48 : Number.POSITIVE_INFINITY,
+    moonShadows: !isSoftware && !isMainstream,
   };
 }
 
@@ -1318,6 +1351,78 @@ function villageLightCompatibility(environment) {
   };
 }
 
+function applyEnvironmentRenderProfile(environment, profile) {
+  const moon = environment?.lights?.byId?.["moon-key"];
+  if (!moon?.isDirectionalLight) return;
+  moon.castShadow = profile.moonShadows !== false;
+  if (moon.castShadow && moon.shadow) {
+    // The moon and every environment mesh are static: render its shadow map
+    // once instead of paying for it again on every frame.
+    moon.shadow.autoUpdate = false;
+    moon.shadow.needsUpdate = true;
+  }
+}
+
+function collectEnvironmentCullables(environment) {
+  const meshes = [];
+  environment?.root?.traverse?.((object) => {
+    if (!object.isMesh) return;
+    if (object.userData.environmentCull) {
+      meshes.push(object);
+      return;
+    }
+    const geometry = object.geometry;
+    if (geometry && !geometry.boundingSphere) geometry.computeBoundingSphere?.();
+    if (geometry?.boundingSphere && Number.isFinite(geometry.boundingSphere.radius)) {
+      meshes.push(object);
+    }
+  });
+  return meshes;
+}
+
+function createEnvironmentCuller(renderProfile, camera) {
+  const worldCenter = new THREE.Vector3();
+  const state = { meshes: [], lastX: Number.POSITIVE_INFINITY, lastZ: Number.POSITIVE_INFINITY, lastTime: -Number.POSITIVE_INFINITY };
+  const cullDistance = Number.isFinite(renderProfile.environmentCullDistance)
+    ? renderProfile.environmentCullDistance
+    : Number.POSITIVE_INFINITY;
+  // Dense instanced foliage is the frame-rate villain; in the dark it is
+  // invisible past ~28 m, so it culls far tighter than buildings.
+  const foliageDistance = Number.isFinite(renderProfile.foliageCullDistance)
+    ? renderProfile.foliageCullDistance
+    : cullDistance;
+  return {
+    register(environment) {
+      state.meshes = collectEnvironmentCullables(environment);
+      state.lastX = Number.POSITIVE_INFINITY;
+      state.lastZ = Number.POSITIVE_INFINITY;
+      state.lastTime = -Number.POSITIVE_INFINITY;
+      environment?.root?.updateMatrixWorld?.(true);
+      this.refresh();
+    },
+    refresh() {
+      if (!Number.isFinite(cullDistance)) return;
+      const { position } = camera;
+      for (const mesh of state.meshes) {
+        const sphere = mesh.userData.environmentCull ?? mesh.geometry?.boundingSphere;
+        if (!sphere?.center) continue;
+        worldCenter.copy(sphere.center).applyMatrix4(mesh.matrixWorld);
+        const limit = mesh.userData.environmentCull ? foliageDistance : cullDistance;
+        mesh.visible = worldCenter.distanceTo(position) - sphere.radius < limit;
+      }
+    },
+    tick(elapsed) {
+      const { position } = camera;
+      const moved = (position.x - state.lastX) ** 2 + (position.z - state.lastZ) ** 2;
+      if (moved <= 4 && elapsed - state.lastTime <= 0.4) return;
+      state.lastX = position.x;
+      state.lastZ = position.z;
+      state.lastTime = elapsed;
+      this.refresh();
+    },
+  };
+}
+
 export async function createScene(host, {
   RAPIER: rapier = RAPIER,
   rendererFactory = null,
@@ -1325,6 +1430,7 @@ export async function createScene(host, {
   createEnvironmentColliders = createVillageColliders,
   createNpcSystem = ({ scene }) => new VillageNpcSystem({ scene }),
   manifestUrl = VILLAGE_MANIFEST_URL,
+  environmentQuality = null,
   signal,
   onEnvironmentProgress,
 } = {}) {
@@ -1343,9 +1449,16 @@ export async function createScene(host, {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.localClippingEnabled = true;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.88;
+  renderer.toneMappingExposure = 0.74;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   const renderProfile = applyRenderProfile(renderer, detectRenderProfile(renderer));
+  // A GPU hiccup must not kill the session: let the context restore instead
+  // of Electron tearing the whole window down.
+  renderer.domElement.addEventListener?.("webglcontextlost", (event) => event.preventDefault());
+  // Auto texture tier: midrange GPUs (GTX 1060 class) start on the low tier to
+  // stay within VRAM; the player can still raise it from the settings menu.
+  const effectiveEnvironmentQuality = environmentQuality
+    ?? (renderProfile.isSoftware || renderProfile.isMainstream ? "low" : ENVIRONMENT_DEFAULT_QUALITY);
   host.replaceChildren(renderer.domElement);
 
   const world = new rapier.World({ x: 0, y: -9.81, z: 0 });
@@ -1370,7 +1483,10 @@ export async function createScene(host, {
   const dispose = ({ clearHost = true } = {}) => {
     if (disposed) return;
     disposed = true;
-    if (resizeAttached) window.removeEventListener("resize", resize);
+    if (resizeAttached) {
+      window.removeEventListener("resize", resize);
+      document.removeEventListener?.("fullscreenchange", resize);
+    }
     environment?.dispose?.();
     environmentColliders?.dispose?.();
     npcSystem?.destroy?.();
@@ -1395,18 +1511,19 @@ export async function createScene(host, {
       scene,
       manifestUrl,
       signal,
+      quality: effectiveEnvironmentQuality,
       onProgress: onEnvironmentProgress,
     });
     const { manifest } = environment;
     scene.background = new THREE.Color(manifest.atmosphere.background);
-    scene.fog = new THREE.Fog(
-      manifest.atmosphere.fog.color,
-      manifest.atmosphere.fog.near,
-      manifest.atmosphere.fog.far,
-    );
+    const fogNear = Math.min(manifest.atmosphere.fog.near, renderProfile.fogNearCap ?? Number.POSITIVE_INFINITY);
+    const fogFar = Math.min(manifest.atmosphere.fog.far, renderProfile.fogFarCap ?? Number.POSITIVE_INFINITY);
+    scene.fog = new THREE.Fog(manifest.atmosphere.fog.color, fogNear, fogFar);
+    camera.far = Math.min(camera.far, fogFar + 28);
+    camera.updateProjectionMatrix();
     // The environment manifest owns the moon and practical lights. Keep only
     // a low fill here so night remains readable without washing out the beam.
-    scene.add(new THREE.HemisphereLight(0x35435f, 0x131712, 0.24));
+    scene.add(new THREE.HemisphereLight(0x35435f, 0x131712, 0.1));
 
     environmentColliders = createEnvironmentColliders({
       RAPIER: rapier,
@@ -1415,6 +1532,9 @@ export async function createScene(host, {
       environmentRoot: environment.root,
     });
     applyVillageGroundTexture(environment.root);
+    applyEnvironmentRenderProfile(environment, renderProfile);
+    const environmentCuller = createEnvironmentCuller(renderProfile, camera);
+    environmentCuller.register(environment);
     scene.add(...environmentColliders.occluderRoots);
 
     npcSystem = createNpcSystem({ scene });
@@ -1478,7 +1598,7 @@ export async function createScene(host, {
 
     const interactables = [fuse, foundPhone, washbasin, knockDoor, presentationPaper];
     const staticOccluderRoots = environmentColliders.occluderRoots;
-    const compatibleLights = villageLightCompatibility(environment);
+    let compatibleLights = villageLightCompatibility(environment);
     const worldAnchors = {
       fuse: fuse.root,
       foundPhone: foundPhone.root,
@@ -1489,7 +1609,67 @@ export async function createScene(host, {
 
     await prepareRenderer(renderer, scene, camera, renderProfile);
     window.addEventListener("resize", resize);
+    document.addEventListener?.("fullscreenchange", resize);
     resizeAttached = true;
+
+    let activeEnvironmentQuality = environment.quality ?? effectiveEnvironmentQuality;
+    let environmentQualityGeneration = 0;
+    const objects = {
+      environment,
+      flashlight: flashlightGroup,
+      flashlightCore: flashlightRig.core,
+      flashlightSpill: flashlightRig.spill,
+      flashlightBeam: flashlightRig.outerBeam,
+      ...compatibleLights,
+      fuse,
+      heldFuse,
+      foundPhone,
+      washbasin,
+      knockDoor,
+      presentationPaper,
+      npcs: npcSystem,
+      corridor: {
+        layout: null,
+        anchors: environment.anchors,
+        worldAnchors,
+        anchorObjects: worldAnchors,
+      },
+    };
+
+    const setEnvironmentQuality = async (nextQuality) => {
+      if (!ENVIRONMENT_QUALITY_LEVELS.includes(nextQuality)) {
+        throw new TypeError(`Unknown environment quality: ${nextQuality}`);
+      }
+      if (disposed) throw new Error("Unable to switch environment quality after scene disposal");
+      if (nextQuality === activeEnvironmentQuality) return environment;
+      const generation = environmentQualityGeneration + 1;
+      environmentQualityGeneration = generation;
+      const next = await loadEnvironment({
+        scene,
+        manifestUrl,
+        quality: nextQuality,
+        onProgress: onEnvironmentProgress,
+      });
+      if (disposed || generation !== environmentQualityGeneration) {
+        next.dispose();
+        return environment;
+      }
+      const previous = environment;
+      environment = next;
+      activeEnvironmentQuality = nextQuality;
+      applyVillageGroundTexture(next.root);
+      applyEnvironmentRenderProfile(next, renderProfile);
+      environmentCuller.register(next);
+      compatibleLights = villageLightCompatibility(next);
+      objects.environment = next;
+      objects.ceilingLights = compatibleLights.ceilingLights;
+      objects.emergencyLights = compatibleLights.emergencyLights;
+      objects.stormLight = compatibleLights.stormLight;
+      objects.hemi = compatibleLights.hemi;
+      objects.corridor.anchors = next.anchors;
+      previous.dispose();
+      return next;
+    };
 
     return {
       RAPIER: rapier,
@@ -1499,29 +1679,13 @@ export async function createScene(host, {
       renderProfile,
       world,
       spawn: manifest.spawn,
+      get environmentQuality() {
+        return activeEnvironmentQuality;
+      },
+      setEnvironmentQuality,
       interactables,
       staticOccluderRoots,
-      objects: {
-        environment,
-        flashlight: flashlightGroup,
-        flashlightCore: flashlightRig.core,
-        flashlightSpill: flashlightRig.spill,
-        flashlightBeam: flashlightRig.outerBeam,
-        ...compatibleLights,
-        fuse,
-        heldFuse,
-        foundPhone,
-        washbasin,
-        knockDoor,
-        presentationPaper,
-        npcs: npcSystem,
-        corridor: {
-          layout: null,
-          anchors: environment.anchors,
-          worldAnchors,
-          anchorObjects: worldAnchors,
-        },
-      },
+      objects,
       update(delta, elapsed) {
         const pulse = 0.46 + Math.sin(elapsed * 7.4) * 0.04;
         for (const light of compatibleLights.emergencyLights) light.intensity = pulse;
@@ -1529,6 +1693,7 @@ export async function createScene(host, {
         washbasin.update(delta, elapsed);
         foundPhone.update(delta);
         npcSystem?.update?.(delta, elapsed, camera.position);
+        environmentCuller.tick(elapsed);
       },
       dispose,
     };
