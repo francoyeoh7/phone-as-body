@@ -149,43 +149,43 @@ export function createDesktopUI(root) {
       </section>
 
       <section class="menu-overlay" id="menu-overlay" hidden>
-        <div class="menu-glow" aria-hidden="true"></div>
         <div class="menu-comp">
-          <header class="menu-brand">
-            <span class="menu-brand-en">PHONE AS BODY</span>
-            <span class="menu-brand-rule"></span>
-            <span class="menu-brand-cn">手机即身体</span>
-          </header>
-
           <div class="menu-hero">
-            <h1 class="menu-title">小镇</h1>
-            <p class="menu-tagline">大屏是身体 · 手机是四肢</p>
-            <p class="menu-lede">创建房间，或输入房号加入朋友的局</p>
+            <span class="menu-rule" aria-hidden="true"></span>
+            <h1 class="menu-title">死囚</h1>
           </div>
 
           <nav class="menu-list">
-            <button class="menu-cta" id="menu-create" type="button">创建游戏</button>
-            <div class="menu-join">
+            <button class="menu-row" id="menu-create" type="button">
+              <span class="menu-row-index">01</span>
+              <span class="menu-row-label">创建游戏</span>
+              <span class="menu-row-hint">CREATE</span>
+            </button>
+            <div class="menu-row menu-row--join">
+              <span class="menu-row-index">02</span>
               <input id="menu-join-code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="输入房号" aria-label="房号">
-              <button class="menu-join-go" id="menu-join" type="button">加入游戏</button>
+              <button class="menu-row-go" id="menu-join" type="button">加入 →</button>
             </div>
-            <button class="menu-ghost" id="menu-solo" type="button">键鼠单人</button>
+            <button class="menu-row" id="menu-solo" type="button">
+              <span class="menu-row-index">03</span>
+              <span class="menu-row-label">键鼠单人</span>
+              <span class="menu-row-hint">SOLO</span>
+            </button>
           </nav>
 
           <p class="menu-note" id="menu-note" aria-live="polite"></p>
         </div>
         <footer class="menu-foot">
-          <span>play.tokenxapp.com</span>
+          <span>phone as body</span>
           <span>v 0.1</span>
         </footer>
       </section>
 
       <section class="lobby-overlay" id="lobby-overlay" hidden>
-        <div class="lobby-glow" aria-hidden="true"></div>
         <div class="lobby-comp">
           <header class="lobby-head">
             <div class="lobby-eyebrow">
-              <span>小镇</span>
+              <span>死囚</span>
               <span class="lobby-eyebrow-rule" aria-hidden="true"></span>
               <span>LOBBY</span>
             </div>
