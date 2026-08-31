@@ -1,0 +1,221 @@
+.egg-phone [hidden] {
+  display: none !important;
+}
+
+.egg-phone {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(175deg, #fff6e3 0%, #ffe9f0 55%, #e3f2ff 100%);
+  color: #4a3b2a;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.egg-stage {
+  flex: 1;
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.egg-bubble {
+  position: relative;
+  width: 172px;
+  height: 172px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.65);
+  border: 3px solid #f5b8ce;
+  box-shadow: 0 12px 32px rgba(214, 126, 160, 0.22) inset;
+  display: grid;
+  place-items: center;
+  transition: border-color 120ms ease;
+}
+
+.egg-bubble.level {
+  border-color: #7ed49a;
+  box-shadow: 0 0 0 8px rgba(126, 212, 154, 0.25), 0 12px 32px rgba(126, 212, 154, 0.2) inset;
+}
+
+.egg-bubble-ring {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 2px dashed rgba(160, 120, 90, 0.45);
+}
+
+.egg-bubble-dot {
+  position: absolute;
+  width: 54px;
+  height: 66px;
+  border-radius: 50% 50% 50% 50% / 58% 58% 42% 42%;
+  background: linear-gradient(160deg, #fffdf6 30%, #ffe9c9);
+  border: 3px solid #e8b877;
+  transition: transform 40ms linear;
+}
+
+.egg-count {
+  position: absolute;
+  font-size: 128px;
+  font-weight: 900;
+  color: #ff8fb2;
+  text-shadow: 0 6px 0 rgba(255, 255, 255, 0.8);
+}
+
+.egg-go {
+  position: absolute;
+  font-size: 92px;
+  font-weight: 900;
+  color: #6cc98c;
+  text-shadow: 0 6px 0 rgba(255, 255, 255, 0.8);
+}
+
+.egg-drop-flash {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 106, 106, 0.82);
+  color: #fff;
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.egg-rank {
+  position: absolute;
+  font-size: 56px;
+  font-weight: 900;
+  color: #f5a623;
+  text-shadow: 0 4px 0 rgba(255, 255, 255, 0.85);
+}
+
+.egg-joystick {
+  position: fixed;
+  width: 124px;
+  height: 124px;
+  margin: -62px 0 0 -62px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.egg-joystick-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(224, 121, 159, 0.55);
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.egg-joystick-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff9fbe, #ff7d9c);
+  box-shadow: 0 6px 16px rgba(255, 125, 156, 0.45);
+}
+
+.egg-status {
+  padding: 14px 22px calc(10px + env(safe-area-inset-bottom));
+  text-align: center;
+  font-size: 15px;
+  color: #8a7360;
+}
+
+.egg-join {
+  position: absolute;
+  inset: 0;
+  padding: calc(28px + env(safe-area-inset-top)) 26px calc(28px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: linear-gradient(175deg, #fff6e3 0%, #ffe9f0 55%, #e3f2ff 100%);
+}
+
+.egg-eyebrow {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: #e08aab;
+}
+
+.egg-join h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.25;
+}
+
+.egg-copy {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #7d6a56;
+}
+
+.egg-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: #8a7360;
+  margin-top: auto;
+}
+
+.egg-name-label input {
+  height: 52px;
+  border-radius: 14px;
+  border: 2px solid #f0cdb9;
+  background: #fffdf8;
+  padding: 0 16px;
+  font-size: 18px;
+  color: #4a3b2a;
+  outline: none;
+}
+
+.egg-name-label input:focus {
+  border-color: #f5a0be;
+}
+
+.egg-primary {
+  height: 58px;
+  border: none;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ff9fbe, #ff7d9c);
+  color: #fff;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  box-shadow: 0 8px 20px rgba(255, 125, 156, 0.4);
+}
+
+.egg-primary:active {
+  transform: translateY(2px);
+}
+
+.egg-primary:disabled {
+  background: #d8c9bd;
+  box-shadow: none;
+}
+
+.egg-room {
+  margin: 0;
+  text-align: center;
+  font-size: 14px;
+  color: #8a7360;
+}
+
+.egg-room strong {
+  font-size: 18px;
+  letter-spacing: 0.2em;
+  color: #e0799f;
+}

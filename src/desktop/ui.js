@@ -103,7 +103,7 @@ export function createDesktopUI(root) {
         <span class="loading-line"></span><p>走廊正在苏醒</p>
       </section>
 
-      <section class="pause-overlay" id="pause-overlay" hidden><p>暂停</p></section>
+      <section class="pause-overlay" id="pause-overlay" hidden><p>已暂停 · 点击任意处或按 Esc 继续</p></section>
     </main>`;
 
   createIcons({ icons, attrs: { "stroke-width": 1.8 } });

@@ -1,0 +1,227 @@
+.castle-phone [hidden] {
+  display: none !important;
+}
+
+.castle-phone {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(ellipse at 50% 30%, #1a2030 0%, #0a0d14 70%);
+  color: #e8dcc8;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.play-surface {
+  flex: 1;
+  position: relative;
+  touch-action: none;
+}
+
+.joystick-base {
+  position: absolute;
+  width: 128px;
+  height: 128px;
+  margin: -64px 0 0 -64px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 5;
+}
+
+.joystick-base.is-active {
+  opacity: 1;
+}
+
+.joystick-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 211, 77, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.joystick-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #e8b64a, #c98a2a);
+  box-shadow: 0 6px 16px rgba(232, 182, 74, 0.4);
+}
+
+.castle-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 220, 120, 0.35);
+  pointer-events: none;
+}
+
+.castle-caught {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(160, 30, 20, 0.8);
+  color: #fff;
+  font-size: 40px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  z-index: 8;
+}
+
+.castle-crouch-tag {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(90, 120, 190, 0.35);
+  border: 1px solid rgba(150, 170, 220, 0.6);
+  color: #aac4f0;
+  border-radius: 999px;
+  padding: 6px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  z-index: 6;
+}
+
+.castle-hand-tag {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(40, 34, 20, 0.55);
+  border: 1px solid rgba(255, 211, 77, 0.5);
+  color: #ffd34d;
+  border-radius: 999px;
+  padding: 6px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  z-index: 6;
+  transition: transform 120ms ease;
+}
+
+.castle-hand-tag.grabbed {
+  transform: translateX(-50%) scale(1.25);
+  background: rgba(255, 211, 77, 0.5);
+  color: #201808;
+}
+
+.castle-light-btn {
+  position: absolute;
+  right: 18px;
+  bottom: calc(74px + env(safe-area-inset-bottom));
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 211, 77, 0.6);
+  background: rgba(255, 211, 77, 0.2);
+  color: #ffd34d;
+  font-size: 15px;
+  font-weight: 800;
+  z-index: 7;
+}
+
+.castle-light-btn.off {
+  border-color: rgba(150, 150, 150, 0.5);
+  background: rgba(60, 60, 60, 0.3);
+  color: #888;
+}
+
+.castle-status {
+  padding: 14px 22px calc(12px + env(safe-area-inset-bottom));
+  text-align: center;
+  font-size: 14px;
+  color: #9a8c72;
+}
+
+.castle-join {
+  position: absolute;
+  inset: 0;
+  padding: calc(28px + env(safe-area-inset-top)) 26px calc(28px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: radial-gradient(ellipse at 50% 30%, #1a2030 0%, #0a0d14 70%);
+  z-index: 10;
+}
+
+.castle-copy {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #b0a284;
+}
+
+.castle-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: #9a8c72;
+  margin-top: auto;
+}
+
+.castle-name-label input {
+  height: 52px;
+  border-radius: 14px;
+  border: 2px solid #3a342a;
+  background: #16120c;
+  padding: 0 16px;
+  font-size: 18px;
+  color: #e8dcc8;
+  outline: none;
+}
+
+.castle-name-label input:focus {
+  border-color: #c98a2a;
+}
+
+.castle-primary {
+  height: 58px;
+  border: none;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #e8b64a, #c98a2a);
+  color: #201808;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.castle-primary:disabled {
+  background: #3a342a;
+  color: #7a6e58;
+}
+
+.castle-room {
+  margin: 0;
+  text-align: center;
+  font-size: 14px;
+  color: #7a6e58;
+}
+
+.castle-room strong {
+  font-size: 18px;
+  letter-spacing: 0.2em;
+  color: #ffd34d;
+}
+
+.castle-insecure {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  text-align: center;
+  color: #b0a284;
+  font-size: 16px;
+  line-height: 1.7;
+  z-index: 10;
+}

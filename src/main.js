@@ -18,6 +18,30 @@ if (import.meta.env.DEV && location.pathname === "/visual-test") {
     if (import.meta.env.DEV) window.__corridorUeBridge = app;
     app.mount();
   });
+} else if (location.pathname === "/egg-race") {
+  import("./egg/EggRaceHostApp.js").then(({ EggRaceHostApp }) => {
+    const app = new EggRaceHostApp(root);
+    if (import.meta.env.DEV) window.__eggRaceHost = app;
+    app.mount();
+  });
+} else if (location.pathname === "/egg-race/controller") {
+  import("./egg/EggRaceControllerApp.js").then(({ EggRaceControllerApp }) => {
+    const app = new EggRaceControllerApp(root);
+    if (import.meta.env.DEV) window.__eggRaceController = app;
+    app.mount();
+  });
+} else if (location.pathname === "/castle") {
+  import("./castle/CastleHostApp.js").then(({ CastleHostApp }) => {
+    const app = new CastleHostApp(root);
+    if (import.meta.env.DEV) window.__castleHost = app;
+    app.mount();
+  });
+} else if (location.pathname === "/castle/controller") {
+  import("./castle/CastleControllerApp.js").then(({ CastleControllerApp }) => {
+    const app = new CastleControllerApp(root);
+    if (import.meta.env.DEV) window.__castleController = app;
+    app.mount();
+  });
 } else {
   import("./desktop/DesktopApp.js").then(({ DesktopApp }) => {
     const app = new DesktopApp(root);

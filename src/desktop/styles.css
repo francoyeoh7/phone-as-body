@@ -693,6 +693,10 @@ button {
   background: #070909;
 }
 
+.pause-overlay {
+  cursor: pointer;
+}
+
 .loading-overlay p,
 .pause-overlay p {
   color: #999c94;

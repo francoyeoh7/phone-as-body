@@ -116,7 +116,15 @@ export class DesktopApp {
     this.handleFallbackClick = () => this.startGame(true);
     this.handleSceneRetryClick = () => this.retrySceneStart();
     this.handleVisibilityChange = () => {
-      if (this.started && document.hidden) this.setPaused(true);
+      if (!this.started) return;
+      if (document.hidden) {
+        this.setPaused(true);
+        return;
+      }
+      if (this.paused && this.phone?.connected) this.setPaused(false, false);
+    };
+    this.handlePauseOverlayClick = () => {
+      if (this.paused && this.started && !this.destroyed) this.setPaused(false, false);
     };
     this.handlePageHide = () => this.destroy();
     this.handleFallbackKeyDown = this.handleFallbackKeyDown.bind(this);
@@ -151,6 +159,7 @@ export class DesktopApp {
     this.ui.elements.fallbackButton.addEventListener("click", this.handleFallbackClick);
     this.ui.elements.sceneRetryButton.addEventListener("click", this.handleSceneRetryClick);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.ui.elements.pause.addEventListener("click", this.handlePauseOverlayClick);
     window.addEventListener("keydown", this.handleFallbackKeyDown);
     window.addEventListener("keyup", this.handleFallbackKeyUp);
     window.addEventListener("blur", this.handleWindowBlur);
@@ -966,6 +975,7 @@ export class DesktopApp {
     runCleanup(() => this.ui?.elements?.fallbackButton?.removeEventListener("click", this.handleFallbackClick));
     runCleanup(() => this.ui?.elements?.sceneRetryButton?.removeEventListener("click", this.handleSceneRetryClick));
     runCleanup(() => document.removeEventListener("visibilitychange", this.handleVisibilityChange));
+    runCleanup(() => this.ui?.elements?.pause?.removeEventListener("click", this.handlePauseOverlayClick));
     runCleanup(() => window.removeEventListener("keydown", this.handleFallbackKeyDown));
     runCleanup(() => window.removeEventListener("keyup", this.handleFallbackKeyUp));
     runCleanup(() => window.removeEventListener("blur", this.handleWindowBlur));
